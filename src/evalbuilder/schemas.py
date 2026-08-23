@@ -86,6 +86,17 @@ class RunArtifact(BaseModel):
     timestamp: str = ""
 
 
+class Report(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(REPORT_SCHEMA, alias="schema")
+    run_id: str
+    dataset_name: str
+    metrics: dict = Field(default_factory=dict)
+    slices: dict = Field(default_factory=dict)
+    cases: list[dict] = Field(default_factory=list)
+
+
 class Dataset(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 

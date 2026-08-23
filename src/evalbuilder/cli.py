@@ -342,6 +342,33 @@ def run(
 
 
 @app.command()
+def score(
+    run_path: Path,
+    dataset: Path = typer.Option(..., "--dataset"),
+    evaluators: Path = typer.Option(..., "--evaluators", help="evaluators.yaml"),
+    out: Path = typer.Option(Path("eval/results"), "--out"),
+    env_file: Optional[Path] = typer.Option(None, "--env-file"),
+) -> None:
+    """Score a run artifact with the configured evaluators; write a report."""
+    import yaml
+
+    from evalbuilder.evaluators import score_run
+    from evalbuilder.schemas import RunArtifact
+
+    ds = _load_ds(dataset)
+    run = RunArtifact.model_validate(json.loads(run_path.read_text()))
+    config = yaml.safe_load(evaluators.read_text()) or {}
+    specs = config.get("evaluators", [])
+    if not specs:
+        typer.echo("evaluators.yaml has no evaluators", err=True)
+        raise typer.Exit(1)
+    settings = Settings.load(env_file)
+    report = score_run(run, ds, specs, settings.judge_model)
+    artifacts.save_json(Path(out) / f"report-{run.run_id}.json", report)
+    _emit(report.model_dump(by_alias=True))
+
+
+@app.command()
 def check(
     target_module: Optional[str] = typer.Option(None, "--target-module"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
