@@ -45,6 +45,25 @@ class Target(BaseModel):
     factory: str = "build_agent"
 
 
+class AgentMap(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    schema_: str = Field(AGENT_MAP_SCHEMA, alias="schema")
+    framework: str = "langgraph"
+    source_sha256: str = ""
+    app: dict = Field(default_factory=dict)
+    graph: dict = Field(
+        default_factory=lambda: {"nodes": [], "edges": [], "conditional_edges": []}
+    )
+    tools: list[dict] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    data_domains: dict = Field(default_factory=lambda: {"topics": [], "sources": []})
+    intents: list[dict] = Field(default_factory=list)
+    scenarios: list[dict] = Field(default_factory=list)
+    failure_scenarios: list[dict] = Field(default_factory=list)
+    decisions_needed: list[str] = Field(default_factory=list)
+
+
 class Dataset(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 

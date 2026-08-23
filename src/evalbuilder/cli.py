@@ -8,13 +8,15 @@ from typing import Optional
 
 import typer
 
-from evalbuilder import artifacts
+from evalbuilder import artifacts, coverage
 from evalbuilder.config import Settings, capability_check
-from evalbuilder.schemas import Dataset, Target
+from evalbuilder.schemas import AgentMap, Dataset, Target
 
 app = typer.Typer(help="Build and run evals for LangGraph agents.", no_args_is_help=True)
 dataset_app = typer.Typer(help="Manage dataset artifacts.", no_args_is_help=True)
 app.add_typer(dataset_app, name="dataset")
+agent_map_app = typer.Typer(help="Manage the agent-map artifact.", no_args_is_help=True)
+app.add_typer(agent_map_app, name="agent-map")
 
 
 def _emit(data) -> None:
@@ -126,6 +128,78 @@ def dataset_list(
         if status is None or c.review.status == status
     ]
     _emit(rows)
+
+
+@dataset_app.command("gaps")
+def dataset_gaps(
+    path: Path,
+    agent_map: Path = typer.Option(..., "--agent-map"),
+    target_per_cell: int = typer.Option(1, "--target-per-cell"),
+) -> None:
+    """Coverage gaps against the reviewed agent map."""
+    ds = _load_ds(path)
+    amap = AgentMap.model_validate(json.loads(agent_map.read_text()))
+    _emit(coverage.coverage_gaps(ds, amap, target_per_cell))
+
+
+def _check_entries(kind: str, entries, required: tuple[str, ...]) -> list[str]:
+    errors = []
+    if not isinstance(entries, list):
+        return [f"{kind} must be a JSON list"]
+    for i, entry in enumerate(entries):
+        for key in required:
+            if not entry.get(key):
+                errors.append(f"{kind}[{i}] needs non-empty {key!r}")
+    return errors
+
+
+@agent_map_app.command("update")
+def agent_map_update(
+    path: Path,
+    intents: Optional[str] = typer.Option(None, "--intents"),
+    scenarios: Optional[str] = typer.Option(None, "--scenarios"),
+    failures: Optional[str] = typer.Option(None, "--failures"),
+    topics: Optional[str] = typer.Option(None, "--topics"),
+    constraints: Optional[str] = typer.Option(None, "--constraints"),
+) -> None:
+    """Replace agent-map sections with validated, evidence-cited JSON."""
+    amap = AgentMap.model_validate(json.loads(path.read_text()))
+    errors: list[str] = []
+    updated: list[str] = []
+    if intents is not None:
+        data = _read_json_arg(intents)
+        errors += _check_entries("intents", data, ("id", "evidence"))
+        amap.intents = data
+        updated.append("intents")
+    if scenarios is not None:
+        data = _read_json_arg(scenarios)
+        errors += _check_entries("scenarios", data, ("id", "evidence"))
+        amap.scenarios = data
+        updated.append("scenarios")
+    if failures is not None:
+        data = _read_json_arg(failures)
+        errors += _check_entries("failure_scenarios", data, ("failure_type", "evidence"))
+        amap.failure_scenarios = data
+        updated.append("failure_scenarios")
+    if topics is not None:
+        data = _read_json_arg(topics)
+        if not isinstance(data, list) or not all(isinstance(t, str) for t in data):
+            errors.append("topics must be a JSON list of strings")
+        else:
+            amap.data_domains["topics"] = data
+            updated.append("topics")
+    if constraints is not None:
+        data = _read_json_arg(constraints)
+        if not isinstance(data, list) or not all(isinstance(t, str) for t in data):
+            errors.append("constraints must be a JSON list of strings")
+        else:
+            amap.constraints = data
+            updated.append("constraints")
+    if errors:
+        _emit({"errors": errors})
+        raise typer.Exit(1)
+    artifacts.save_json(path, amap)
+    _emit({"updated": updated})
 
 
 @app.command()
