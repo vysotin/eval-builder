@@ -226,6 +226,42 @@ def review(
 
 
 @app.command()
+def discover(
+    module: str,
+    source: Optional[Path] = typer.Option(None, "--source"),
+    eval_dir: Path = typer.Option(Path("eval"), "--eval-dir"),
+) -> None:
+    """Parse a LangGraph agent into eval/agent-map.json (AST + live introspection)."""
+    import importlib.util
+    import sys
+
+    from evalbuilder import discover as discovery
+
+    if str(Path.cwd()) not in sys.path:
+        sys.path.insert(0, str(Path.cwd()))
+    if source is None:
+        spec = importlib.util.find_spec(module)
+        if spec is None or not spec.origin:
+            typer.echo(f"cannot locate source for module {module}", err=True)
+            raise typer.Exit(1)
+        source = Path(spec.origin)
+    amap = discovery.discover_from_source(source)
+    amap.app["module"] = module
+    amap.graph["live"] = discovery.discover_live(module)
+    out = eval_dir / "agent-map.json"
+    artifacts.save_json(out, amap)
+    _emit(
+        {
+            "path": str(out),
+            "tools": [t["name"] for t in amap.tools],
+            "nodes": [n["id"] for n in amap.graph["nodes"]],
+            "live": amap.graph["live"],
+            "decisions_needed": amap.decisions_needed,
+        }
+    )
+
+
+@app.command()
 def check(
     target_module: Optional[str] = typer.Option(None, "--target-module"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
