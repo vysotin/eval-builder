@@ -342,6 +342,46 @@ def run(
 
 
 @app.command()
+def simulate(
+    path: Path,
+    scenarios: Path = typer.Option(..., "--scenarios"),
+    out: Path = typer.Option(Path("eval/results"), "--out"),
+    mine: bool = typer.Option(True, "--mine/--no-mine"),
+) -> None:
+    """Run multi-turn simulation scenarios; mine violations into pending cases."""
+    from uuid import uuid4
+
+    from evalbuilder import simulate as sim
+    from evalbuilder import target as target_mod
+
+    ds = _load_ds(path)
+    try:
+        scenario_list = sim.load_scenarios(scenarios)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    module = target_mod.load_target(ds.target)
+    graph = target_mod.build_graph(module, ds.target)
+    results = [sim.simulate_scenario(graph, s) for s in scenario_list]
+    mined = sim.mine_failures(ds, results) if mine else 0
+    if mined:
+        _save_valid(path, ds)
+    sim_id = uuid4().hex[:8]
+    artifacts.save_json(Path(out) / f"sim-{sim_id}.json", {"results": results})
+    _emit(
+        {
+            "sim_id": sim_id,
+            "scenarios": len(results),
+            "stop_reasons": {r["scenario_id"]: r["stop_reason"] for r in results},
+            "violations": {
+                r["scenario_id"]: r["violations"] for r in results if r["violations"]
+            },
+            "mined": mined,
+        }
+    )
+
+
+@app.command()
 def score(
     run_path: Path,
     dataset: Path = typer.Option(..., "--dataset"),
