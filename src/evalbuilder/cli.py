@@ -225,6 +225,54 @@ def review(
     _emit({"updated": n, "status": status})
 
 
+mock_app = typer.Typer(help="Manage ADK-style tool-mock rules.", no_args_is_help=True)
+app.add_typer(mock_app, name="mock")
+
+
+@mock_app.command("set")
+def mock_set(
+    path: Path,
+    tool: str = typer.Option(..., "--tool"),
+    rules: str = typer.Option(..., "--rules", help="JSON list of rules, or @file.json"),
+    case: Optional[str] = typer.Option(None, "--case", help="case id; omit for dataset-level"),
+) -> None:
+    """Set the ordered mock-rule list for one tool (dataset-level or per-case)."""
+    ds = _load_ds(path)
+    rule_list = _read_json_arg(rules)
+    if case is None:
+        ds.mocks.setdefault("tools", {})[tool] = rule_list
+    else:
+        matches = [c for c in ds.cases if c.id == case]
+        if not matches:
+            typer.echo(f"unknown case id {case}", err=True)
+            raise typer.Exit(1)
+        matches[0].metadata.setdefault("mocks", {}).setdefault("tools", {})[tool] = rule_list
+    _save_valid(path, ds)
+    _emit({"tool": tool, "rules": len(rule_list), "scope": case or "dataset"})
+
+
+@mock_app.command("verify")
+def mock_verify(path: Path) -> None:
+    """Check every expected tool call in mocked cases matches at least one rule."""
+    from evalbuilder.mocking import match_rule, merge_mock_rules
+
+    ds = _load_ds(path)
+    misses: list[dict] = []
+    for c in ds.cases:
+        merged = merge_mock_rules(
+            ds.mocks.get("tools", {}), c.metadata.get("mocks", {}).get("tools", {})
+        )
+        if not merged:
+            continue
+        for expected in c.reference_outputs.get("expected_tools", []):
+            name = expected.get("name")
+            if name in merged and match_rule(merged[name], expected.get("args", {})) is None:
+                misses.append({"case": c.id, "tool": name, "args": expected.get("args", {})})
+    _emit({"ok": not misses, "misses": misses})
+    if misses:
+        raise typer.Exit(1)
+
+
 @app.command()
 def discover(
     module: str,
