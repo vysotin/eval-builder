@@ -64,6 +64,28 @@ class AgentMap(BaseModel):
     decisions_needed: list[str] = Field(default_factory=list)
 
 
+class CaseRun(BaseModel):
+    case_id: str
+    outputs: dict = Field(default_factory=dict)
+    trajectory: list[dict] = Field(default_factory=list)
+    tool_calls: list[dict] = Field(default_factory=list)
+    node_path: list[str] = Field(default_factory=list)
+    error: str | None = None
+    error_class: Literal["none", "agent", "infrastructure"] = "none"
+
+
+class RunArtifact(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(RUN_SCHEMA, alias="schema")
+    run_id: str
+    dataset_path: str
+    dataset_name: str
+    mocked: bool
+    case_runs: list[CaseRun] = Field(default_factory=list)
+    timestamp: str = ""
+
+
 class Dataset(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 

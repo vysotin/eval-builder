@@ -310,6 +310,38 @@ def discover(
 
 
 @app.command()
+def run(
+    path: Path,
+    mock: bool = typer.Option(False, "--mock/--no-mock"),
+    ids: Optional[str] = typer.Option(None, "--ids", help="comma-separated case ids"),
+    out: Path = typer.Option(Path("eval/results"), "--out"),
+) -> None:
+    """Execute approved cases against the target agent; write a run artifact."""
+    from evalbuilder.runner import run_dataset
+
+    ds = _load_ds(path)
+    id_list = [s.strip() for s in ids.split(",") if s.strip()] if ids else None
+    try:
+        art = run_dataset(ds, path, mocked=mock, ids=id_list, out_dir=out)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    errors = [cr for cr in art.case_runs if cr.error]
+    _emit(
+        {
+            "run_id": art.run_id,
+            "path": str(Path(out) / f"run-{art.run_id}.json"),
+            "cases": len(art.case_runs),
+            "errors": len(errors),
+            "error_cases": [
+                {"case_id": cr.case_id, "error": cr.error, "class": cr.error_class}
+                for cr in errors
+            ],
+        }
+    )
+
+
+@app.command()
 def check(
     target_module: Optional[str] = typer.Option(None, "--target-module"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
