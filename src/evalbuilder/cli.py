@@ -409,6 +409,28 @@ def score(
 
 
 @app.command()
+def publish(
+    path: Path,
+    dataset_name: Optional[str] = typer.Option(None, "--dataset-name"),
+    env_file: Optional[Path] = typer.Option(None, "--env-file"),
+) -> None:
+    """Publish approved cases to LangSmith (idempotent, read-back verified)."""
+    from evalbuilder.langsmith_io import publish_approved
+
+    settings = Settings.load(env_file)
+    if not settings.langsmith_api_key:
+        typer.echo("LANGSMITH_API_KEY is not configured (see .env.example)", err=True)
+        raise typer.Exit(1)
+    ds = _load_ds(path)
+    try:
+        result = publish_approved(ds, path, settings, dataset_name=dataset_name)
+    except (ValueError, RuntimeError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    _emit(result)
+
+
+@app.command()
 def check(
     target_module: Optional[str] = typer.Option(None, "--target-module"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
