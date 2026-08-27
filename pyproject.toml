@@ -14,6 +14,7 @@ dependencies = [
   "pydantic>=2.7",
   "python-dotenv>=1.0",
   "pyyaml>=6.0",
+  "langchain-claude-code-cli>=0.1.0",
 ]
 
 [project.scripts]
