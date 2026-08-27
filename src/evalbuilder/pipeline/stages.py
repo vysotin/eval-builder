@@ -450,7 +450,11 @@ def score(ctx: PipelineContext) -> dict:
 
 
 def aggregate(ctx: PipelineContext) -> dict:
-    agg = aggregate_runs(ctx.run_reports(), ctx.dataset(), ctx.config.thresholds)
+    judge_metrics = {
+        e.get("name") or (e["prompt"].lower().removesuffix("_prompt") if e["type"] == "openevals" else e["type"])
+        for e in ctx.config.evaluators if is_judge_spec(e)
+    }
+    agg = aggregate_runs(ctx.run_reports(), ctx.dataset(), ctx.config.thresholds, judge_metrics=judge_metrics)
     artifacts.save_json(ctx.path("aggregate.json"), agg)
     ctx.set("aggregate", agg)
     return {

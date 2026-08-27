@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from evalbuilder.evaluators import SLICE_DIMS
 from evalbuilder.pipeline.config import ThresholdsConfig
@@ -18,24 +19,42 @@ def _r(value: float | None) -> float | None:
     return round(value, 4) if value is not None else None
 
 
+SUSPECT_COMMENT = re.compile(r"^\s*(test\b|placeholder|lorem)", re.I)
+
+
+def _hash(material) -> str:
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, ensure_ascii=False, default=str).encode()
+    ).hexdigest()[:12]
+
+
+def trajectory_hash(case_run) -> str:
+    """Tool-call sequence (names + args) and error state — the agent's *behavior*."""
+    return _hash(
+        {"tool_calls": [(tc["name"], tc.get("args")) for tc in case_run.tool_calls], "error": case_run.error}
+    )
+
+
 def output_hash(case_run) -> str:
-    material = json.dumps(
+    """Behavior plus the final text; LLM agents reword freely, so this varies often."""
+    return _hash(
         {
             "tool_calls": [(tc["name"], tc.get("args")) for tc in case_run.tool_calls],
             "response": (case_run.outputs or {}).get("response", ""),
             "error": case_run.error,
-        },
-        sort_keys=True,
-        ensure_ascii=False,
-        default=str,
+        }
     )
-    return hashlib.sha256(material.encode()).hexdigest()[:12]
 
 
 def aggregate(
-    runs: list[tuple[RunArtifact, Report]], ds: Dataset, thresholds: ThresholdsConfig
+    runs: list[tuple[RunArtifact, Report]],
+    ds: Dataset,
+    thresholds: ThresholdsConfig,
+    judge_metrics: set[str] | None = None,
 ) -> dict:
+    judge_metrics = set(judge_metrics or ())
     repeats = len(runs)
+    suspect_comments: list[dict] = []
     cases_by_id = {c.id: c for c in ds.cases}
     per_case: dict[str, dict] = {}
 
@@ -45,17 +64,22 @@ def aggregate(
             cid = row["case_id"]
             entry = per_case.setdefault(
                 cid,
-                {"scores": {}, "errors": {}, "outputs": [], "agent_errors": [], "comments": {}},
+                {"scores": {}, "errors": {}, "outputs": [], "trajectories": [], "agent_errors": [], "comments": {}},
             )
             cr = run_rows.get(cid)
             if cr is not None:
                 entry["outputs"].append(output_hash(cr))
+                entry["trajectories"].append(trajectory_hash(cr))
                 if cr.error:
                     entry["agent_errors"].append(f"{cr.error_class}: {cr.error}")
             for metric, value in row.get("scores", {}).items():
                 entry["scores"].setdefault(metric, []).append(float(value["score"]))
                 if value.get("comment") and float(value["score"]) < 1:
                     entry["comments"].setdefault(metric, []).append(str(value["comment"])[:300])
+                if metric in judge_metrics and SUSPECT_COMMENT.match(str(value.get("comment") or "")):
+                    suspect_comments.append(
+                        {"case_id": cid, "run_id": run.run_id, "metric": metric, "comment": str(value["comment"])[:160]}
+                    )
             for metric, err in row.get("errors", {}).items():
                 entry["errors"].setdefault(metric, []).append(str(err))
 
@@ -100,19 +124,24 @@ def aggregate(
             if not passed:
                 weak_slices.append(f"{dim}={value}")
 
-    # stability
+    # stability: behavior (tool trajectory) first, then score disagreement on a stable trajectory
     unstable_cases = []
     unstable_evaluators = []
+    unstable_outputs = []
+    text_varies = 0
     for cid, e in per_case.items():
-        distinct = len(set(e["outputs"]))
+        distinct_traj = len(set(e["trajectories"]))
+        if len(set(e["outputs"])) > 1:
+            text_varies += 1
         disagreeing = [m for m, s in e["scores"].items() if len(s) > 1 and len(set(s)) > 1]
-        if distinct > 1:
+        if distinct_traj > 1:
             unstable_cases.append(
-                {"id": cid, "distinct_outputs": distinct, "metrics_disagreeing": disagreeing}
+                {"id": cid, "distinct_trajectories": distinct_traj, "metrics_disagreeing": disagreeing}
             )
-        elif disagreeing:
-            for m in disagreeing:
-                unstable_evaluators.append({"case_id": cid, "metric": m, "scores": e["scores"][m]})
+            continue
+        for m in disagreeing:
+            entry = {"case_id": cid, "metric": m, "scores": e["scores"][m]}
+            (unstable_evaluators if m in judge_metrics else unstable_outputs).append(entry)
 
     # cases + failing
     cases_out = []
@@ -134,7 +163,8 @@ def aggregate(
             "evaluator_errors": e["errors"],
             "agent_errors": e["agent_errors"],
             "outputs_hash": e["outputs"],
-            "stable": len(set(e["outputs"])) <= 1,
+            "trajectory_hash": e["trajectories"],
+            "stable": len(set(e["trajectories"])) <= 1,
         }
         cases_out.append(row)
         if failing_metrics or e["agent_errors"]:
@@ -183,7 +213,10 @@ def aggregate(
             "repeats": repeats,
             "unstable_cases": unstable_cases,
             "unstable_evaluators": unstable_evaluators,
+            "unstable_outputs": unstable_outputs,
+            "text_varies": text_varies,
             "stable_case_fraction": _r(1 - len(unstable_cases) / len(per_case)) if per_case else None,
+            "suspect_judge_comments": suspect_comments,
         },
         "evaluator_errors": evaluator_errors,
         "failing_cases": failing,
