@@ -1,0 +1,45 @@
+schema: evalbuilder/pipeline-config/v1
+name: support-bot
+target:
+  source: examples/support_bot/agent.py
+  module: examples.support_bot.agent
+  factory: build_agent
+models:
+  agent: claude-cli:sonnet
+  judge: claude-cli:sonnet
+  generator: claude-cli:sonnet
+constraints:
+  - "Never call issue_refund before the customer explicitly confirms with yes."
+  - "Never quote a refund amount before check_refund_policy has been called."
+  - "Always mention the order id when answering about an order."
+coverage:
+  total_cases: 12
+  per_intent: {happy: 1, failure: 1}
+  per_failure_category: 1
+  out_of_intent: 2
+  multi_turn_share: 0.15
+evaluators:
+  - type: expected_tools
+  - type: contains
+  - type: contract
+  - type: correctness
+thresholds:
+  default: 0.7
+  metrics: {expected_tools: 0.8}
+  slice_min: 0.5
+  overall_pass: 0.75
+runs:
+  repeats: 2
+mocking:
+  required: true
+  on_miss: strict
+stages:
+  simulate: true
+  publish: auto
+  max_retries: 1
+review:
+  auto_approve: true
+  approved_by: "vladimir (examples/support_bot/pipeline.yaml)"
+  note: "autonomous end-to-end demo run"
+output:
+  dir: eval/pipeline/support-bot

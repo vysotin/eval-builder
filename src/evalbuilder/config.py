@@ -95,6 +95,11 @@ def capability_check(settings: Settings, target_module: str | None = None) -> di
         degraded.append("langsmith")
 
     if target_module:
+        import sys
+
+        cwd = str(Path.cwd())
+        if cwd not in sys.path:  # targets usually live in the repo, not site-packages
+            sys.path.insert(0, cwd)
         try:
             caps["target"] = importlib.util.find_spec(target_module) is not None
         except ModuleNotFoundError:

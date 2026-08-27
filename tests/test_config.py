@@ -58,3 +58,12 @@ def test_settings_agent_and_generator_models(tmp_path, monkeypatch):
     env.write_text("EVALBUILDER_AGENT_MODEL=claude-cli:sonnet\nEVALBUILDER_GENERATOR_MODEL=claude-cli:opus\n")
     s = Settings.load(env)
     assert s.agent_model == "claude-cli:sonnet" and s.generator_model == "claude-cli:opus"
+
+
+def test_capability_check_finds_repo_local_target_without_cwd_on_path(monkeypatch):
+    import sys
+
+    cwd = str(__import__("pathlib").Path.cwd())
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in (cwd, "")])
+    report = capability_check(Settings(), target_module="examples.support_bot.agent")
+    assert report["capabilities"]["target"] is True and report["ready"] is True

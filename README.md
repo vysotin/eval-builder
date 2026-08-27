@@ -26,6 +26,9 @@ Skills are policy prose; **all determinism lives in the `evalbuilder` CLI** — 
 validation, content-hash case IDs, coverage math, the review state machine, mock
 installation, trajectory capture, scoring, and idempotent LangSmith publication.
 
+The fifth skill, `agent-eval-pipeline`, runs all of that **unattended** from one config
+file (see below).
+
 ## Quickstart
 
 ```bash
@@ -44,6 +47,36 @@ The four skills are exposed to Claude Code via `.claude/skills/agent-eval-*`
 | `agent-eval-dataset` | Generating or extending the golden dataset (pending → human review) |
 | `agent-eval-mock` | Cases depend on nondeterministic or side-effecting tools |
 | `agent-eval-run` | Running/scoring experiments, publishing to LangSmith, simulating |
+| `agent-eval-pipeline` | One config → full autonomous evaluation → `report.json` |
+
+## Autonomous pipeline
+
+```bash
+uv run evalbuilder pipeline init eval/pipeline.yaml --name support-bot \
+    --source examples/support_bot/agent.py --module examples.support_bot.agent
+# edit constraints / coverage / evaluators / thresholds; set review.auto_approve + approved_by
+uv run evalbuilder pipeline run eval/pipeline.yaml          # exit 1 unless verdict == pass
+uv run evalbuilder pipeline report eval/pipeline/support-bot
+```
+
+Stages: `preflight → discover → map → mocks → dataset → review → verify → run×N →
+score×N → aggregate → simulate → publish → analyze → report`. An LLM **generator**
+authors intents/scenarios (evidence-cited, taxonomy-gated), tool fixtures (every
+introspected tool is mocked; unmatched calls are errors), coverage-planned cases,
+a self-review, multi-turn scenarios and the final analysis — and every artifact
+still passes the same CLI validation. Failures never raise: a failed stage marks its
+dependents `skipped`, retries once with a recovery note, and `report.json` always
+lands with `verdict ∈ pass|fail|incomplete`, per-stage status, metrics vs thresholds,
+slices, coverage achieved vs planned, stability across repeats (unstable *cases* vs
+unstable *evaluators*), and a `problems[]` list. `--resume` reuses completed stages.
+
+Model specs: `claude-cli:sonnet` uses the Claude Code CLI with your subscription (the
+`langchain-claude-code-cli` package's `ChatClaudeCode` parameter surface, with a
+subprocess transport and `--json-schema` structured tool calling in
+`src/evalbuilder/claude_cli.py`); `anthropic:…`/`openai:…` use API keys;
+`scripted:module:factory` keeps tests offline. Config reference:
+`skills/agent-eval-pipeline/references/config-reference.md`; a ready-to-run example:
+`examples/support_bot/pipeline.yaml`.
 
 ## Dataset format
 
@@ -80,8 +113,10 @@ fallback/strict).
 The dataset's `target` names a module exposing
 `build_agent(model=None, tools=None) -> CompiledStateGraph` and a `TOOLS` list. The
 runner rebuilds the graph per case, wrapping `TOOLS` with the case's merged mock
-rules. Two example targets ship in `examples/` (`weather_bot`, `travel_planner`) with
-scripted chat models, so the whole pipeline runs offline.
+rules, and injects `model=` when a run specifies one. Three example targets ship in
+`examples/` (`weather_bot`, `travel_planner`, and `support_bot` — a router graph over
+two ReAct specialists with external HTTP tools) with scripted chat models, so the
+whole test-suite runs offline.
 
 ## LangSmith (optional)
 

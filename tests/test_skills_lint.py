@@ -11,7 +11,7 @@ SKILLS = sorted(Path("skills").glob("agent-eval-*/SKILL.md"))
 
 
 def test_four_skills_exist_with_frontmatter():
-    assert len(SKILLS) == 4, f"expected 4 skills, found {[str(s) for s in SKILLS]}"
+    assert len(SKILLS) == 5, f"expected 5 skills, found {[str(s) for s in SKILLS]}"
     for s in SKILLS:
         text = s.read_text()
         assert text.startswith("---\n"), f"{s} missing frontmatter"
@@ -42,7 +42,7 @@ def test_every_cli_command_in_skills_is_real():
 
 def test_symlinks_resolve():
     links = sorted(Path(".claude/skills").glob("agent-eval-*"))
-    assert len(links) == 4
+    assert len(links) == 5
     for link in links:
         assert (link / "SKILL.md").exists(), f"{link} does not resolve"
 
