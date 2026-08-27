@@ -104,4 +104,4 @@ def test_cli_simulate(tmp_path):
     assert r.exit_code == 0, r.output
     summary = json.loads(r.stdout)
     assert summary["scenarios"] == 1 and summary["mined"] == 0
-    assert list(tmp_path.glob("sim-*.json"))
+    assert list(tmp_path.glob("simulation-*.json"))

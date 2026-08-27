@@ -28,8 +28,7 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool
 from langchain_claude_code.chat_models import ChatClaudeCode, _tool_to_anthropic_schema
 
-CLAUDE_CLI_PROVIDER = "claude-cli"
-SCRIPTED_PROVIDER = "scripted"
+from evalbuilder.providers import CLAUDE_CLI_PROVIDER, SCRIPTED_PROVIDER, parse_spec
 
 TOOL_CALL_SCHEMA = {
     "type": "object",
@@ -372,25 +371,16 @@ def _loads_lenient(text: str) -> dict | None:
 # ── model spec resolution ──────────────────────────────────────
 
 
-def parse_spec(spec: str) -> tuple[str, str, str | None]:
-    """`provider:model[@effort]` → (provider, model, effort)."""
-    provider, _, rest = spec.partition(":")
-    if not rest:
-        raise ValueError(f"model spec {spec!r} must look like provider:model")
-    model, _, effort = rest.partition("@")
-    return provider, model, effort or None
-
-
 def provider_ready(spec: str) -> tuple[bool, str]:
     """(ready, reason) for a model spec without instantiating it."""
-    from evalbuilder.config import provider_ready as _provider_ready
+    from evalbuilder.providers import provider_ready as _provider_ready
 
     return _provider_ready(spec)
 
 
 def model_from_spec(spec: str, **overrides: Any):
     """Instantiate a chat model from `claude-cli:…`, `scripted:module:fn`, or an
-    `init_chat_model` string."""
+    API-key provider spec (`anthropic:…`, `openai:…`, `gemini:…`; see providers.py)."""
     provider, model, effort = parse_spec(spec)
     if provider == CLAUDE_CLI_PROVIDER:
         kwargs: dict[str, Any] = {"model": model}
@@ -403,6 +393,6 @@ def model_from_spec(spec: str, **overrides: Any):
         if not module_name:
             raise ValueError("scripted spec must be scripted:module.path:factory")
         return getattr(importlib.import_module(module_name), fn_name)()
-    from langchain.chat_models import init_chat_model
+    from evalbuilder.providers import build_model
 
-    return init_chat_model(spec, **overrides)
+    return build_model(spec, **overrides)

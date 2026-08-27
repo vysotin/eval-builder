@@ -149,7 +149,7 @@ def test_full_offline_pipeline_passes(tmp_path):
     assert report["stages"]["review"]["details"]["approved_by"] == "tester"
     # artifacts on disk
     out = tmp_path / "out"
-    for name in ("agent-map.json", "mocks.json", "dataset.json", "plan.json", "coverage.json", "aggregate.json",
+    for name in ("agent-map.json", "mock-rules.json", "applicable-failures.json", "dataset.json", "coverage-plan.json", "coverage.json", "aggregate.json",
                  "analysis.json", "scenarios.yaml", "simulation.json", "state.json", "report.json", "evaluators.yaml"):
         assert (out / name).exists(), name
     ds = json.loads((out / "dataset.json").read_text())

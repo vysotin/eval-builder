@@ -369,7 +369,7 @@ def simulate(
     if mined:
         _save_valid(path, ds)
     sim_id = uuid4().hex[:8]
-    artifacts.save_json(Path(out) / f"sim-{sim_id}.json", {"results": results})
+    artifacts.save_json(Path(out) / f"simulation-{sim_id}.json", {"schema": "evalbuilder/simulation/v1", "results": results})
     _emit(
         {
             "sim_id": sim_id,
@@ -406,7 +406,7 @@ def score(
         raise typer.Exit(1)
     settings = Settings.load(env_file)
     report = score_run(run, ds, specs, settings.judge_model)
-    artifacts.save_json(Path(out) / f"report-{run.run_id}.json", report)
+    artifacts.save_json(Path(out) / f"score-report-{run.run_id}.json", report)
     _emit(report.model_dump(by_alias=True))
 
 

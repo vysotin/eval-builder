@@ -17,11 +17,20 @@ dependencies = [
   "langchain-claude-code-cli>=0.1.0",
 ]
 
+[project.optional-dependencies]
+# API-key LLM providers (alternatives to the claude-cli subscription adapter)
+anthropic = ["langchain-anthropic>=0.3"]
+openai = ["langchain-openai>=0.3"]
+gemini = ["langchain-google-genai>=2.0"]
+llm = ["langchain-anthropic>=0.3", "langchain-openai>=0.3", "langchain-google-genai>=2.0"]
+# Streamlit report UI (`evalbuilder ui`)
+ui = ["streamlit>=1.40", "pandas>=2.0"]
+
 [project.scripts]
 evalbuilder = "evalbuilder.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-playwright>=0.5"]
 
 [build-system]
 requires = ["hatchling"]
@@ -33,3 +42,4 @@ packages = ["src/evalbuilder"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["ui: browser tests driving the Streamlit app with Playwright"]

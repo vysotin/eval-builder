@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 DATASET_SCHEMA = "evalbuilder/dataset/v1"
 AGENT_MAP_SCHEMA = "evalbuilder/agent-map/v1"
 RUN_SCHEMA = "evalbuilder/run/v1"
-REPORT_SCHEMA = "evalbuilder/report/v1"
+REPORT_SCHEMA = "evalbuilder/score-report/v1"  # per-run evaluator scores (was evalbuilder/report/v1)
 
 
 class MockRule(BaseModel):

@@ -9,13 +9,9 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-DEFAULT_JUDGE_MODEL = "anthropic:claude-sonnet-5"
+from evalbuilder.providers import PROVIDER_KEYS, provider_ready, providers_status  # noqa: F401
 
-PROVIDER_KEYS = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "google_genai": "GOOGLE_API_KEY",
-}
+DEFAULT_JUDGE_MODEL = "anthropic:claude-sonnet-5"
 
 
 @dataclass(frozen=True)
@@ -48,25 +44,6 @@ class Settings:
         )
 
 
-def provider_ready(model: str) -> tuple[bool, str]:
-    """(ready, reason) for a `provider:model` spec.
-
-    `claude-cli:` needs the claude binary (subscription auth); `scripted:` is always
-    ready; API providers need their key in the environment.
-    """
-    provider = model.split(":", 1)[0]
-    if provider == "claude-cli":
-        from evalbuilder.claude_cli import claude_available
-
-        return (True, "") if claude_available() else (False, "claude CLI not on PATH")
-    if provider == "scripted":
-        return True, ""
-    var = PROVIDER_KEYS.get(provider)
-    if var and os.environ.get(var):
-        return True, ""
-    return False, f"no API key configured for provider {provider!r}"
-
-
 def _has_judge_key(model: str) -> bool:
     return provider_ready(model)[0]
 
@@ -85,6 +62,9 @@ def capability_check(settings: Settings, target_module: str | None = None) -> di
     from evalbuilder.claude_cli import claude_available
 
     caps["claude_cli"] = claude_available()
+    providers = providers_status()
+    for name, status in providers.items():
+        caps[f"provider_{name}"] = status["ready"]
 
     caps["judge"] = _has_judge_key(settings.judge_model)
     if not caps["judge"]:
@@ -117,4 +97,10 @@ def capability_check(settings: Settings, target_module: str | None = None) -> di
         "degraded": degraded,
         "blocking": blocking,
         "capabilities": caps,
+        "providers": providers,
+        "models": {
+            "judge": settings.judge_model,
+            "agent": settings.agent_model,
+            "generator": settings.generator_model,
+        },
     }

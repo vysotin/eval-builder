@@ -9,6 +9,7 @@ from typing import Callable
 from evalbuilder.config import Settings
 from evalbuilder.pipeline.config import PipelineConfig, load_config
 from evalbuilder.pipeline.engine import OK_STATUSES, PipelineRunner, PipelineState
+from evalbuilder.pipeline.layout import artifact_index, path_for
 from evalbuilder.pipeline.stages import REQUIRED_STAGES, PipelineContext, build_stages
 
 PIPELINE_REPORT_SCHEMA = "evalbuilder/pipeline-report/v1"
@@ -48,10 +49,10 @@ def _verdict(ctx: PipelineContext, agg: dict | None) -> tuple[str, list[str]]:
 
 def analysis_summary(ctx: PipelineContext) -> dict:
     """Compact, LLM-sized view of the evaluation for the analyze stage."""
-    agg = ctx.optional_json("aggregate.json") or {}
-    coverage = ctx.optional_json("coverage.json") or {}
+    agg = ctx.optional_json("aggregate") or {}
+    coverage = ctx.optional_json("coverage") or {}
     verdict, reasons = _verdict(ctx, agg or None)
-    amap = ctx.optional_json("agent-map.json") or {}
+    amap = ctx.optional_json("agent_map") or {}
     return {
         "agent": {
             "module": ctx.config.target.module,
@@ -79,11 +80,11 @@ def analysis_summary(ctx: PipelineContext) -> dict:
 
 
 def build_report(ctx: PipelineContext) -> dict:
-    agg = ctx.optional_json("aggregate.json")
-    coverage = ctx.optional_json("coverage.json")
-    amap = ctx.optional_json("agent-map.json") or {}
-    analysis = ctx.optional_json("analysis.json")
-    simulation = ctx.optional_json("simulation.json")
+    agg = ctx.optional_json("aggregate")
+    coverage = ctx.optional_json("coverage")
+    amap = ctx.optional_json("agent_map") or {}
+    analysis = ctx.optional_json("analysis")
+    simulation = ctx.optional_json("simulation")
     stages = _stage_status(ctx)
     verdict, reasons = _verdict(ctx, agg)
     problems = list(ctx.problems)
@@ -105,6 +106,8 @@ def build_report(ctx: PipelineContext) -> dict:
         "name": ctx.config.name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config_path": str(ctx.config_path),
+        "output_dir": str(ctx.out_dir),
+        "artifacts": artifact_index(ctx.out_dir),
         "config": ctx.config.model_dump(by_alias=True),
         "verdict": verdict,
         "verdict_reasons": reasons,
@@ -198,7 +201,7 @@ def run_pipeline(
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     runner = PipelineRunner(
         stages=build_stages(),
-        state_path=cfg.output_dir / "state.json",
+        state_path=path_for(cfg.output_dir, "pipeline_state"),
         skip=skip,
         max_retries=cfg.stages.max_retries,
         resume=resume,
@@ -206,7 +209,7 @@ def run_pipeline(
         log=log,
     )
     state = runner.run(ctx, name=cfg.name)
-    report_path = cfg.output_dir / "report.json"
+    report_path = path_for(cfg.output_dir, "pipeline_report")
     if not report_path.exists():  # report stage itself failed — still leave something behind
         from evalbuilder.artifacts import save_json
 

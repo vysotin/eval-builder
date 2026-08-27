@@ -200,7 +200,7 @@ def test_cli_score(tmp_path):
     report = json.loads(r.stdout)
     assert report["metrics"]["contains"]["avg"] == 1.0
     assert report["metrics"]["expected_tools"]["avg"] == 1.0
-    assert (tmp_path / "report-r1.json").exists() or list(tmp_path.glob("report-*.json"))
+    assert (tmp_path / "score-report-r1.json").exists() or list(tmp_path.glob("score-report-*.json"))
 
 
 def test_generic_openevals_type_resolves_named_prompt(monkeypatch):

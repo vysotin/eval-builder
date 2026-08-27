@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 OK_STATUSES = ("ok", "recovered")
+PIPELINE_STATE_SCHEMA = "evalbuilder/pipeline-state/v1"
 
 
 class StageStop(Exception):
@@ -42,6 +43,9 @@ class StageRecord(BaseModel):
 
 
 class PipelineState(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(PIPELINE_STATE_SCHEMA, alias="schema")
     name: str
     started_at: str = ""
     updated_at: str = ""
@@ -58,7 +62,7 @@ class PipelineState(BaseModel):
         self.updated_at = datetime.now(timezone.utc).isoformat()
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.model_dump(), indent=2, ensure_ascii=False) + "\n")
+        path.write_text(json.dumps(self.model_dump(by_alias=True), indent=2, ensure_ascii=False) + "\n")
 
     @classmethod
     def load(cls, path: Path) -> "PipelineState":

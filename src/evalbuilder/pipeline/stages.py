@@ -24,6 +24,7 @@ from evalbuilder.pipeline import generator as gen_mod
 from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
 from evalbuilder.pipeline.config import PipelineConfig
 from evalbuilder.pipeline.engine import Stage, StageStop
+from evalbuilder.pipeline.layout import artifact_index, path_for, stamp, unwrap
 from evalbuilder.pipeline.planning import Cell, achieved, plan_cells, summarize_plan
 from evalbuilder.pipeline.taxonomy import applicable_failure_types
 from evalbuilder.runner import run_dataset
@@ -65,13 +66,23 @@ class PipelineContext:
     def path(self, name: str) -> Path:
         return self.out_dir / name
 
+    def artifact(self, kind: str, run_id: str | None = None) -> Path:
+        """Path of an artifact by kind (see pipeline/layout.py for the convention)."""
+        return path_for(self.out_dir, kind, run_id)
+
+    def save_artifact(self, kind: str, payload, run_id: str | None = None) -> Path:
+        """Write a JSON artifact with its schema id embedded; returns the path."""
+        path = self.artifact(kind, run_id)
+        artifacts.save_json(path, stamp(kind, payload))
+        return path
+
     @property
     def map_path(self) -> Path:
-        return self.path("agent-map.json")
+        return self.artifact("agent_map")
 
     @property
     def dataset_path(self) -> Path:
-        return self.path("dataset.json")
+        return self.artifact("dataset")
 
     @property
     def results_dir(self) -> Path:
@@ -114,6 +125,15 @@ class PipelineContext:
             self._cache[key] = loader(data) if loader else data
         return self._cache[key]
 
+    def _artifact_json(self, key: str, kind: str):
+        """Load a root artifact by kind, falling back to its legacy file name."""
+        path = self.artifact(kind)
+        if not path.exists():
+            legacy = artifact_index(self.out_dir).get(kind)
+            if isinstance(legacy, str):
+                path = Path(legacy)
+        return self._json(key, path, lambda data: unwrap(kind, data))
+
     def set(self, key: str, value: Any) -> None:
         self._cache[key] = value
 
@@ -140,14 +160,14 @@ class PipelineContext:
         self._cache["dataset"] = ds
 
     def mock_rules(self) -> dict[str, list[dict]]:
-        return self._json("mock_rules", self.path("mocks.json"))
+        return self._artifact_json("mock_rules", "mock_rules")
 
     def applicable(self) -> dict[str, list[str]]:
-        return self._json("applicable", self.path("applicable-failures.json"))
+        return self._artifact_json("applicable", "applicable_failures")
 
     def cells(self) -> list[Cell]:
         if "cells" not in self._cache:
-            data = self._json("plan", self.path("plan.json"))
+            data = self._artifact_json("plan", "coverage_plan")
             self._cache["cells"] = [
                 Cell(**{k: v for k, v in row.items() if k in Cell.__dataclass_fields__})
                 for row in data["cells"]
@@ -167,11 +187,14 @@ class PipelineContext:
         return self._cache["run_reports"]
 
     def aggregate(self) -> dict:
-        return self._json("aggregate", self.path("aggregate.json"))
+        return self._artifact_json("aggregate", "aggregate")
 
-    def optional_json(self, name: str):
-        p = self.path(name)
-        return json.loads(p.read_text()) if p.exists() else None
+    def optional_json(self, kind: str):
+        """A root artifact by kind (unwrapped), or None when it does not exist yet."""
+        try:
+            return self._artifact_json(f"optional:{kind}", kind)
+        except FileNotFoundError:
+            return None
 
 
 # ── stage functions ────────────────────────────────────────────
@@ -254,7 +277,7 @@ def author_map(ctx: PipelineContext) -> dict:
     applicable = applicable_failure_types(
         amap, ctx.source_text(), cfg.constraints, multi_turn=cfg.coverage.multi_turn_share > 0
     )
-    artifacts.save_json(ctx.path("applicable-failures.json"), applicable)
+    ctx.save_artifact("applicable_failures", applicable)
     ctx.set("applicable", applicable)
     cleaned, errors = gen_mod.author_map(ctx.generator(), amap, ctx.source_text(), cfg.constraints, applicable)
     if not cleaned["intents"] or not cleaned["scenarios"]:
@@ -291,10 +314,10 @@ def author_mocks(ctx: PipelineContext) -> dict:
         missing = [t["name"] for t in amap.tools if not rules.get(t["name"])]
         if missing:
             raise ValueError(f"tools without mock rules: {missing}")
-    artifacts.save_json(ctx.path("mocks.json"), rules)
+    path = ctx.save_artifact("mock_rules", rules)
     ctx.set("mock_rules", rules)
     return {
-        "artifacts": {"mocks": str(ctx.path("mocks.json"))},
+        "artifacts": {"mock_rules": str(path)},
         "tools": {name: len(r) for name, r in rules.items()},
     }
 
@@ -305,7 +328,7 @@ def build_dataset(ctx: PipelineContext) -> dict:
     rules = ctx.mock_rules()
     failure_types = [f["failure_type"] for f in amap.failure_scenarios]
     cells = plan_cells(cfg.coverage, amap, failure_types)
-    artifacts.save_json(ctx.path("plan.json"), {"cells": [c.to_dict() for c in cells], "summary": summarize_plan(cells)})
+    plan_path = ctx.save_artifact("coverage_plan", {"cells": [c.to_dict() for c in cells], "summary": summarize_plan(cells)})
     ctx.set("cells", cells)
 
     ds = Dataset(
@@ -335,9 +358,9 @@ def build_dataset(ctx: PipelineContext) -> dict:
         raise ValueError("generator produced no usable cases")
     ctx.save_dataset(ds)
     coverage = achieved(cells, [c.model_dump() for c in ds.cases])
-    artifacts.save_json(ctx.path("coverage.json"), coverage)
+    coverage_path = ctx.save_artifact("coverage", coverage)
     return {
-        "artifacts": {"dataset": str(ctx.dataset_path), "plan": str(ctx.path("plan.json")), "coverage": str(ctx.path("coverage.json"))},
+        "artifacts": {"dataset": str(ctx.dataset_path), "coverage_plan": str(plan_path), "coverage": str(coverage_path)},
         "cases": len(ds.cases),
         "planned": coverage["planned"],
         "coverage_pct": coverage["coverage_pct"],
@@ -384,9 +407,9 @@ def review(ctx: PipelineContext) -> dict:
     artifacts.set_review(ds, remaining, "approved", note)
     ctx.save_dataset(ds)
     coverage = achieved(ctx.cells(), [c.model_dump() for c in ds.cases if c.review.status == "approved"])
-    artifacts.save_json(ctx.path("coverage.json"), coverage)
+    coverage_path = ctx.save_artifact("coverage", coverage)
     return {
-        "artifacts": {"dataset": str(ctx.dataset_path)},
+        "artifacts": {"dataset": str(ctx.dataset_path), "coverage": str(coverage_path)},
         "approved": len(remaining),
         "rejected": rejected,
         "approved_by": cfg.review.approved_by,
@@ -427,21 +450,21 @@ def run(ctx: PipelineContext) -> dict:
             raise RuntimeError(f"every case failed with infrastructure errors: {infra[0].error}")
         errors["agent"] += sum(1 for cr in art.case_runs if cr.error_class == "agent")
         errors["infrastructure"] += len(infra)
-        runs.append({"run_id": art.run_id, "path": str(ctx.results_dir / f"run-{art.run_id}.json")})
+        runs.append({"run_id": art.run_id, "path": str(ctx.artifact("run", art.run_id))})
     return {"artifacts": {"runs": runs}, "repeats": cfg.runs.repeats, "cases": len(ds.cases), "errors": errors}
 
 
 def score(ctx: PipelineContext) -> dict:
     cfg = ctx.config
     ds = ctx.dataset()
-    ctx.path("evaluators.yaml").write_text(yaml.safe_dump({"evaluators": cfg.evaluators}))
+    ctx.artifact("evaluators").write_text(yaml.safe_dump({"evaluators": cfg.evaluators}))
     runs = ctx.state.stages["run"].artifacts["runs"]
     pairs = []
     reports = []
     for entry in runs:
         run_art = RunArtifact.model_validate(json.loads(Path(entry["path"]).read_text()))
         report = score_run(run_art, ds, cfg.evaluators, cfg.models.judge)
-        report_path = ctx.results_dir / f"report-{run_art.run_id}.json"
+        report_path = ctx.artifact("score_report", run_art.run_id)
         artifacts.save_json(report_path, report)
         pairs.append({"run": entry["path"], "report": str(report_path)})
         reports.append((run_art, report))
@@ -454,7 +477,7 @@ def score(ctx: PipelineContext) -> dict:
     if reports and not any(v.get("n") for v in reports[0][1].metrics.values()):
         raise RuntimeError("no evaluator produced a single score")
     return {
-        "artifacts": {"pairs": pairs, "evaluators": str(ctx.path("evaluators.yaml"))},
+        "artifacts": {"pairs": pairs, "evaluators": str(ctx.artifact("evaluators"))},
         "metrics": {m: v["avg"] for m, v in reports[0][1].metrics.items()} if reports else {},
         "evaluator_errors": {m: v["errors"] for m, v in reports[0][1].metrics.items() if v["errors"]} if reports else {},
     }
@@ -466,10 +489,10 @@ def aggregate(ctx: PipelineContext) -> dict:
         for e in ctx.config.evaluators if is_judge_spec(e)
     }
     agg = aggregate_runs(ctx.run_reports(), ctx.dataset(), ctx.config.thresholds, judge_metrics=judge_metrics)
-    artifacts.save_json(ctx.path("aggregate.json"), agg)
+    agg_path = ctx.save_artifact("aggregate", agg)
     ctx.set("aggregate", agg)
     return {
-        "artifacts": {"aggregate": str(ctx.path("aggregate.json"))},
+        "artifacts": {"aggregate": str(agg_path)},
         "verdict": agg["verdict"],
         "overall_score": agg["overall_score"],
         "metrics": {m: v["pass_rate"] for m, v in agg["metrics"].items()},
@@ -486,7 +509,7 @@ def simulate(ctx: PipelineContext) -> dict:
         ctx.problem("simulate", p)
     if not scenarios:
         raise ValueError("generator produced no simulation scenarios")
-    scen_path = ctx.path("scenarios.yaml")
+    scen_path = ctx.artifact("scenarios")
     scen_path.write_text(yaml.safe_dump({"scenarios": scenarios}, sort_keys=False))
     scenario_list = sim.load_scenarios(scen_path)
     module = target_mod.load_target(ds.target)
@@ -497,8 +520,7 @@ def simulate(ctx: PipelineContext) -> dict:
     mined = sim.mine_failures(ds, results)
     if mined:
         ctx.save_dataset(ds)
-    sim_path = ctx.path("simulation.json")
-    artifacts.save_json(sim_path, {"results": results})
+    sim_path = ctx.save_artifact("simulation", {"results": results})
     return {
         "artifacts": {"scenarios": str(scen_path), "simulation": str(sim_path)},
         "scenarios": len(results),
@@ -532,9 +554,9 @@ def analyze(ctx: PipelineContext) -> dict:
         analysis = gen_mod.deterministic_analysis(summary, f"{type(e).__name__}: {e}")
         source = "deterministic"
     analysis["source"] = source
-    artifacts.save_json(ctx.path("analysis.json"), analysis)
+    analysis_path = ctx.save_artifact("analysis", analysis)
     ctx.set("analysis", analysis)
-    return {"artifacts": {"analysis": str(ctx.path("analysis.json"))}, "source": source,
+    return {"artifacts": {"analysis": str(analysis_path)}, "source": source,
             "patterns": len(analysis.get("failure_patterns", []))}
 
 
@@ -544,7 +566,7 @@ def report(ctx: PipelineContext) -> dict:
     if ctx.state is not None:  # the snapshot describes this stage too
         ctx.state.record("report").status = "ok"
     data = build_report(ctx)
-    path = ctx.path("report.json")
+    path = ctx.artifact("pipeline_report")
     artifacts.save_json(path, data)
     return {"artifacts": {"report": str(path)}, "verdict": data["verdict"], "overall_score": data["overall_score"]}
 
