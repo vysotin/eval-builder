@@ -500,6 +500,32 @@ def pipeline_run(
         raise typer.Exit(1)
 
 
+@app.command()
+def ui(
+    path: Optional[Path] = typer.Argument(None, help="pipeline output directory to open (default: pick in the sidebar)"),
+    port: int = typer.Option(8501, "--port"),
+    headless: bool = typer.Option(False, "--headless", help="do not open a browser"),
+) -> None:
+    """Open the Streamlit report UI over pipeline artifacts (needs `uv sync --extra ui`)."""
+    import importlib.util
+    import subprocess
+    import sys
+
+    if importlib.util.find_spec("streamlit") is None:
+        typer.echo("streamlit is not installed: run `uv sync --extra ui`", err=True)
+        raise typer.Exit(1)
+    if path is not None and not path.is_dir():
+        typer.echo(f"not a directory: {path}", err=True)
+        raise typer.Exit(1)
+    app_path = Path(__file__).parent / "ui" / "app.py"
+    argv = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)]
+    if headless:
+        argv += ["--server.headless", "true"]
+    if path is not None:
+        argv += ["--", "--dir", str(path)]
+    raise typer.Exit(subprocess.call(argv))
+
+
 @pipeline_app.command("report")
 def pipeline_report(path: Path) -> None:
     """Print a human summary of a report.json (or the output directory holding one)."""
