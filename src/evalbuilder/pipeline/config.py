@@ -171,9 +171,10 @@ target:
   source: {source}            # agent source file (AST discovery)
   module: {module}            # importable module exposing TOOLS + build_agent
   factory: build_agent        # graph factory ("root node" of the agent)
-models:
+models:                       # provider:model[@effort]; providers: claude-cli (subscription),
+                              # anthropic|claude, openai, gemini|google (API keys + `uv sync --extra llm`)
   agent: claude-cli:sonnet    # injected into build_agent(model=...); omit to use the target's default
-  judge: claude-cli:sonnet    # LLM-as-judge (claude-cli:*, anthropic:*, openai:*)
+  judge: claude-cli:sonnet    # LLM-as-judge, e.g. anthropic:claude-sonnet-5, openai:gpt-5, gemini:gemini-2.5-pro
   generator: claude-cli:sonnet  # authors intents, scenarios, cases, mocks, analysis
 constraints: []               # free-text rules the agent must honor, e.g. "Never quote a refund before lookup_order"
 coverage:

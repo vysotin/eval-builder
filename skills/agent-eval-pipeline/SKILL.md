@@ -25,7 +25,12 @@ when they want a verdict.
    ```
 
    - `models.*` default to `claude-cli:sonnet` (Claude Code subscription via the
-     `claude` binary; no API key). `anthropic:` / `openai:` specs work with keys.
+     `claude` binary; no API key). API-key providers are interchangeable:
+     `anthropic:claude-sonnet-5` (`ANTHROPIC_API_KEY`), `openai:gpt-5`
+     (`OPENAI_API_KEY`), `gemini:gemini-2.5-pro` (`GOOGLE_API_KEY`); each needs its
+     package (`uv sync --extra anthropic|openai|gemini|llm`). `evalbuilder check`
+     prints per-provider readiness (`providers`), and preflight fails early with the
+     exact missing key/package.
    - `review.auto_approve: true` + `approved_by` is the user's explicit authorization
      for the pipeline to approve generated cases. **Never set it yourself** — ask; without
      it the pipeline stops at `awaiting_review` and writes a report saying so.
@@ -40,6 +45,7 @@ when they want a verdict.
    evalbuilder pipeline run eval/pipeline.yaml --resume     # reuse completed stages after a fix
    evalbuilder pipeline run eval/pipeline.yaml --resume --from dataset   # regenerate from a stage on
    evalbuilder pipeline report eval/pipeline/NAME           # human summary of report.json
+   evalbuilder ui eval/pipeline/NAME                        # Streamlit report UI over every artifact
    ```
 
 4. Read the report the way the run skill reads a score report — verdict first, then
@@ -57,6 +63,10 @@ when they want a verdict.
    - `analysis` — generator-written patterns and recommendations (`source:
      deterministic` means the LLM analysis failed and only facts are listed).
    - `problems[]` — everything that was dropped, degraded, or recovered.
+   - Every artifact in the output directory follows one naming convention
+     (`references/config-reference.md`, "Artifacts"): `<kind>.json` at the root,
+     `results/<kind>-<run_id>.json` per run, each with an embedded `schema` id — the
+     UI (`evalbuilder ui`) identifies uploaded files by that id.
 
 5. Report to the user in that order and keep the three failure classes apart: agent
    defects, evaluator/mock problems, and pipeline problems.

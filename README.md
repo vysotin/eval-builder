@@ -1,83 +1,346 @@
 # eval-builder
 
-Agentic skills + a deterministic CLI for building and running evals for **LangGraph
-agents**: parse the agent's source, derive intents/scenarios/failure modes with cited
-evidence, generate a coverage-driven golden dataset in OpenEvals/LangSmith-compatible
-JSON, mock tools ADK-style for deterministic runs, and score experiments with
-OpenEvals evaluators — local filesystem first, LangSmith optional.
+Agentic skills + a deterministic CLI that build and run evaluations for **LangGraph
+agents**, an **autonomous pipeline** that does the whole job from one config file, and a
+**Streamlit report UI** that visualises every artifact the pipeline produces.
+
+- parse the agent's source and compiled graph into a test surface (graph, tools,
+  prompts, intents, scenarios, failure modes, constraints) with cited evidence;
+- generate a coverage-driven golden dataset in OpenEvals/LangSmith-compatible JSON;
+- mock tools ADK-style so runs are deterministic;
+- run cases repeatedly, score them with deterministic checks and LLM judges, aggregate
+  pass rates vs thresholds, slices and stability, simulate multi-turn conversations,
+  and write a report with a `pass | fail | incomplete` verdict;
+- use any model through one `provider:model` spec: the Claude Code CLI (subscription),
+  or Anthropic / OpenAI / Gemini API keys.
 
 ```
-user's LangGraph agent repo
-        │
-        ▼
-[skill] agent-eval-discover ──► eval/agent-map.json         (hypotheses + evidence)
-        ▼
-[skill] agent-eval-dataset ──► eval/datasets/<name>.json    (pending cases, coverage grid)
-        │        human approval gate (explicit, per-case/batch)
-        ▼
-[skill] agent-eval-mock ─────► ADK-style mock rules in the dataset
-        ▼
-[skill] agent-eval-run ──────► validate → run (mocks installed) → score with
-                                OpenEvals → eval/results/*  (+ optional LangSmith)
-                                simulate: multi-turn scenarios; failures mined back
+                       ┌──────────────── skills (policy prose, Claude Code) ────────────────┐
+your LangGraph agent ─►│ agent-eval-discover │ agent-eval-dataset │ agent-eval-mock │ agent-eval-run │
+                       └──────────────────────────────┬──────────────────────────────────────┘
+                                                      │ every artifact mutation goes through
+                                                      ▼
+                                   evalbuilder CLI (deterministic: schemas, IDs, coverage,
+                                   review gate, mocking, runner, evaluators, LangSmith)
+                                                      │
+        one config ──► evalbuilder pipeline run ──────┤  preflight → discover → map → mocks → dataset →
+                       (agent-eval-pipeline skill)    │  review → verify → run×N → score×N → aggregate →
+                                                      │  simulate → publish → analyze → report
+                                                      ▼
+                                   eval/pipeline/<name>/   (agent-map.json, dataset.json,
+                                   results/run-*.json, aggregate.json, report.json, …)
+                                                      │
+                       evalbuilder ui  ◄──────────────┘  Streamlit report: graph, intents, dataset,
+                                                         coverage, eval results, stability, simulation
 ```
 
-Skills are policy prose; **all determinism lives in the `evalbuilder` CLI** — schema
-validation, content-hash case IDs, coverage math, the review state machine, mock
-installation, trajectory capture, scoring, and idempotent LangSmith publication.
+## Contents
 
-The fifth skill, `agent-eval-pipeline`, runs all of that **unattended** from one config
-file (see below).
+1. [Install](#install)
+2. [Quickstart](#quickstart)
+3. [Repository layout](#repository-layout)
+4. [The autonomous pipeline](#the-autonomous-pipeline)
+   - [Config](#config) · [Stages](#stages) · [Review gate](#review-gate) ·
+     [Resume](#resume) · [Verdict and report](#verdict-and-report)
+5. [Models and providers](#models-and-providers)
+6. [Artifacts and naming convention](#artifacts-and-naming-convention)
+7. [Report UI](#report-ui)
+8. [Interactive skills](#interactive-skills)
+9. [CLI reference](#cli-reference)
+10. [Dataset format, mocking, target contract](#dataset-format)
+11. [Evaluators](#evaluators)
+12. [LangSmith](#langsmith-optional)
+13. [Testing](#testing)
+14. [Troubleshooting](#troubleshooting)
+15. [Extending](#extending-to-other-frameworks)
+
+## Install
+
+Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv venv --python 3.12
+uv sync                              # core: langgraph, langchain, openevals, agentevals, typer, claude-cli adapter
+uv sync --extra ui                   # + streamlit, pandas  (report UI)
+uv sync --extra llm                  # + langchain-anthropic, langchain-openai, langchain-google-genai
+uv sync --all-extras                 # everything
+uv run playwright install chromium   # only for the browser tests
+cp .env.example .env                 # model defaults and API keys (all optional)
+uv run evalbuilder check             # capability matrix: langgraph, claude CLI, providers, judge, langsmith
+```
+
+Extras: `anthropic`, `openai`, `gemini` (one provider each), `llm` (all three), `ui`.
+The Claude Code CLI adapter needs the `claude` binary on `PATH` and a logged-in
+subscription; nothing else needs a key.
 
 ## Quickstart
 
 ```bash
-uv venv --python 3.12 && uv sync
-uv run evalbuilder check                      # capability matrix
-uv run evalbuilder discover examples.weather_bot.agent --source examples/weather_bot/agent.py
-uv run pytest                                 # full offline test suite
-```
-
-The four skills are exposed to Claude Code via `.claude/skills/agent-eval-*`
-(symlinks into `skills/`).
-
-| Skill | Use when |
-|---|---|
-| `agent-eval-discover` | Starting eval work / agent code changed — map the test surface |
-| `agent-eval-dataset` | Generating or extending the golden dataset (pending → human review) |
-| `agent-eval-mock` | Cases depend on nondeterministic or side-effecting tools |
-| `agent-eval-run` | Running/scoring experiments, publishing to LangSmith, simulating |
-| `agent-eval-pipeline` | One config → full autonomous evaluation → `report.json` |
-
-## Autonomous pipeline
-
-```bash
+# 1. a starter config for the shipped example agent (router graph + external tools)
 uv run evalbuilder pipeline init eval/pipeline.yaml --name support-bot \
     --source examples/support_bot/agent.py --module examples.support_bot.agent
-# edit constraints / coverage / evaluators / thresholds; set review.auto_approve + approved_by
-uv run evalbuilder pipeline run eval/pipeline.yaml          # exit 1 unless verdict == pass
-uv run evalbuilder pipeline report eval/pipeline/support-bot
+
+# 2. edit eval/pipeline.yaml: constraints, coverage, evaluators, thresholds,
+#    models, and — to let the pipeline approve generated cases — review.auto_approve + approved_by
+
+# 3. run (exit code 1 unless verdict == pass); ~45 min for 16 cases × 2 repeats with claude-cli:sonnet
+uv run evalbuilder pipeline run eval/pipeline.yaml
+
+# 4. read it
+uv run evalbuilder pipeline report eval/pipeline/support-bot     # terminal summary
+uv run evalbuilder ui eval/pipeline/support-bot                  # Streamlit report at http://localhost:8501
 ```
 
-Stages: `preflight → discover → map → mocks → dataset → review → verify → run×N →
-score×N → aggregate → simulate → publish → analyze → report`. An LLM **generator**
-authors intents/scenarios (evidence-cited, taxonomy-gated), tool fixtures (every
-introspected tool is mocked; unmatched calls are errors), coverage-planned cases,
-a self-review, multi-turn scenarios and the final analysis — and every artifact
-still passes the same CLI validation. Failures never raise: a failed stage marks its
-dependents `skipped`, retries once with a recovery note, and `report.json` always
-lands with `verdict ∈ pass|fail|incomplete`, per-stage status, metrics vs thresholds,
-slices, coverage achieved vs planned, stability across repeats (unstable *cases* vs
-unstable *evaluators*), and a `problems[]` list. `--resume` reuses completed stages; `--resume --from STAGE` regenerates from a stage on.
+No key, no `claude` binary? Look at a finished run right away — the repository ships
+the artifacts of a real run: `uv run evalbuilder ui docs/examples/support-bot`.
+A ready-to-run config is in `examples/support_bot/pipeline.yaml`.
 
-Model specs: `claude-cli:sonnet` uses the Claude Code CLI with your subscription (the
-`langchain-claude-code-cli` package's `ChatClaudeCode` parameter surface, with a
-subprocess transport and `--json-schema` structured tool calling in
-`src/evalbuilder/claude_cli.py`); `anthropic:…`/`openai:…` use API keys;
-`scripted:module:factory` keeps tests offline. Config reference:
-`skills/agent-eval-pipeline/references/config-reference.md`; a ready-to-run example:
-`examples/support_bot/pipeline.yaml`, and the report it produced with `claude-cli:sonnet`
-(16 cases × 2 repeats, ~45 min): `docs/examples/support-bot-report.json`.
+## Repository layout
+
+```
+src/evalbuilder/
+  cli.py              typer CLI: dataset/agent-map/mock/review/discover/run/score/simulate/publish/check/pipeline/ui
+  schemas.py          pydantic models: AgentMap, Dataset/Case, RunArtifact, Report (score report)
+  artifacts.py        dataset load/save/validate, content-hash case IDs, review state machine
+  discover.py         AST + live introspection of a LangGraph module → agent-map
+  target.py           target contract: build_agent(model=None, tools=None) + TOOLS
+  mocking.py          ADK-style tool mocks (ordered rules, matchArgs subset, miss policy), verify
+  runner.py           run approved cases, capture trajectory / tool calls / node path
+  evaluators.py       deterministic evaluators + OpenEvals/AgentEvals judges, score_run
+  simulate.py         multi-turn scenarios with a simulated user, violation mining
+  coverage.py         intent×topic×scenario×failure_mode grid, gaps
+  langsmith_io.py     idempotent publish with read-back verification
+  providers.py        API-key providers (anthropic/openai/google_genai), aliases, readiness, @effort
+  claude_cli.py       ChatClaudeCLI: Claude Code CLI as a LangChain chat model; model_from_spec
+  config.py           .env settings, capability_check
+  testing.py          ScriptedChatModel for fully offline tests
+  pipeline/
+    config.py         evalbuilder/pipeline-config/v1 (pydantic), template, semantic checks
+    engine.py         stage runner: deps, retries, skip, awaiting_review, persisted state.json
+    stages.py         the 14 stage functions + PipelineContext (lazy, disk-backed artifacts)
+    generator.py      structured-output LLM "author" for map/mocks/cases/review/scenarios/analysis
+    planning.py       coverage cells planning and achieved coverage
+    taxonomy.py       failure-type gating by agent structure
+    aggregate.py      repeat-aware aggregation: pass rates, thresholds, slices, stability
+    report.py         report assembly + run_pipeline entry point
+    layout.py         THE artifact naming convention (kinds, files, schema ids, legacy names)
+  ui/
+    app.py            Streamlit entry point (sidebar source picker, st.navigation)
+    loader.py         Bundle: load a directory by file name or uploads by schema id
+    common.py         palette, charts (Altair), tables, transcript widgets
+    app_pages/        overview, agent, intents, dataset, coverage, results, stability,
+                      simulation, analysis, stages
+skills/               five Claude Code skills (symlinked into .claude/skills/)
+examples/             weather_bot, travel_planner, support_bot (+ pipeline.yaml) — offline scripted models
+docs/examples/support-bot/   artifacts of a real pipeline run (UI demo + test fixture)
+docs/superpowers/     design specs and implementation plans
+tests/                offline pytest suite; tests/ui/ = Playwright browser tests
+```
+
+## The autonomous pipeline
+
+`evalbuilder pipeline run CONFIG` turns one YAML file into a verdict. An LLM
+**generator** plays the author role the interactive skills otherwise give to a human:
+it derives intents and scenarios (evidence-cited, taxonomy-gated), writes tool
+fixtures, fills a coverage plan with cases, self-reviews them, writes multi-turn
+simulation scenarios and the final analysis. Every artifact it produces still goes
+through the same CLI validation, and the human review gate is preserved.
+
+### Config
+
+`evalbuilder pipeline init` writes a fully commented starter. Minimal config:
+
+```yaml
+schema: evalbuilder/pipeline-config/v1
+name: support-bot
+target:
+  source: examples/support_bot/agent.py     # agent source (AST discovery)
+  module: examples.support_bot.agent        # importable module exposing TOOLS + build_agent
+models:
+  agent: claude-cli:sonnet                  # injected into build_agent(model=…); omit = target's own
+  judge: claude-cli:sonnet                  # LLM-as-judge
+  generator: claude-cli:sonnet              # authors intents/scenarios/cases/mocks/analysis
+constraints:
+  - "Never call issue_refund before the customer explicitly confirms with yes."
+coverage: {total_cases: 12, per_intent: {happy: 1, failure: 1}, per_failure_category: 1, out_of_intent: 2, multi_turn_share: 0.15}
+evaluators: [{type: expected_tools}, {type: contains}, {type: contract}, {type: correctness}]
+thresholds: {default: 0.7, metrics: {expected_tools: 0.8}, slice_min: 0.5, overall_pass: 0.75}
+runs: {repeats: 2}
+mocking: {required: true, on_miss: strict}
+review: {auto_approve: true, approved_by: "your name"}
+```
+
+Every key, default and semantic check is documented in
+`skills/agent-eval-pipeline/references/config-reference.md`.
+
+### Stages
+
+| stage | depends on | what it does | on failure |
+|---|---|---|---|
+| preflight | – | config checks, target import, model readiness (`providers.provider_ready`) | blocking |
+| discover | preflight | AST + live introspection → `agent-map.json` (nodes, edges, tools, prompts) | blocking |
+| map | discover | generator authors intents, scenarios, failure scenarios, topics, derived constraints; taxonomy gates failure types | retry once; invalid entries dropped → `problems` |
+| mocks | discover | generator writes fixtures for **every** tool → `mock-rules.json` | generic fixture fallback |
+| dataset | map, mocks | plan coverage cells → generator fills them → `dataset.json`, `coverage.json` | invalid cases dropped, gaps reported |
+| review | dataset | self-review rejects bad cases; approves the rest **only** with `review.auto_approve` | stops with `awaiting_review` |
+| verify | review | every expected tool call has a rule; every tool is mocked | blocking |
+| run | verify | `runs.repeats` executions of all approved cases → `results/run-<id>.json` | retry once |
+| score | run | evaluators per run → `results/score-report-<id>.json` | judge errors recorded per metric |
+| aggregate | score | pass rates vs thresholds, slices, stability, failing cases → `aggregate.json` | – |
+| simulate | review (optional) | multi-turn scenarios with a simulated user → `simulation.json`; violations mined into pending cases | never blocks |
+| publish | review (optional) | LangSmith upload (`auto` = only with a key) | skipped |
+| analyze | aggregate (optional) | generator explains the verdict → `analysis.json` | deterministic fallback |
+| report | always | `report.json` | – |
+
+Failures never raise: a failed stage marks its dependents `skipped`, retries once with a
+recovery note, and `report.json` always lands.
+
+### Review gate
+
+Generated and imported cases always land as `pending`. The pipeline approves them only
+when the config says `review.auto_approve: true` **and** names `approved_by` — an
+explicit human authorization recorded in every case's review note. Without it the run
+stops at `awaiting_review`, writes the report, and you either approve by hand
+(`evalbuilder review DATASET --approve ids…`) or flip the config and `--resume`.
+
+### Resume
+
+`state.json` records every stage. `--resume` reuses completed stages (the report is
+always rebuilt); `--resume --from STAGE` regenerates from a stage on, e.g. after
+editing thresholds (`--from aggregate`) or the agent (`--from run`).
+
+### Verdict and report
+
+`verdict` is `incomplete` when any required stage (preflight … aggregate) did not
+succeed; otherwise `pass` / `fail` from thresholds: every metric's pass rate ≥ its
+threshold, every intent / failure-mode / variant slice ≥ `slice_min`, and the mean of
+metric pass rates ≥ `overall_pass`. `report.json` carries `verdict_reasons`, per-stage
+status, metrics, slices, coverage achieved vs planned, stability across repeats,
+failing cases with judge comments, the simulation, the analysis, and `problems[]`.
+
+Stability semantics (from repeats): an unstable **case** changed its tool trajectory;
+an unstable **output** kept the trajectory but a deterministic metric flipped (wording
+drift); an unstable **evaluator** kept the trajectory but a judge flipped. Judge
+rationales that look like placeholders are listed as `suspect_judge_comments`.
+
+## Models and providers
+
+Every model in evalbuilder — the agent under test, the generator, the judges, the
+simulated user — is a `provider:model[@effort]` spec resolved by
+`evalbuilder.claude_cli.model_from_spec`:
+
+| provider (aliases) | auth | package · extra | example | `@effort` |
+|---|---|---|---|---|
+| `claude-cli` | Claude Code CLI on `PATH`, subscription login | bundled (`langchain-claude-code-cli`) | `claude-cli:sonnet@high` | CLI effort |
+| `anthropic` (`claude`) | `ANTHROPIC_API_KEY` | `langchain-anthropic` · `anthropic` | `anthropic:claude-sonnet-5` | extended thinking (1024 / 4096 / 16000 tokens) |
+| `openai` | `OPENAI_API_KEY` | `langchain-openai` · `openai` | `openai:gpt-5@medium` | `reasoning_effort` |
+| `google_genai` (`gemini`, `google`) | `GOOGLE_API_KEY` | `langchain-google-genai` · `gemini` | `gemini:gemini-2.5-pro` | ignored |
+| `scripted` | – | – | `scripted:examples.support_bot.agent:default_scripted_model` | – |
+
+- Set them in the pipeline config (`models.agent|judge|generator`), on the CLI
+  (`evalbuilder run --model …`), or as defaults in `.env`
+  (`EVALBUILDER_JUDGE_MODEL`, `EVALBUILDER_AGENT_MODEL`, `EVALBUILDER_GENERATOR_MODEL`).
+- `evalbuilder check` prints per-provider readiness (`key`, `package`, `ready`, the
+  extra to install); pipeline preflight fails early with the exact missing key or
+  package rather than at the first network call.
+- The `claude-cli` adapter (`src/evalbuilder/claude_cli.py`) runs one isolated
+  `claude -p --output-format json --json-schema …` subprocess per call, flattens
+  history into a transcript, and rides tool calls and structured output on
+  `--json-schema`. ~3–10 s per agent call, ~15–20 s per judge call.
+- API providers go through LangChain's `init_chat_model`, so tool calling and
+  `with_structured_output` are native. The OpenEvals/AgentEvals judges accept any of
+  them via `judge=`.
+
+## Artifacts and naming convention
+
+`src/evalbuilder/pipeline/layout.py` is the single registry of artifact kinds. Rules:
+root artifacts are `<kind>.json` (or `.yaml`), per-run artifacts are
+`results/<kind>-<run_id>.json`, every JSON artifact embeds
+`"schema": "evalbuilder/<kind>/v1"`, and kinds / files / schema ids are unique — so a
+file can be identified by name (directories) or by content (uploads).
+
+| file | schema | stage | contents |
+|---|---|---|---|
+| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph (AST + live), tools + arg schemas, prompts, intents, scenarios, failure scenarios, constraints, topics |
+| `applicable-failures.json` | `evalbuilder/applicable-failures/v1` | map | `failure_types`: failure type → gating evidence |
+| `mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules |
+| `coverage-plan.json` | `evalbuilder/coverage-plan/v1` | dataset | planned cells and summary |
+| `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases (inputs, references, metadata, mocks), review + publication state |
+| `coverage.json` | `evalbuilder/coverage/v1` | dataset, review | planned vs covered, by kind, multi-turn, gaps |
+| `evaluators.yaml` | – | score | evaluator specs |
+| `results/run-<id>.json` | `evalbuilder/run/v1` | run | per-case outputs, trajectory, tool calls, node path, errors |
+| `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores/comments/errors/skips |
+| `aggregate.json` | `evalbuilder/aggregate/v1` | aggregate | pass rates vs thresholds, slices, weak slices, stability, failing cases, verdict |
+| `scenarios.yaml` | – | simulate | multi-turn scenarios |
+| `simulation.json` | `evalbuilder/simulation/v1` | simulate | transcripts, stop reasons, violations |
+| `analysis.json` | `evalbuilder/analysis/v1` | analyze | summary, failure patterns, weak slices, recommendations, evaluator issues |
+| `state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status/timing/details, problems |
+| `report.json` | `evalbuilder/pipeline-report/v1` | report | everything above, condensed, plus `artifacts` index |
+
+Directories written before this convention (`mocks.json`, `plan.json`,
+`results/report-*.json`, schema `evalbuilder/report/v1`) still load everywhere.
+The standalone commands write with the same names (`evalbuilder score` →
+`score-report-<id>.json`, `evalbuilder simulate` → `simulation-<id>.json`).
+
+## Report UI
+
+```bash
+uv sync --extra ui
+uv run evalbuilder ui                              # pick a directory in the sidebar (scans eval/pipeline/*, docs/examples/*)
+uv run evalbuilder ui eval/pipeline/support-bot    # open one directly
+uv run evalbuilder ui DIR --port 8600 --headless   # server only
+uv run streamlit run src/evalbuilder/ui/app.py -- --dir DIR     # equivalent
+```
+
+The sidebar loads a pipeline output directory (by file name) or **uploaded files**
+(identified by their embedded `schema` id, falling back to the file name). Pages:
+
+| page | shows |
+|---|---|
+| Overview | verdict + reasons, overall score, metric pass rates vs thresholds, coverage, stability, stage timeline, analysis summary, problems |
+| Agent graph & tools | the graph as Graphviz (AST edges or compiled/live edges, tool links), node prompts, tools with argument schemas, constraints, topics |
+| Intents & scenarios | intents with evidence and case counts, scenarios by intent (happy/failure), failure scenarios, structurally applicable failure types |
+| Dataset & mocks | filterable case table, case detail (inputs, references, metadata, per-case mocks, review note), review counts, tool fixtures |
+| Coverage | planned vs covered by kind, plan cells, gaps |
+| Eval results | aggregate metrics vs thresholds, per-run metrics, slice heatmaps (intent / failure mode / variant), per-case score matrix across runs, failing cases with judge comments, case drill-down with trajectory transcript and scores per run |
+| Stability | unstable cases / outputs / evaluators, suspect judge comments, per-case hashes |
+| Simulation | scenario outcomes, transcripts, violations |
+| Analysis | summary, verdict explanation, failure patterns, weak slices, recommendations, evaluator issues |
+| Stages & problems | timeline, per-stage details and artifacts, problems, generator calls, artifacts loaded, config |
+
+Missing artifacts are explained (which file, which stage writes it) rather than hidden.
+
+## Interactive skills
+
+The skills are policy prose for Claude Code (`skills/agent-eval-*/SKILL.md`, exposed via
+`.claude/skills/`); all determinism lives in the CLI.
+
+| skill | use when |
+|---|---|
+| `agent-eval-discover` | starting eval work / agent code changed — map the test surface into `eval/agent-map.json` |
+| `agent-eval-dataset` | generating or extending the golden dataset (cases land `pending` → human review) |
+| `agent-eval-mock` | cases depend on nondeterministic or side-effecting tools |
+| `agent-eval-run` | running/scoring experiments, publishing to LangSmith, simulating multi-turn scenarios |
+| `agent-eval-pipeline` | one config → full autonomous evaluation → `report.json` (+ reading it) |
+
+## CLI reference
+
+```
+evalbuilder check [--target-module M] [--env-file F]      capability matrix incl. providers
+evalbuilder discover MODULE [--source F] [--eval-dir D]   AST + live introspection → agent-map.json
+evalbuilder agent-map update MAP [--intents|--scenarios|--failures|--topics|--constraints JSON|@file]
+evalbuilder dataset init|add|import|validate|list|gaps    dataset lifecycle (cases always land pending)
+evalbuilder review DATASET --approve ids | --reject ids   the only way a case becomes approved
+evalbuilder mock set|verify                               ADK-style rules; verify expected calls match
+evalbuilder run DATASET [--mock] [--model SPEC] [--on-miss real|fallback|strict] [--ids …] [--out D]
+evalbuilder score RUN --dataset D --evaluators evaluators.yaml [--out D]
+evalbuilder simulate DATASET --scenarios scenarios.yaml [--no-mine]
+evalbuilder publish DATASET [--dataset-name N]            LangSmith, idempotent
+evalbuilder pipeline init|run|report                      the autonomous pipeline
+evalbuilder ui [DIR] [--port P] [--headless]              Streamlit report UI
+```
+
+Every command prints JSON to stdout (`pipeline run` prints its human summary to stderr).
 
 ## Dataset format
 
@@ -87,49 +350,93 @@ evaluator kwargs; everything harness-specific lives under `metadata`:
 ```json
 {
   "id": "case-3fa1b2c4d5",
-  "inputs": {"messages": [{"role": "user", "content": "Find me a flight from SFO to JFK on 2026-09-01"}]},
+  "inputs": {"messages": [{"role": "user", "content": "Where is order ORD-1002?"}]},
   "reference_outputs": {
-    "contains": "AA100",
-    "expected_tools": [{"name": "flight_agent", "args": {}}],
-    "contract": "Must not confirm a booking without an explicit user yes."
+    "contains": "ORD-1002",
+    "expected_tools": [{"name": "lookup_order", "args": {"order_id": "ORD-1002"}}],
+    "forbidden_tools": ["issue_refund"],
+    "contract": "States the order id with its status and ETA without inventing details."
   },
   "metadata": {
-    "intent": "intent.book-flight", "topic": "unspecified",
-    "scenario": "scenario.book-flight.happy", "failure_mode": "none",
-    "variant": "happy", "source": "synthetic",
-    "mocks": {"tools": {"flight_agent": [
-      {"matchArgs": {}, "response": "Found AA100 at $350 (mocked fixture)."}]}}
+    "intent": "intent.order-status", "topic": "order status",
+    "scenario": "scenario.order-status.happy", "failure_mode": "none",
+    "variant": "happy", "source": "synthetic", "user_turns": ["And the ETA?"],
+    "mocks": {"tools": {"lookup_order": [{"matchArgs": {"order_id": "ORD-1002"}, "response": {"status": "Shipped"}}]}}
   },
-  "review": {"status": "pending"},
+  "review": {"status": "pending", "note": ""},
   "publication": {"langsmith_example_id": null}
 }
 ```
 
-Mock rules use ADK-eval semantics: ordered per-tool rule lists, first match wins,
-`matchArgs` subset equality, `{}` wildcard, unmatched calls run the real tool (or
-fallback/strict).
+Case IDs are content hashes (inputs + intent/topic/scenario/failure mode), so re-generation
+never duplicates. The coverage grid is intent × topic × scenario × failure_mode.
 
-## Target contract
+### Mocking
+
+ADK-eval semantics: ordered per-tool rule lists, first match wins, `matchArgs` is a
+subset match, `{}` is a wildcard. Miss policy `real` (call the real tool), `fallback`
+(dataset-level rule), `strict` (error — the pipeline default). Per-case rules override
+dataset-level fixtures; the pipeline appends dataset fixtures as fallback to every
+per-case list. Subagents exposed as tool functions are mocked like tools.
+
+### Target contract
 
 The dataset's `target` names a module exposing
 `build_agent(model=None, tools=None) -> CompiledStateGraph` and a `TOOLS` list. The
-runner rebuilds the graph per case, wrapping `TOOLS` with the case's merged mock
-rules, and injects `model=` when a run specifies one. Three example targets ship in
-`examples/` (`weather_bot`, `travel_planner`, and `support_bot` — a router graph over
-two ReAct specialists with external HTTP tools) with scripted chat models, so the
-whole test-suite runs offline.
+runner rebuilds the graph per case, wrapping `TOOLS` with the merged mock rules, and
+injects `model=` when a run specifies one. Three example targets ship in `examples/`
+(`weather_bot`, `travel_planner`, `support_bot`) with scripted chat models, so the test
+suite runs offline.
+
+## Evaluators
+
+One metric per evaluator; evaluator failures are never agent failures. Deterministic:
+`expected_tools` (ordered subset of tool calls, `forbidden_tools`), `contains`,
+`json_valid`, `trajectory_match`. LLM judges (OpenEvals / AgentEvals): `correctness`,
+`contract` (the case's behavioral contract), `openevals` with any rubric prompt
+(`prompt: CONCISENESS_PROMPT` or a name like `hallucination`), `trajectory_llm`, and
+`custom`. Evaluators whose reference is absent on a case are `skipped`, not errors.
+See `skills/agent-eval-run/references/evaluator-selection.md`.
 
 ## LangSmith (optional)
 
-Set `LANGSMITH_API_KEY` (see `.env.example`), then
-`evalbuilder publish eval/datasets/<name>.json` uploads approved cases (idempotent,
-read-back verified) and records example IDs in the dataset file.
+Set `LANGSMITH_API_KEY` (see `.env.example`); `evalbuilder publish` uploads approved
+cases (idempotent, read-back verified by `metadata.local_case_id`) and records example
+IDs in the dataset. The pipeline's `stages.publish: auto` publishes only when a key is
+configured; a missing key is degraded, never blocking.
+
+## Testing
+
+```bash
+uv run pytest                     # offline suite (~150 tests): CLI, pipeline e2e with scripted models,
+                                  # providers, naming convention, UI loader, headless page tests (AppTest)
+uv run pytest -m ui               # Playwright browser tests: starts the Streamlit app on a free port
+                                  # against docs/examples/support-bot and walks every page
+EVALBUILDER_UI_SHOTS=shots uv run pytest -m ui    # also saves a screenshot per page
+```
+
+Browser tests skip themselves when playwright/chromium is missing
+(`uv run playwright install chromium`). The Streamlit pages are also exercised without a
+browser via `streamlit.testing.v1.AppTest` (`tests/test_ui_pages.py`), so the default
+suite already covers rendering.
+
+## Troubleshooting
+
+| symptom | cause / fix |
+|---|---|
+| `generator model 'x:y' unavailable: provider 'x' not ready: set X_API_KEY; install …` | preflight readiness: export the key (or put it in `.env`) and `uv sync --extra <provider>` |
+| `claude CLI not on PATH` | install Claude Code and log in; or switch specs to an API provider |
+| verdict `incomplete`, stage `review` = `awaiting_review` | set `review.auto_approve: true` + `approved_by`, or `evalbuilder review … --approve`, then `--resume` |
+| `tools without mock rules: […]` | `mocking.required: true` needs a fixture per tool; the generator retries once, otherwise add rules with `evalbuilder mock set` |
+| `every case failed with infrastructure errors` | target import / model transport problem — the first error is in the message; fix and `--resume --from run` |
+| judge scores with comment `Test.` | placeholder judge rationale; listed under `stability.suspect_judge_comments`, retried once automatically |
+| `streamlit is not installed` | `uv sync --extra ui` |
+| UI shows "Missing artifact …" | that stage has not run (or failed); the message names the file and the stage |
 
 ## Extending to other frameworks
 
 The dataset schema is framework-neutral; LangGraph specifics live in
 `src/evalbuilder/{discover,target,mocking}.py`. A Google ADK adapter maps 1:1
 (AgentMetadata → agent-map, `before_tool_callback` mocking, `.evalset.json` import);
-Dify follows via DSL rewrite. See the design spec:
-`docs/superpowers/specs/2026-08-23-eval-builder-skills-design.md` and plan:
-`docs/superpowers/plans/2026-08-23-eval-builder-mvp.md`.
+Dify follows via DSL rewrite. Design docs: `docs/superpowers/specs/` (skills design,
+autonomous pipeline, UI/providers/naming), plans: `docs/superpowers/plans/`.
