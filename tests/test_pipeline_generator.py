@@ -186,3 +186,15 @@ def test_self_review_and_scenarios_and_analysis_fallback():
     assert scenarios[0]["expect"] == {"not_contains": "issued without"} and problems
     fallback = g.deterministic_analysis({"verdict": "fail", "failing_cases": [{"id": "case-1"}]}, "no model")
     assert fallback["failure_patterns"][0]["affected_cases"] == ["case-1"]
+
+
+def test_plan_topics_rotate_and_out_of_intent_is_guaranteed():
+    amap = _map()
+    amap.data_domains["topics"] = ["orders", "returns", "warranty"]
+    cfg = CoverageConfig(total_cases=1, per_intent=PerIntent(happy=1, failure=1), per_failure_category=0, out_of_intent=2, multi_turn_share=0)
+    cells = plan_cells(cfg, amap, [])  # out_of_scope not in the map's failure list
+    intent_cells = [c for c in cells if c.kind in ("happy", "failure")]
+    assert sum(c.count for c in intent_cells) == 4  # not multiplied by 3 topics
+    assert {c.topic for c in intent_cells} == {"orders", "returns", "warranty"}
+    oos = [c for c in cells if c.failure_mode == "out_of_scope"]
+    assert len(oos) == 1 and oos[0].count == 2 and oos[0].kind == "out-of-intent"

@@ -53,6 +53,7 @@ def plan_cells(
 ) -> list[Cell]:
     topics = agent_map.data_domains.get("topics") or ["unspecified"]
     cells: list[Cell] = []
+    topic_cursor = 0  # topics rotate across cells; they never multiply the case count
 
     for intent in agent_map.intents:
         iid = intent["id"]
@@ -64,19 +65,21 @@ def plan_cells(
             if not scenarios:
                 continue
             for scenario, n in zip(scenarios, _spread(per, len(scenarios))):
-                for topic in topics:
-                    cells.append(
-                        Cell(
-                            intent=iid,
-                            scenario=scenario["id"],
-                            failure_mode=scenario.get("failure_mode", "none") if kind == "failure" else "none",
-                            kind=kind,
-                            count=n,
-                            topic=topic,
-                            variants=["happy"] if kind == "happy" else ["boundary", "adversarial"],
-                        )
+                cells.append(
+                    Cell(
+                        intent=iid,
+                        scenario=scenario["id"],
+                        failure_mode=scenario.get("failure_mode", "none") if kind == "failure" else "none",
+                        kind=kind,
+                        count=n,
+                        topic=topics[topic_cursor % len(topics)],
+                        variants=["happy"] if kind == "happy" else ["boundary", "adversarial"],
                     )
+                )
+                topic_cursor += 1
 
+    if cfg.out_of_intent > 0 and OUT_OF_SCOPE not in failure_types:
+        failure_types = [*failure_types, OUT_OF_SCOPE]  # always applicable
     intents = [i["id"] for i in agent_map.intents]
     for i, ftype in enumerate(failure_types):
         if ftype == OUT_OF_SCOPE:
