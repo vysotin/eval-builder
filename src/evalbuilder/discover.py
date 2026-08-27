@@ -121,12 +121,19 @@ def discover_from_source(source_path: Path) -> AgentMap:
     edges: list[list[str]] = []
     conditional_edges: list[dict] = []
 
-    def visit(node, enclosing: str) -> None:
+    def visit(node, enclosing: str, assigned: str | None = None) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             enclosing = node.name
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and isinstance(node.value, ast.Call):
+                visit(node.value, enclosing, assigned=target.id)
+                return
         if isinstance(node, ast.Call):
             name = _call_name(node)
-            if name in _AGENT_FACTORIES:
+            if name in _AGENT_FACTORIES and enclosing in _AGENT_FACTORIES:
+                pass  # compatibility shim wrapping the factory, not an agent node
+            elif name in _AGENT_FACTORIES:
                 prompt = None
                 tool_names: list[str] = []
                 for kw in node.keywords:
@@ -156,7 +163,7 @@ def discover_from_source(source_path: Path) -> AgentMap:
                             prompt = value
                 nodes.append(
                     {
-                        "id": enclosing or "agent",
+                        "id": assigned or enclosing or "agent",
                         "kind": "llm",
                         "prompt": prompt,
                         "tools": tool_names,
@@ -200,6 +207,13 @@ def discover_from_source(source_path: Path) -> AgentMap:
     visit(tree, "")
 
     for n in nodes:
+        if not n.get("tools") and n.get("prompt"):
+            # Dynamically built tool lists are opaque to the AST; the prompt usually
+            # names the tools the node is meant to use.
+            mentioned = [t["name"] for t in tools if t["name"] in n["prompt"]]
+            if mentioned:
+                n["tools"] = mentioned
+                n["tools_source"] = "prompt"
         for t in tools:
             if t["name"] in n.get("tools", []):
                 t["used_by"].append(n["id"])

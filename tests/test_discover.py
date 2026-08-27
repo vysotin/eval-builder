@@ -56,3 +56,15 @@ def test_cli_discover_writes_agent_map(tmp_path):
     assert data["decisions_needed"]
     assert data["tools"]
     assert "live" in data["graph"] and "error" not in data["graph"]["live"]
+
+
+def test_ast_names_llm_nodes_by_assignment_and_skips_shim():
+    m = discover_from_source(Path("examples/support_bot/agent.py"))
+    llm_ids = [n["id"] for n in m.graph["nodes"] if n["kind"] == "llm"]
+    assert llm_ids == ["support_agent", "kb_agent"]
+    graph_ids = [n["id"] for n in m.graph["nodes"] if n["kind"] == "graph-node"]
+    assert {"classify", "support_agent", "kb_agent", "decline"} <= set(graph_ids)
+    assert m.graph["conditional_edges"] and m.graph["conditional_edges"][0]["source"] == "classify"
+    support = next(n for n in m.graph["nodes"] if n["id"] == "support_agent")
+    assert "issue_refund ONLY" in support["prompt"]
+    assert "lookup_order" in support["tools"]
