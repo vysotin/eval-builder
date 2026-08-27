@@ -130,10 +130,13 @@ awaiting_review}`, attempts, elapsed seconds, error text, artifact paths.
 For each `(case, metric)` across repeats: scores `s_1..s_N`.
 
 - `pass_rate` per metric = mean over cases of mean over repeats.
-- **Unstable case** = outputs differ across repeats (different tool-call sequence or
-  final response); **unstable evaluator** = identical outputs but differing judge
-  scores. Both listed with counts; the second one is an evaluator problem, not an
-  agent problem.
+- **Unstable case** = the tool trajectory (names + args, error state) differs across
+  repeats — agent behavior. With the same trajectory, a flipping deterministic metric
+  is an **unstable output** (wording drift) and a flipping judge metric is an
+  **unstable evaluator** (judge variance, not an agent defect). Final-text differences
+  alone are only counted (`text_varies`); LLM agents reword freely. Judge rationales
+  that look like placeholders are retried once and, if they persist, listed as
+  `suspect_judge_comments`.
 - Threshold check per metric (`thresholds.metrics[m]` or `thresholds.default`),
   per slice (`slice_min` over intent / failure_mode / variant), overall score = mean
   of metric pass-rates vs `overall_pass`. Verdict `pass` only if all three hold and no
@@ -191,5 +194,5 @@ repo test-suite stays offline, and the pipeline injects `claude-cli:` models.
    fixtures are expressed as multiple `matchArgs` rules.
 4. The generator is the same model family as the judge by default; the config can
    split them.
-5. Repeats default to 3; stability is binary (any disagreement), no statistical test.
+5. Repeats default to 3; stability is binary (any trajectory/score disagreement), no statistical test.
 6. Out-of-intent cases use `intent: out-of-scope`, `failure_mode: out_of_scope`.

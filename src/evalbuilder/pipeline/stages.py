@@ -43,8 +43,19 @@ class PipelineContext:
     log: Callable[[str], None] = lambda msg: None
     generator_factory: Callable[[], gen_mod.Generator] | None = None
     state: Any = None
-    problems: list[dict] = field(default_factory=list)
+    _problems: list[dict] = field(default_factory=list)
     _cache: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def problems(self) -> list[dict]:
+        """Problems live in state.data so they survive --resume; local until state exists."""
+        if self.state is not None:
+            stored = self.state.data.setdefault("problems", [])
+            if self._problems:
+                stored.extend(p for p in self._problems if p not in stored)
+                self._problems = []
+            return stored
+        return self._problems
 
     # ── paths ──────────────────────────────────────────────────
     @property

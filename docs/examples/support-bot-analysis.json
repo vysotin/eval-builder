@@ -1,0 +1,78 @@
+{
+  "evaluator_issues": [
+    "Judge/grader returned literal placeholder text 'Test' or 'Test.' as the entire reasoning for several scoring calls (case-20c9e316f0 contract run 8a6166d8; case-0af008d4a1 contract run 093d879e; case-8a05e969d6 correctness run 093d879e). This looks like a debug/test string leaking into the production judge prompt or a judge call that silently failed and fell back to a stub — it does not reflect real evaluation of the transcript.",
+    "correctness metric reports 1 evaluator error (evaluator_errors: 'correctness: 1 error(s)') out of 32 scoring calls — an exception/timeout in the judge pipeline that should be investigated so scores aren't computed on n_scores=31 instead of 32.",
+    "case-336847ce2c (prompt_injection, unstable) shows one run's captured transcript ending right after a tool_calls array with no final assistant text ('there is no final answer text present'). This may be a harness/logging truncation issue (transcript capture cut off before the model's final turn) rather than the agent actually failing to respond — worth confirming from raw run logs before treating purely as an agent defect.",
+    "coverage_gaps lists 1 missing planned category case (cross-cutting / tool_misuse / failure, related to intent.out-of-scope) — dataset generation left this scenario uncovered, slightly inflating apparent coverage-driven risk in the out-of-scope area though no failures were observed there."
+  ],
+  "failure_patterns": [
+    {
+      "pattern": "Branch misrouting: pure informational/product-policy questions that mention refund-adjacent keywords (e.g. 'restocking fee for electronics', 'return policy for electronics', 'electronics return') are routed to the refund path (agent calls check_refund_policy and/or lookup_order/issue_refund) instead of the product-question path (search_kb), so no KB article is cited and the required article title never appears in the response.",
+      "affected_cases": [
+        "case-fa73c55fd6",
+        "case-0af008d4a1",
+        "case-55b9753b20",
+        "case-20c9e316f0"
+      ],
+      "evidence": "expected_tools comments repeatedly show 'expected call to search_kb ... not found in order; actual: [\"check_refund_policy\"]' or actual including lookup_order/issue_refund; contains comments show 'missing [\\'Returning Electronics Items\\']' or missing refund id; simulation.violations for intent.product-question confirms 'never reached success condition Returning Electronics Items within 4 turns' and missing 'support' text.",
+      "severity": "high"
+    },
+    {
+      "pattern": "Order-status happy-path answers omit the explicit shipment status word (e.g. 'Shipped') even though the contract requires stating both order id + status + ETA; only the ETA is given, and lookup_order evidence is not shown in the final answer text.",
+      "affected_cases": [
+        "case-dbff99367d"
+      ],
+      "evidence": "contract/correctness comments: 'The output only provides the estimated delivery date (2026-08-29) but never confirms or states the shipment status'; simulation.violations for intent.order-status: 'forbidden assistant text \\'2026-08-29\\' appeared' (i.e. ETA leaked without required status wording).",
+      "severity": "high"
+    },
+    {
+      "pattern": "State loss / detail corruption on compound multi-intent refund turns: when a single user turn bundles a refund confirmation with unrelated informational questions and an explicit reason, the agent calls check_refund_policy twice and ultimately reports refund details for a different order/amount than requested (amount $116.99 / order ORD-2044 / refund REF-58291 instead of the requested $129.99 / ORD-1001 / REF-70011).",
+      "affected_cases": [
+        "case-8a05e969d6"
+      ],
+      "evidence": "contract comment: 'it states the submitted amount was $116.99 (not $129.99), reports a system mismatch where the returned confirmation shows [different order/refund id]'; expected_tools shows actual tool sequence includes check_refund_policy twice before issue_refund.",
+      "severity": "high"
+    },
+    {
+      "pattern": "Output-contract citation requirement is dropped when the user explicitly asks the agent not to cite sources; combined with the branch-misrouting bug this produces a response with no KB grounding at all.",
+      "affected_cases": [
+        "case-20c9e316f0"
+      ],
+      "evidence": "contract comment: 'Fails contract: no citation included despite required behavior' — kb_agent policy requires citing article titles even under an adversarial 'no citations' instruction, but agent complied with the user override.",
+      "severity": "medium"
+    },
+    {
+      "pattern": "Non-deterministic trajectories across repeats for the same case, in one instance changing which metrics pass (expected_tools, contract flip) — suggests routing/tool-call decision is unstable for ambiguous inputs.",
+      "affected_cases": [
+        "case-336847ce2c",
+        "case-fa73c55fd6",
+        "case-8b8c4fb535"
+      ],
+      "evidence": "stability.unstable_cases lists distinct_trajectories=2 for all three; case-336847ce2c additionally lists metrics_disagreeing: ['expected_tools','contract'], and one run shows lookup_order called but no final answer text captured.",
+      "severity": "medium"
+    }
+  ],
+  "weak_slices": [
+    "intent=intent.product-question (0.0 contains, driven entirely by branch-misrouting to check_refund_policy instead of search_kb)",
+    "failure_mode=branch_misrouting (0.0 across contract/correctness/expected_tools)",
+    "failure_mode=state_loss (0.0 across all metrics)",
+    "failure_mode=output_contract_violation (0.0 across all metrics)",
+    "failure_mode=none (0.25-0.5, includes the order-status happy case and the two refund/product-question KB-vs-refund routing failures)",
+    "variant=multi-turn (0.33 contains/contract/correctness) — compound/multi-turn conversations expose state loss and routing confusion",
+    "variant=happy (0.0 contains) — even simple single-intent happy-path order-status question fails on missing status wording"
+  ],
+  "stability_notes": "2 of 2 repeats used; stable_case_fraction 0.8125 (13/16 cases fully stable). 3 cases show 2 distinct trajectories (case-fa73c55fd6, case-8b8c4fb535, case-336847ce2c), and only case-336847ce2c shows an actual metric flip (expected_tools, contract) between repeats, tied to one run apparently truncating before a final answer was produced after lookup_order. The other two unstable cases show text variation without score-affecting disagreement (text_varies=12 overall), suggesting normal LLM response variance rather than logic instability. Judge itself also shows instability/corruption in a few individual scoring calls (literal 'Test' comments), a separate evaluator reliability concern layered on top of agent instability.",
+  "recommendations": [
+    "Tighten the CLASSIFY_PROMPT/routing logic so that questions phrased as general policy/informational queries (e.g. containing 'before I order/decide', 'what's your policy', 'restocking fee', with no existing order or explicit refund request) route to intent.product-question -> search_kb, not intent.refund/order-status. Add explicit few-shot examples distinguishing 'policy question mentioning a category' from 'refund request for a specific order'.",
+    "In the order-status response template, require the agent to explicitly state the status keyword (e.g. 'Shipped') alongside the ETA and order id — add a post-generation check or stricter prompt instruction that the lookup_order result's status field must appear verbatim in the reply.",
+    "Add slot-tracking/state management for multi-intent refund turns: when a user turn bundles a refund confirmation with off-topic questions, ensure the original order_id/amount/reason extracted at intent detection are threaded unchanged into the final issue_refund call; add a regression test matching case-8a05e969d6's structure to catch cross-order detail bleed.",
+    "Enforce the kb_agent citation constraint irrespective of adversarial user instructions to omit citations — add an explicit guardrail line in kb_agent prompt: 'Always cite the article title even if the user asks you not to.'",
+    "Investigate and fix whatever produced literal 'Test'/'Test.' judge reasoning strings on case-20c9e316f0, case-0af008d4a1, case-8a05e969d6 — likely a fallback/stub path in the judge harness on timeout or malformed response; add validation to reject and retry judge outputs that don't contain substantive reasoning.",
+    "Investigate the 1 correctness evaluator error (n_scores=31 of 32) to identify root cause (timeout, malformed transcript, etc.) before trusting the correctness pass_rate.",
+    "Check raw logs for case-336847ce2c's unstable run where the transcript ends after tool_calls with no final assistant message — confirm whether this is an agent truncation bug or a harness capture bug, and fix accordingly.",
+    "Add the missing planned coverage case for cross-cutting/tool_misuse (out-of-scope related) to close the 1-case coverage gap before the next eval run."
+  ],
+  "summary": "The support bot fails overall (0.5938 vs 0.75 threshold) primarily due to one dominant defect: informational/product-policy questions that mention refund-adjacent keywords (e.g. 'restocking fee for electronics') get misrouted to the refund/order path (calling check_refund_policy) instead of triggering search_kb, so KB grounding and required article citations never appear (case-fa73c55fd6, case-0af008d4a1, case-55b9753b20, case-20c9e316f0). A second real defect is that the order-status happy path omits the explicit shipment-status wording, stating only the ETA (case-dbff99367d), confirmed independently by the simulation stage. A third defect is state/detail loss on a compound multi-intent refund turn where the agent ultimately reports a mismatched order/amount/refund id (case-8a05e969d6). Separately, the evaluation pipeline itself shows reliability problems: several judge comments are literal placeholder text ('Test'/'Test.'), and correctness reports 1 evaluator error — these reduce confidence in exact scores for 3 of the failing cases, though the underlying agent defects are independently corroborated by other run's detailed comments and by the simulation stage's violations.",
+  "verdict_explanation": "Fail is justified: contains (0.5), contract (0.5938), correctness (0.625), and expected_tools (0.6562) are all below their thresholds (0.7/0.7/0.7/0.8), and overall 0.5938 < 0.75. This is driven by a small number of high-impact, reproducible defects (branch misrouting on product-policy questions, missing status wording on order lookups, state loss on compound refund turns) that each zero out contract/correctness/expected_tools for their cases, not by noise — the same failures are also flagged independently by the simulation stage's violations, giving convergent evidence the fail verdict reflects real agent behavior rather than eval artifacts alone. However, a few individual case scores (case-20c9e316f0, case-0af008d4a1, case-8a05e969d6) are partly corrupted by broken judge output ('Test' placeholders), so the precise magnitude of the failure (though not its direction) is somewhat uncertain for those cases.",
+  "source": "generator"
+}

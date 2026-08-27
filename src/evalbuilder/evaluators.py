@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from functools import lru_cache
 
 from evalbuilder.config import provider_ready
@@ -25,6 +26,8 @@ Return score 1 only when the response satisfies the contract; otherwise 0. Expla
 <contract>{contract}</contract>
 <inputs>{inputs}</inputs>
 <outputs>{outputs}</outputs>"""
+
+SUSPECT_REASONING = re.compile(r"^\s*(test\b|placeholder|lorem)", re.I)
 
 DETERMINISTIC_TYPES = ("expected_tools", "contains", "json_valid", "trajectory_match")
 JUDGE_TYPES = ("correctness", "contract", "openevals", "trajectory_llm")
@@ -182,11 +185,14 @@ def _judge(kind: str, spec: dict, judge_model: str):
                     "nor a template with {outputs}"
                 )
         judge = _make_judge(prompt, model, key, **judge_kwargs)
-        result = judge(
+        kwargs = dict(
             inputs=json.dumps(case.inputs, ensure_ascii=False),
             outputs=case_run.outputs.get("response", ""),
             reference_outputs=json.dumps(case.reference_outputs, ensure_ascii=False),
         )
+        result = judge(**kwargs)
+        if SUSPECT_REASONING.match(str(result.get("comment") or "")):
+            result = judge(**kwargs)  # placeholder rationale: one retry, then report as is
         return {
             "key": key,
             "score": result["score"],

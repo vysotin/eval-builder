@@ -194,3 +194,11 @@ def test_parse_spec_and_model_from_spec():
 def test_model_from_spec_scripted_provider():
     llm = model_from_spec("scripted:examples.weather_bot.agent:default_scripted_model")
     assert type(llm).__name__ == "ScriptedChatModel"
+
+
+def test_tool_call_json_inside_content_is_unwrapped(monkeypatch):
+    inner = json.dumps({"tool_calls": [{"name": "lookup_order", "args": {"order_id": "A1"}}]})
+    fake = FakeRun([_ok(inner, structured={"content": inner, "tool_calls": []})])
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake)
+    out = ChatClaudeCLI().bind_tools([{"name": "lookup_order", "description": "", "input_schema": {}}]).invoke("go")
+    assert out.tool_calls and out.tool_calls[0]["name"] == "lookup_order" and out.content == ""

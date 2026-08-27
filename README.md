@@ -76,7 +76,8 @@ subprocess transport and `--json-schema` structured tool calling in
 `src/evalbuilder/claude_cli.py`); `anthropic:…`/`openai:…` use API keys;
 `scripted:module:factory` keeps tests offline. Config reference:
 `skills/agent-eval-pipeline/references/config-reference.md`; a ready-to-run example:
-`examples/support_bot/pipeline.yaml`.
+`examples/support_bot/pipeline.yaml`, and the report it produced with `claude-cli:sonnet`
+(16 cases × 2 repeats, ~45 min): `docs/examples/support-bot-report.json`.
 
 ## Dataset format
 

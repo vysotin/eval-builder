@@ -192,6 +192,10 @@ def test_generator_failure_is_reported_not_raised(tmp_path):
     assert report["stages"]["dataset"]["status"] == "skipped"
     assert report["stages"]["mocks"]["status"] == "ok"  # generator raised -> generic fixtures, reported as problem
     assert report["stages"]["report"]["status"] == "ok"
+    assert any(p["stage"] == "mocks" and "generic" in p["message"] for p in report["problems"])
+    # problems survive a resume that only rebuilds the report
+    _, report2 = run_pipeline(cfg_path, resume=True, invalidate_from="report", generator_factory=lambda: broken, settings=Settings())
+    assert any(p["stage"] == "mocks" and "generic" in p["message"] for p in report2["problems"])
 
 
 def test_cli_pipeline_init_and_bad_config(tmp_path):

@@ -303,6 +303,11 @@ class ChatClaudeCLI(ChatClaudeCode):
         parsed = data.get("structured_output")
         if not isinstance(parsed, dict):
             parsed = _loads_lenient(text) or {"content": text, "tool_calls": []}
+        if not parsed.get("tool_calls"):
+            # The model sometimes serializes its tool call inside `content`; unwrap it.
+            inner = _loads_lenient(str(parsed.get("content") or ""))
+            if isinstance(inner, dict) and inner.get("tool_calls"):
+                parsed = {"content": str(inner.get("content") or ""), "tool_calls": inner["tool_calls"]}
         tool_calls = [
             {
                 "name": tc["name"],

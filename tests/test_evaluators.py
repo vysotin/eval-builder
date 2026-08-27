@@ -267,3 +267,21 @@ def test_expected_tools_forbidden():
     bad = fns["expected_tools"](case, _run([{"name": "issue_refund", "args": {}}]))
     assert bad["score"] is False and "forbidden" in bad["comment"]
     assert fns["expected_tools"](case, _run([]))["score"] is True
+
+
+def test_judge_retries_once_on_placeholder_reasoning(monkeypatch):
+    answers = [{"key": "correctness", "score": False, "comment": "Test. Thus, the score should be: false."},
+               {"key": "correctness", "score": True, "comment": "Real reasoning."}]
+    calls = {"n": 0}
+
+    def fake_make(prompt, model, key, **kw):
+        def judge(**_):
+            calls["n"] += 1
+            return answers.pop(0)
+        return judge
+
+    monkeypatch.setattr(ev, "_make_judge", fake_make)
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    fns = dict(ev.build_evaluators([{"type": "correctness"}], "openai:x"))
+    out = fns["correctness"](_case(), _run([]))
+    assert calls["n"] == 2 and out["score"] is True and out["comment"] == "Real reasoning."
