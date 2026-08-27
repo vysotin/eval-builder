@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Callable
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import RunnableLambda
 
 ScriptRule = tuple[str, Callable[[re.Match, list[BaseMessage]], AIMessage]]
 
@@ -46,10 +48,24 @@ def _match_text(messages: list[BaseMessage]) -> str:
     return ""
 
 
+def _user_transcript(messages: list[BaseMessage]) -> str:
+    return "\n".join(
+        m.content if isinstance(m.content, str) else str(m.content)
+        for m in messages
+        if isinstance(m, HumanMessage)
+    )
+
+
 class ScriptedChatModel(BaseChatModel):
-    """Regex-scripted chat model: first matching rule produces the AIMessage."""
+    """Regex-scripted chat model: first matching rule produces the AIMessage.
+
+    `structured_script` serves `with_structured_output`: rules are matched against
+    the full user transcript and their factories return a dict (or an AIMessage whose
+    content is JSON).
+    """
 
     script: list[Any]
+    structured_script: list[Any] = []
 
     @property
     def _llm_type(self) -> str:
@@ -57,6 +73,32 @@ class ScriptedChatModel(BaseChatModel):
 
     def bind_tools(self, tools, **kwargs):
         return self
+
+    def with_structured_output(self, schema, **kwargs):
+        rules = self.structured_script or self.script
+
+        def _call(inputs):
+            from langchain_core.messages import convert_to_messages
+
+            if isinstance(inputs, str):
+                messages = [HumanMessage(content=inputs)]
+            elif hasattr(inputs, "to_messages"):
+                messages = list(inputs.to_messages())
+            else:
+                messages = convert_to_messages(list(inputs))
+            text = _user_transcript(messages) if self.structured_script else _match_text(messages)
+            for pattern, factory in rules:
+                m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                if m:
+                    value = factory(m, messages)
+                    if isinstance(value, AIMessage):
+                        value = json.loads(value.content)
+                    if hasattr(schema, "model_validate"):
+                        return schema.model_validate(value)
+                    return value
+            raise ScriptMissError(text, [p for p, _ in rules])
+
+        return RunnableLambda(_call)
 
     def _generate(
         self,
