@@ -38,6 +38,7 @@ when they want a verdict.
    ```bash
    evalbuilder pipeline run eval/pipeline.yaml
    evalbuilder pipeline run eval/pipeline.yaml --resume     # reuse completed stages after a fix
+   evalbuilder pipeline run eval/pipeline.yaml --resume --from dataset   # regenerate from a stage on
    evalbuilder pipeline report eval/pipeline/NAME           # human summary of report.json
    ```
 

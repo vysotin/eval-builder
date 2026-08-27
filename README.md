@@ -68,7 +68,7 @@ still passes the same CLI validation. Failures never raise: a failed stage marks
 dependents `skipped`, retries once with a recovery note, and `report.json` always
 lands with `verdict ∈ pass|fail|incomplete`, per-stage status, metrics vs thresholds,
 slices, coverage achieved vs planned, stability across repeats (unstable *cases* vs
-unstable *evaluators*), and a `problems[]` list. `--resume` reuses completed stages.
+unstable *evaluators*), and a `problems[]` list. `--resume` reuses completed stages; `--resume --from STAGE` regenerates from a stage on.
 
 Model specs: `claude-cli:sonnet` uses the Claude Code CLI with your subscription (the
 `langchain-claude-code-cli` package's `ChatClaudeCode` parameter surface, with a
