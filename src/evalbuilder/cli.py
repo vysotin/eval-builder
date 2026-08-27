@@ -254,20 +254,10 @@ def mock_set(
 @mock_app.command("verify")
 def mock_verify(path: Path) -> None:
     """Check every expected tool call in mocked cases matches at least one rule."""
-    from evalbuilder.mocking import match_rule, merge_mock_rules
+    from evalbuilder.mocking import verify_dataset
 
     ds = _load_ds(path)
-    misses: list[dict] = []
-    for c in ds.cases:
-        merged = merge_mock_rules(
-            ds.mocks.get("tools", {}), c.metadata.get("mocks", {}).get("tools", {})
-        )
-        if not merged:
-            continue
-        for expected in c.reference_outputs.get("expected_tools", []):
-            name = expected.get("name")
-            if name in merged and match_rule(merged[name], expected.get("args", {})) is None:
-                misses.append({"case": c.id, "tool": name, "args": expected.get("args", {})})
+    misses = verify_dataset(ds)
     _emit({"ok": not misses, "misses": misses})
     if misses:
         raise typer.Exit(1)
@@ -449,3 +439,70 @@ def check(
 ) -> None:
     """Print the capability matrix as JSON."""
     _emit(capability_check(Settings.load(env_file), target_module))
+
+
+pipeline_app = typer.Typer(help="Autonomous end-to-end evaluation pipeline.", no_args_is_help=True)
+app.add_typer(pipeline_app, name="pipeline")
+
+
+@pipeline_app.command("init")
+def pipeline_init(
+    path: Path,
+    name: str = typer.Option(..., "--name"),
+    source: Path = typer.Option(..., "--source", help="agent source file"),
+    module: str = typer.Option(..., "--module", help="importable module exposing TOOLS + build_agent"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Write a commented starter pipeline config."""
+    from evalbuilder.pipeline.config import template
+
+    if path.exists() and not force:
+        typer.echo(f"{path} exists (use --force to overwrite)", err=True)
+        raise typer.Exit(1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(template(name, str(source), module))
+    _emit({"path": str(path), "name": name})
+
+
+@pipeline_app.command("run")
+def pipeline_run(
+    config: Path,
+    resume: bool = typer.Option(False, "--resume", help="reuse completed stages from state.json"),
+    quiet: bool = typer.Option(False, "--quiet"),
+    env_file: Optional[Path] = typer.Option(None, "--env-file"),
+) -> None:
+    """Run every stage from config to report.json; exit 1 unless the verdict is pass."""
+    from evalbuilder.pipeline.config import load_config
+    from evalbuilder.pipeline.report import run_pipeline, summary_text
+
+    try:
+        cfg = load_config(config)
+    except (ValueError, FileNotFoundError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(2)
+    log = (lambda msg: None) if quiet else (lambda msg: typer.echo(msg, err=True))
+    _, report = run_pipeline(config, resume=resume, log=log, settings=Settings.load(env_file), config=cfg)
+    typer.echo(summary_text(report), err=True)
+    _emit(
+        {
+            "verdict": report["verdict"],
+            "overall_score": report["overall_score"],
+            "report": str(cfg.output_dir / "report.json"),
+            "stages": {k: v["status"] for k, v in report["stages"].items()},
+            "problems": len(report["problems"]),
+        }
+    )
+    if report["verdict"] != "pass":
+        raise typer.Exit(1)
+
+
+@pipeline_app.command("report")
+def pipeline_report(path: Path) -> None:
+    """Print a human summary of a report.json (or the output directory holding one)."""
+    from evalbuilder.pipeline.report import summary_text
+
+    report_path = path / "report.json" if path.is_dir() else path
+    if not report_path.exists():
+        typer.echo(f"no report at {report_path}", err=True)
+        raise typer.Exit(1)
+    typer.echo(summary_text(json.loads(report_path.read_text())))

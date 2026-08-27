@@ -97,7 +97,7 @@ class PipelineRunner:
             rec = state.record(stage.name)
             rec.optional = stage.optional
 
-            if self.resume and rec.status in OK_STATUSES:
+            if self.resume and rec.status in OK_STATUSES and not stage.always:
                 self.log(f"{stage.name}: cached ({rec.status})")
                 continue
 
@@ -137,6 +137,7 @@ class PipelineRunner:
         retries = self.max_retries if stage.retries is None else stage.retries
         rec.attempts = 0
         rec.error = None
+        rec.reason = None
         started = time.time()
         while True:
             rec.attempts += 1

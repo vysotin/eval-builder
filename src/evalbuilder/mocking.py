@@ -79,3 +79,19 @@ def wrap_tools(
         else t
         for t in tools
     ]
+
+
+def verify_dataset(ds) -> list[dict]:
+    """Expected tool calls in mocked cases that no rule answers: [{case, tool, args}]."""
+    misses: list[dict] = []
+    for c in ds.cases:
+        merged = merge_mock_rules(
+            ds.mocks.get("tools", {}), c.metadata.get("mocks", {}).get("tools", {})
+        )
+        if not merged:
+            continue
+        for expected in c.reference_outputs.get("expected_tools", []):
+            name = expected.get("name")
+            if name in merged and match_rule(merged[name], expected.get("args", {})) is None:
+                misses.append({"case": c.id, "tool": name, "args": expected.get("args", {})})
+    return misses
