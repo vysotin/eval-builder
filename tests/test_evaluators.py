@@ -149,10 +149,12 @@ def test_score_run_separates_evaluator_errors():
         run_id="r1", dataset_path="p", dataset_name="d", mocked=False,
         case_runs=[CaseRun(case_id=a.id, outputs={"response": "hi"})],
     )
-    report = ev.score_run(run, ds, [{"type": "contains"}], "m")
-    assert report.cases[0]["errors"]["contains"]
-    assert report.metrics["contains"]["errors"] == 1
+    report = ev.score_run(run, ds, [{"type": "contains"}, {"type": "correctness"}], "openai:x")
+    # no reference -> skipped (not applicable); no judge key -> evaluator error
+    assert report.cases[0]["skipped"]["contains"] and "contains" not in report.cases[0]["errors"]
+    assert report.metrics["contains"]["skipped"] == 1 and report.metrics["contains"]["errors"] == 0
     assert report.metrics["contains"]["n"] == 0
+    assert report.cases[0]["errors"]["correctness"] and report.metrics["correctness"]["errors"] == 1
 
 
 def test_cli_score(tmp_path):

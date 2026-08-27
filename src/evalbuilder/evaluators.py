@@ -31,7 +31,11 @@ JUDGE_TYPES = ("correctness", "contract", "openevals", "trajectory_llm")
 
 
 class EvaluatorUnavailable(Exception):
-    pass
+    """The evaluator could not run (missing key, judge failure) — an evaluator error."""
+
+
+class EvaluatorNotApplicable(EvaluatorUnavailable):
+    """The case carries no reference for this evaluator — skipped, not an error."""
 
 
 @lru_cache(maxsize=8)
@@ -112,7 +116,7 @@ def _contains(spec: dict):
     def fn(case: Case, case_run: CaseRun) -> dict:
         needle = spec.get("value") or case.reference_outputs.get("contains")
         if not needle:
-            raise EvaluatorUnavailable("no reference substring for contains")
+            raise EvaluatorNotApplicable("no reference substring for contains")
         response = case_run.outputs.get("response", "")
         needles = needle if isinstance(needle, list) else [needle]
         missing = [n for n in needles if n.lower() not in response.lower()]
@@ -144,7 +148,7 @@ def _trajectory_match(spec: dict):
     def fn(case: Case, case_run: CaseRun) -> dict:
         reference = case.reference_outputs.get("trajectory")
         if not reference:
-            raise EvaluatorUnavailable("case has no reference trajectory")
+            raise EvaluatorNotApplicable("case has no reference trajectory")
         result = inner(outputs=case_run.trajectory, reference_outputs=reference)
         return {
             "key": "trajectory_match",
@@ -167,7 +171,7 @@ def _judge(kind: str, spec: dict, judge_model: str):
         if kind == "contract":
             contract = case.reference_outputs.get("contract")
             if not contract:
-                raise EvaluatorUnavailable("case has no reference contract")
+                raise EvaluatorNotApplicable("case has no reference contract")
             prompt = spec.get("prompt") or CONTRACT_PROMPT.replace("{contract}", contract)
         else:
             raw = spec.get("prompt") or kind
@@ -265,6 +269,7 @@ def score_run(
     report = Report(run_id=run.run_id, dataset_name=ds.name)
     per_metric: dict[str, list[float]] = {}
     metric_errors: dict[str, int] = {}
+    metric_skipped: dict[str, int] = {}
     slice_scores: dict[str, dict[str, dict[str, list[float]]]] = {
         dim: {} for dim in SLICE_DIMS
     }
@@ -273,7 +278,7 @@ def score_run(
         case = cases_by_id.get(case_run.case_id)
         if case is None:
             continue
-        row = {"case_id": case_run.case_id, "scores": {}, "errors": {}}
+        row = {"case_id": case_run.case_id, "scores": {}, "errors": {}, "skipped": {}}
         for key, fn in evaluators:
             if case_run.error:
                 row["scores"][key] = {
@@ -287,6 +292,10 @@ def score_run(
                         "score": float(result["score"]),
                         "comment": result.get("comment", ""),
                     }
+                except EvaluatorNotApplicable as e:
+                    row["skipped"][key] = str(e)
+                    metric_skipped[key] = metric_skipped.get(key, 0) + 1
+                    continue
                 except EvaluatorUnavailable as e:
                     row["errors"][key] = str(e)
                     metric_errors[key] = metric_errors.get(key, 0) + 1
@@ -311,10 +320,13 @@ def score_run(
             "min": min(scores),
             "max": max(scores),
             "errors": metric_errors.get(key, 0),
+            "skipped": metric_skipped.get(key, 0),
         }
-    for key, count in metric_errors.items():
+    for key in set(metric_errors) | set(metric_skipped):
         report.metrics.setdefault(
-            key, {"n": 0, "avg": None, "min": None, "max": None, "errors": count}
+            key,
+            {"n": 0, "avg": None, "min": None, "max": None,
+             "errors": metric_errors.get(key, 0), "skipped": metric_skipped.get(key, 0)},
         )
     for dim, values in slice_scores.items():
         report.slices[dim] = {
