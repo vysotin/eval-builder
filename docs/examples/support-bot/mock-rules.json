@@ -1,0 +1,211 @@
+{
+  "schema": "evalbuilder/mock-rules/v1",
+  "tools": {
+    "lookup_order": [
+      {
+        "matchArgs": {
+          "order_id": "ORD-1001"
+        },
+        "response": {
+          "order_id": "ORD-1001",
+          "status": "Delivered",
+          "category": "Electronics",
+          "total": 129.99,
+          "currency": "USD",
+          "order_date": "2026-08-05",
+          "delivered_date": "2026-08-09",
+          "shipping_eta": "2026-08-09",
+          "customer_email": "customer@example.com"
+        }
+      },
+      {
+        "matchArgs": {
+          "order_id": "ORD-1002"
+        },
+        "response": {
+          "order_id": "ORD-1002",
+          "status": "Shipped",
+          "category": "Apparel",
+          "total": 49.5,
+          "currency": "USD",
+          "order_date": "2026-08-20",
+          "delivered_date": null,
+          "shipping_eta": "2026-08-29",
+          "customer_email": "customer@example.com"
+        }
+      },
+      {
+        "matchArgs": {
+          "order_id": "ORD-1003"
+        },
+        "response": {
+          "order_id": "ORD-1003",
+          "status": "Delivered",
+          "category": "Electronics",
+          "total": 899.0,
+          "currency": "USD",
+          "order_date": "2026-07-28",
+          "delivered_date": "2026-08-01",
+          "shipping_eta": "2026-08-01",
+          "customer_email": "customer@example.com"
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "order_id": "ORD-2044",
+          "status": "Shipped",
+          "category": "Home Goods",
+          "total": 74.25,
+          "currency": "USD",
+          "order_date": "2026-08-10",
+          "shipping_eta": "2026-08-30",
+          "customer_email": "customer@example.com"
+        }
+      }
+    ],
+    "check_refund_policy": [
+      {
+        "matchArgs": {
+          "category": "Electronics"
+        },
+        "response": {
+          "category": "Electronics",
+          "window_days": 30,
+          "restocking_fee_percent": 10
+        }
+      },
+      {
+        "matchArgs": {
+          "category": "Apparel"
+        },
+        "response": {
+          "category": "Apparel",
+          "window_days": 45,
+          "restocking_fee_percent": 0
+        }
+      },
+      {
+        "matchArgs": {
+          "category": "Furniture"
+        },
+        "response": {
+          "category": "Furniture",
+          "window_days": 14,
+          "restocking_fee_percent": 15
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "category": "General",
+          "window_days": 30,
+          "restocking_fee_percent": 10
+        }
+      }
+    ],
+    "issue_refund": [
+      {
+        "matchArgs": {
+          "order_id": "ORD-1001",
+          "amount": 129.99,
+          "reason": "defective item"
+        },
+        "response": {
+          "refund_id": "REF-70011",
+          "order_id": "ORD-1001",
+          "amount": 129.99,
+          "reason": "defective item",
+          "status": "issued",
+          "issued_date": "2026-08-27"
+        }
+      },
+      {
+        "matchArgs": {
+          "order_id": "ORD-1003",
+          "amount": 809.1,
+          "reason": "buyer's remorse"
+        },
+        "response": {
+          "refund_id": "REF-70012",
+          "order_id": "ORD-1003",
+          "amount": 809.1,
+          "reason": "buyer's remorse",
+          "status": "issued",
+          "issued_date": "2026-08-27"
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "refund_id": "REF-58291",
+          "order_id": "ORD-2044",
+          "amount": 74.25,
+          "reason": "Customer requested refund",
+          "status": "issued",
+          "issued_date": "2026-08-27"
+        }
+      }
+    ],
+    "search_kb": [
+      {
+        "matchArgs": {
+          "query": "refund policy"
+        },
+        "response": {
+          "query": "refund policy",
+          "results": [
+            {
+              "title": "Understanding Our Refund Policy",
+              "snippet": "Refund eligibility depends on product category. Electronics have a 30-day window with a 10% restocking fee, Apparel has a 45-day window with no fee, and Furniture has a 14-day window with a 15% fee."
+            },
+            {
+              "title": "How Restocking Fees Are Calculated",
+              "snippet": "Restocking fees are deducted from the order total at the time a refund is issued and vary by product category."
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {
+          "query": "electronics return"
+        },
+        "response": {
+          "query": "electronics return",
+          "results": [
+            {
+              "title": "Returning Electronics Items",
+              "snippet": "Electronics can be returned within 30 days of delivery. A 10% restocking fee applies unless the item is defective or damaged on arrival."
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {
+          "query": "shipping delay"
+        },
+        "response": {
+          "query": "shipping delay",
+          "results": [
+            {
+              "title": "What to Do About a Shipping Delay",
+              "snippet": "If your order's shipping ETA has passed, wait 2 business days for carrier updates before contacting support for a replacement or refund."
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "query": "order tracking",
+          "results": [
+            {
+              "title": "How to Track Your Order",
+              "snippet": "Log in to your account and visit Order History to view real-time tracking updates for any shipment."
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

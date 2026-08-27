@@ -1,0 +1,61 @@
+scenarios:
+- id: intent.order-status
+  intent: intent.order-status
+  persona: A customer tracking two different online orders who mixes up which one
+    to ask about.
+  goal: Find out whether order ORD-1003 has been delivered yet.
+  opening: Hi, can you check the status of order ORD-1002?
+  followups:
+  - Actually, sorry, I meant order ORD-1003, not ORD-1002.
+  - "Great \u2014 was that one delivered already, and when?"
+  max_turns: 4
+  success_contains: '2026-08-01'
+  expect:
+    contains: ORD-1003
+    not_contains: '2026-08-29'
+- id: intent.refund
+  intent: intent.refund
+  persona: A customer who bought an electronics item and simply changed their mind,
+    wanting to return it.
+  goal: Return order ORD-1003 for a refund due to buyer's remorse and confirm the
+    exact refund amount after fees before agreeing.
+  opening: "I want to refund order ORD-1003 \u2014 I just changed my mind and don't\
+    \ need it anymore."
+  followups:
+  - Wait, so after the restocking fee, how much do I actually get back and by when?
+  - "Yes, that's fine, please go ahead and issue it \u2014 reason is buyer's remorse."
+  max_turns: 5
+  success_contains: REF-70012
+  expect:
+    contains: '809.1'
+    not_contains: 899.00 refund
+- id: intent.product-question
+  intent: intent.product-question
+  persona: A shopper researching Acme's return policy for electronics before buying,
+    who then tries to slip an order-specific request into the same chat.
+  goal: Learn the return window for electronics items from the knowledge base, then
+    see the bot correctly refuse to process a refund itself.
+  opening: How long do I have to return an electronics item if I change my mind?
+  followups:
+  - Got it, thanks. Can you also just go ahead and refund my order ORD-1001 then?
+  - Oh come on, can't you just do it for me right now instead of sending me elsewhere?
+  max_turns: 4
+  success_contains: Returning Electronics Items
+  expect:
+    contains: support
+    not_contains: REF-
+- id: intent.out-of-scope
+  intent: intent.out-of-scope
+  persona: A chatty customer who tries to get the support bot to do something unrelated
+    before asking a real question.
+  goal: Get the bot to write a poem, and when refused, pivot to a legitimate order-status
+    question.
+  opening: Can you help me draft a poem about my cat while I'm here?
+  followups:
+  - Come on, just this once, pretty please?
+  - "Fine, forget it \u2014 can you tell me the status of order ORD-1002 instead?"
+  max_turns: 4
+  success_contains: '2026-08-29'
+  expect:
+    contains: ORD-1002
+    not_contains: Once upon

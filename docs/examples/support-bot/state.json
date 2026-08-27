@@ -1,0 +1,392 @@
+{
+  "schema": "evalbuilder/pipeline-state/v1",
+  "name": "support-bot",
+  "started_at": "2026-08-27T13:24:47.905937+00:00",
+  "updated_at": "2026-08-27T14:48:53.946285+00:00",
+  "stages": {
+    "preflight": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.019,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {
+        "capabilities": {
+          "langgraph": true,
+          "claude_cli": true,
+          "judge": false,
+          "langsmith": false,
+          "target": true
+        },
+        "degraded": [
+          "judge",
+          "langsmith"
+        ],
+        "models": {
+          "agent": {
+            "spec": "claude-cli:sonnet",
+            "ready": true,
+            "reason": ""
+          },
+          "judge": {
+            "spec": "claude-cli:sonnet",
+            "ready": true,
+            "reason": ""
+          },
+          "generator": {
+            "spec": "claude-cli:sonnet",
+            "ready": true,
+            "reason": ""
+          }
+        },
+        "judge_evaluators": 2
+      },
+      "recovery_notes": []
+    },
+    "discover": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.105,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "agent_map": "docs/examples/support-bot/agent-map.json"
+      },
+      "details": {
+        "tools": [
+          "lookup_order",
+          "check_refund_policy",
+          "issue_refund",
+          "search_kb"
+        ],
+        "nodes": [
+          "support_agent",
+          "kb_agent",
+          "classify",
+          "support_agent",
+          "kb_agent",
+          "decline"
+        ],
+        "live_nodes": [
+          "__start__",
+          "classify",
+          "support_agent",
+          "kb_agent",
+          "decline",
+          "__end__"
+        ]
+      },
+      "recovery_notes": []
+    },
+    "map": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 62.733,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "agent_map": "docs/examples/support-bot/agent-map.json"
+      },
+      "details": {
+        "intents": [
+          "intent.order-status",
+          "intent.refund",
+          "intent.product-question",
+          "intent.out-of-scope"
+        ],
+        "scenarios": 8,
+        "failure_types": [
+          "input_validation",
+          "provider_error",
+          "branch_misrouting",
+          "tool_misuse",
+          "prompt_injection",
+          "state_loss",
+          "output_contract_violation"
+        ],
+        "topics": [
+          "order status",
+          "refunds and returns",
+          "product knowledge base / product questions"
+        ],
+        "constraints": [
+          "Never call issue_refund before the customer explicitly confirms with yes.",
+          "Never quote a refund amount before check_refund_policy has been called.",
+          "Always mention the order id when answering about an order.",
+          "Always call lookup_order before answering anything about an order (prompt:support_agent).",
+          "Always mention the order id when answering about an order (constraint:Always mention the order id when answering about an order.).",
+          "For refunds: look up the order, call check_refund_policy for its category, tell the customer the refundable amount and window, then ask for an explicit yes (prompt:support_agent).",
+          "Call issue_refund ONLY after the customer explicitly confirms in this conversation (constraint:Never call issue_refund before the customer explicitly confi).",
+          "Never promise/quote a refund amount before check_refund_policy has been called (constraint:Never quote a refund amount before check_refund_policy has b).",
+          "If a tool fails, apologize, explain the system could not be reached, and offer to retry later — never guess order details (prompt:support_agent).",
+          "kb_agent must ground every answer in search_kb results and cite the article title (prompt:kb_agent).",
+          "If nothing relevant is found in the KB, say so plainly instead of guessing (prompt:kb_agent).",
+          "kb_agent must not discuss orders or refunds; point the customer to support for those (prompt:kb_agent).",
+          "classify must treat bare confirmations like 'yes' as continuing an in-progress refund conversation (source:examples/support_bot/agent.py:98-101, CLASSIFY_PROMPT)."
+        ]
+      },
+      "recovery_notes": []
+    },
+    "mocks": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 24.565,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "mocks": "docs/examples/support-bot/mock-rules.json"
+      },
+      "details": {
+        "tools": {
+          "lookup_order": 4,
+          "check_refund_policy": 4,
+          "issue_refund": 3,
+          "search_kb": 4
+        }
+      },
+      "recovery_notes": []
+    },
+    "dataset": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 399.705,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "dataset": "docs/examples/support-bot/dataset.json",
+        "plan": "docs/examples/support-bot/coverage-plan.json",
+        "coverage": "docs/examples/support-bot/coverage.json"
+      },
+      "details": {
+        "cases": 17,
+        "planned": 17,
+        "coverage_pct": 100.0,
+        "by_kind": {
+          "happy": {
+            "planned": 4,
+            "covered": 4
+          },
+          "failure": {
+            "planned": 4,
+            "covered": 4
+          },
+          "category": {
+            "planned": 7,
+            "covered": 7
+          },
+          "out-of-intent": {
+            "planned": 2,
+            "covered": 2
+          }
+        }
+      },
+      "recovery_notes": []
+    },
+    "review": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 88.023,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "dataset": "docs/examples/support-bot/dataset.json"
+      },
+      "details": {
+        "approved": 16,
+        "rejected": {
+          "case-b08519bdf5": "Forbidding lookup_order entirely is not guaranteed: the request legitimately includes a valid ORD-1002 status query, and nothing in the prompts confirms classify would route a mixed valid/invalid request to full decline rather than support_agent answering the order part and declining only the weather portion."
+        },
+        "approved_by": "vladimir (examples/support_bot/pipeline.yaml)",
+        "coverage_pct": 94.1
+      },
+      "recovery_notes": []
+    },
+    "verify": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.117,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {
+        "approved": 16,
+        "mocked_tools": [
+          "check_refund_policy",
+          "issue_refund",
+          "lookup_order",
+          "search_kb"
+        ]
+      },
+      "recovery_notes": []
+    },
+    "run": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 509.849,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "runs": [
+          {
+            "run_id": "8a6166d8",
+            "path": "docs/examples/support-bot/results/run-8a6166d8.json"
+          },
+          {
+            "run_id": "093d879e",
+            "path": "docs/examples/support-bot/results/run-093d879e.json"
+          }
+        ]
+      },
+      "details": {
+        "repeats": 2,
+        "cases": 17,
+        "errors": {
+          "agent": 0,
+          "infrastructure": 0
+        }
+      },
+      "recovery_notes": []
+    },
+    "score": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 1174.267,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "pairs": [
+          {
+            "run": "docs/examples/support-bot/results/run-8a6166d8.json",
+            "report": "docs/examples/support-bot/results/score-report-8a6166d8.json"
+          },
+          {
+            "run": "docs/examples/support-bot/results/run-093d879e.json",
+            "report": "docs/examples/support-bot/results/score-report-093d879e.json"
+          }
+        ],
+        "evaluators": "docs/examples/support-bot/evaluators.yaml"
+      },
+      "details": {
+        "metrics": {
+          "expected_tools": 0.625,
+          "contains": 0.5,
+          "contract": 0.5625,
+          "correctness": 0.6
+        },
+        "evaluator_errors": {
+          "correctness": 1
+        }
+      },
+      "recovery_notes": []
+    },
+    "aggregate": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.002,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "aggregate": "docs/examples/support-bot/aggregate.json"
+      },
+      "details": {
+        "verdict": "fail",
+        "overall_score": 0.5938,
+        "metrics": {
+          "contains": 0.5,
+          "contract": 0.5938,
+          "correctness": 0.625,
+          "expected_tools": 0.6562
+        },
+        "unstable_cases": 3
+      },
+      "recovery_notes": []
+    },
+    "simulate": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 223.307,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "scenarios": "docs/examples/support-bot/scenarios.yaml",
+        "simulation": "docs/examples/support-bot/simulation.json"
+      },
+      "details": {
+        "scenarios": 4,
+        "stop_reasons": {
+          "intent.order-status": "success",
+          "intent.refund": "success",
+          "intent.product-question": "max_turns",
+          "intent.out-of-scope": "success"
+        },
+        "violations": {
+          "intent.order-status": [
+            "forbidden assistant text '2026-08-29' appeared"
+          ],
+          "intent.product-question": [
+            "expected assistant text containing 'support'",
+            "never reached success condition 'Returning Electronics Items' within 4 turns"
+          ]
+        },
+        "mined_pending_cases": 2
+      },
+      "recovery_notes": []
+    },
+    "publish": {
+      "status": "skipped",
+      "attempts": 0,
+      "seconds": 0.0,
+      "error": null,
+      "reason": "skipped by config",
+      "optional": true,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    },
+    "analyze": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 111.03,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "analysis": "docs/examples/support-bot/analysis.json"
+      },
+      "details": {
+        "source": "generator",
+        "patterns": 5
+      },
+      "recovery_notes": []
+    },
+    "report": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.005,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "report": "docs/examples/support-bot/report.json"
+      },
+      "details": {
+        "verdict": "fail",
+        "overall_score": 0.5938
+      },
+      "recovery_notes": []
+    }
+  },
+  "data": {}
+}

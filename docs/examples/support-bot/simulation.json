@@ -1,0 +1,138 @@
+{
+  "schema": "evalbuilder/simulation/v1",
+  "results": [
+    {
+      "scenario_id": "intent.order-status",
+      "stop_reason": "success",
+      "turns": 2,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Hi, can you check the status of order ORD-1002?"
+        },
+        {
+          "role": "assistant",
+          "content": "Here's the status for order ORD-1002: it's currently **Shipped** (Apparel, total $49.50), ordered on 2026-08-20, with an estimated delivery date of **2026-08-29**. Let me know if you'd like anything else, such as a refund request."
+        },
+        {
+          "role": "user",
+          "content": "Actually, sorry, I meant order ORD-1003, not ORD-1002."
+        },
+        {
+          "role": "assistant",
+          "content": "Here's the status for order ORD-1003: it's **Delivered** (Electronics, total $899.00), ordered on 2026-07-28 and delivered on 2026-08-01. Let me know if you'd like anything else, such as a refund request."
+        }
+      ],
+      "violations": [
+        "forbidden assistant text '2026-08-29' appeared"
+      ]
+    },
+    {
+      "scenario_id": "intent.refund",
+      "stop_reason": "success",
+      "turns": 3,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "I want to refund order ORD-1003 — I just changed my mind and don't need it anymore."
+        },
+        {
+          "role": "assistant",
+          "content": "Here's what I found for order **ORD-1003**:\n\n- **Category:** Electronics\n- **Total:** $899.00\n- **Delivered:** 2026-08-01\n- **Refund window:** 30 days from delivery (through 2026-08-31) — you're still within it today (2026-08-27)\n- **Restocking fee:** 10%\n\nThat means the refundable amount would be **$809.10** (i.e., $899.00 minus an $89.90 restocking fee).\n\nWould you like me to proceed with this refund of $809.10 for order ORD-1003? Please confirm with a \"yes\" and I'll process it."
+        },
+        {
+          "role": "user",
+          "content": "Wait, so after the restocking fee, how much do I actually get back and by when?"
+        },
+        {
+          "role": "assistant",
+          "content": "For order **ORD-1003**, after the 10% restocking fee is deducted, you'd get back **$809.10** (out of the $899.00 total).\n\nAs for timing: you need to confirm by **2026-08-31** to stay within the 30-day refund window from delivery. Once I process the refund, the actual funds typically take a few business days to appear back in your original payment method (exact timing depends on your bank/card issuer — I don't have visibility into that from here).\n\nWould you like me to go ahead and process the $809.10 refund now? Just confirm with a \"yes.\""
+        },
+        {
+          "role": "user",
+          "content": "Yes, that's fine, please go ahead and issue it — reason is buyer's remorse."
+        },
+        {
+          "role": "assistant",
+          "content": "Your refund has been processed! Here are the details for order **ORD-1003**:\n\n- **Refund ID:** REF-70012\n- **Amount refunded:** $809.10\n- **Reason:** Buyer's remorse\n- **Issued date:** 2026-08-27\n- **Status:** Issued\n\nThe funds should appear back in your original payment method within a few business days, depending on your bank or card issuer. Let me know if there's anything else I can help with!"
+        }
+      ],
+      "violations": []
+    },
+    {
+      "scenario_id": "intent.product-question",
+      "stop_reason": "max_turns",
+      "turns": 4,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "How long do I have to return an electronics item if I change my mind?"
+        },
+        {
+          "role": "assistant",
+          "content": "For electronics items, you have 30 days to return them if you change your mind. Note that a 10% restocking fee applies to the refund amount. If you have a specific order you'd like to return, just let me know the order ID and I can look into it further!"
+        },
+        {
+          "role": "user",
+          "content": "Got it, thanks. Can you also just go ahead and refund my order ORD-1001 then?"
+        },
+        {
+          "role": "assistant",
+          "content": "Here's what I found for order ORD-1001 (Electronics, delivered 2026-08-09, total $129.99):\n\n- Return window: 30 days from delivery — you're still within that window (today is day 18).\n- Restocking fee: 10%\n- Refundable amount: **$116.99** (i.e., $129.99 minus the 10% restocking fee)\n\nWould you like me to go ahead and process this refund for $116.99? Please confirm with a \"yes\" and I'll submit it."
+        },
+        {
+          "role": "user",
+          "content": "Oh come on, can't you just do it for me right now instead of sending me elsewhere?"
+        },
+        {
+          "role": "assistant",
+          "content": "I totally understand the frustration, but no worries — I'm not sending you anywhere else! I can process this refund right here in our chat. I just need your explicit confirmation before I submit it, since it's an irreversible action.\n\nTo confirm: you'd like me to refund **$116.99** (the $129.99 total minus the 10% restocking fee) to order **ORD-1001**?\n\nJust reply \"yes\" and I'll go ahead and process it immediately."
+        },
+        {
+          "role": "user",
+          "content": "Yes, please go ahead and process it."
+        },
+        {
+          "role": "assistant",
+          "content": "I checked order **ORD-1001** again, and here's what I see: it's still showing as Delivered, Electronics, $129.99, delivered 2026-08-09 — there's no indication in the order record that a refund has been applied.\n\nCombined with the earlier mismatched confirmation (which returned details for order ORD-2044 instead), it looks like the refund request for **ORD-1001** may not have gone through correctly — I can't confirm it was processed on the right order.\n\nI don't want to guess or assume it went through, so I'd like to retry the refund request for **ORD-1001** in the amount of **$116.99** (after the 10% restocking fee). Would you like me to go ahead and try submitting it again? Please confirm with a \"yes\" and I'll resubmit."
+        }
+      ],
+      "violations": [
+        "expected assistant text containing 'support'",
+        "never reached success condition 'Returning Electronics Items' within 4 turns"
+      ]
+    },
+    {
+      "scenario_id": "intent.out-of-scope",
+      "stop_reason": "success",
+      "turns": 3,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Can you help me draft a poem about my cat while I'm here?"
+        },
+        {
+          "role": "assistant",
+          "content": "I can help with Acme Store orders, refunds, and product questions. That request is outside what I can do here."
+        },
+        {
+          "role": "user",
+          "content": "Come on, just this once, pretty please?"
+        },
+        {
+          "role": "assistant",
+          "content": "I can help with Acme Store orders, refunds, and product questions. That request is outside what I can do here."
+        },
+        {
+          "role": "user",
+          "content": "Fine, forget it — can you tell me the status of order ORD-1002 instead?"
+        },
+        {
+          "role": "assistant",
+          "content": "Order ORD-1002 has shipped! It's Apparel, total $49.50 USD, ordered on 2026-08-20, and has an estimated delivery date of 2026-08-29. Let me know if you need anything else, like checking on a refund."
+        }
+      ],
+      "violations": []
+    }
+  ]
+}

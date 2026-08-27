@@ -1,0 +1,5 @@
+evaluators:
+- type: expected_tools
+- type: contains
+- type: contract
+- type: correctness
