@@ -159,7 +159,12 @@ def summary_text(report: dict) -> str:
         lines.append(f"coverage: {cov.get('covered')}/{cov.get('planned')} ({cov.get('coverage_pct')}%)")
     st = report.get("stability") or {}
     if st:
-        lines.append(f"stability: repeats={st.get('repeats')} unstable_cases={len(st.get('unstable_cases', []))} unstable_evaluators={len(st.get('unstable_evaluators', []))}")
+        lines.append(
+            f"stability: repeats={st.get('repeats')} unstable_cases={len(st.get('unstable_cases', []))} "
+            f"(trajectory) unstable_outputs={len(st.get('unstable_outputs', []))} "
+            f"unstable_evaluators={len(st.get('unstable_evaluators', []))} "
+            f"text_varies={st.get('text_varies')} suspect_judge_comments={len(st.get('suspect_judge_comments', []))}"
+        )
     if report.get("analysis"):
         lines.append(f"analysis ({report['analysis'].get('source')}): {report['analysis'].get('summary', '')[:300]}")
     if report.get("problems"):

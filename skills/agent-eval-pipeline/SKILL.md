@@ -46,10 +46,13 @@ when they want a verdict.
    the parts that explain it:
    - `verdict` ∈ `pass | fail | incomplete` with `verdict_reasons`. `incomplete` means
      a required stage did not finish; `stages.*` says which one and why.
-   - `metrics` (pass rate vs threshold), `slices` (a defect usually lives in one
-     slice), `stability` (unstable **cases** = the agent differs across repeats;
-     unstable **evaluators** = same output, different judge score — an evaluator
-     problem, not an agent problem).
+   - `metrics` (pass rate vs threshold; `skipped` = no reference on the case, not an
+     error), `slices` (a defect usually lives in one slice), `stability`:
+     unstable **cases** = the tool trajectory differs across repeats (agent
+     behavior); unstable **outputs** = same trajectory, a deterministic metric flips
+     (wording drift); unstable **evaluators** = same trajectory, a judge flips
+     (judge variance, not an agent defect); `suspect_judge_comments` = judge
+     rationales that look like placeholders — treat those scores as unverified.
    - `coverage` — planned vs achieved cells; gaps are listed, never hidden.
    - `analysis` — generator-written patterns and recommendations (`source:
      deterministic` means the LLM analysis failed and only facts are listed).
