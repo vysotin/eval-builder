@@ -199,3 +199,69 @@ def test_cli_score(tmp_path):
     assert report["metrics"]["contains"]["avg"] == 1.0
     assert report["metrics"]["expected_tools"]["avg"] == 1.0
     assert (tmp_path / "report-r1.json").exists() or list(tmp_path.glob("report-*.json"))
+
+
+def test_generic_openevals_type_resolves_named_prompt(monkeypatch):
+    from openevals.prompts import CONCISENESS_PROMPT
+
+    seen = {}
+
+    def fake_make(prompt, model, key, **kwargs):
+        seen.update(prompt=prompt, model=model, key=key)
+        return lambda **kw: {"key": key, "score": True, "comment": "ok"}
+
+    monkeypatch.setattr(ev, "_make_judge", fake_make)
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    fns = dict(
+        ev.build_evaluators(
+            [{"type": "openevals", "prompt": "CONCISENESS_PROMPT"}, {"type": "hallucination"}],
+            "openai:gpt-test",
+        )
+    )
+    assert set(fns) == {"conciseness", "hallucination"}
+    assert fns["conciseness"](_case(), _run([]))["score"] is True
+    assert seen["prompt"] == CONCISENESS_PROMPT and seen["key"] == "conciseness"
+
+
+def test_unknown_evaluator_type_rejected():
+    with pytest.raises(ValueError, match="unknown evaluator"):
+        ev.build_evaluators([{"type": "no_such_thing"}], "openai:x")
+
+
+def test_trajectory_llm_passes_trajectory(monkeypatch):
+    seen = {}
+
+    def fake_make(prompt, model, key):
+        def judge(**kw):
+            seen.update(kw)
+            return {"key": key, "score": False, "comment": "wrong tool"}
+
+        return judge
+
+    monkeypatch.setattr(ev, "_make_trajectory_judge", fake_make)
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    fns = dict(ev.build_evaluators([{"type": "trajectory_llm"}], "openai:gpt-test"))
+    out = fns["trajectory_llm"](_case(), _run([]))
+    assert out["score"] is False and seen["outputs"][0]["role"] == "user"
+
+
+def test_claude_cli_judge_ready_without_api_key(monkeypatch):
+    from evalbuilder import claude_cli
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(claude_cli, "claude_available", lambda cli_path=None: True)
+    monkeypatch.setattr(
+        ev, "_make_judge",
+        lambda prompt, model, key, **kw: (lambda **_: {"key": key, "score": 1, "comment": ""}),
+    )
+    fns = dict(ev.build_evaluators([{"type": "correctness"}], "claude-cli:sonnet"))
+    assert fns["correctness"](_case(), _run([]))["score"] == 1
+
+
+def test_expected_tools_forbidden():
+    case = _case()
+    case.reference_outputs = {"expected_tools": [], "forbidden_tools": ["issue_refund"]}
+    fns = dict(ev.build_evaluators([{"type": "expected_tools"}], "openai:x"))
+    bad = fns["expected_tools"](case, _run([{"name": "issue_refund", "args": {}}]))
+    assert bad["score"] is False and "forbidden" in bad["comment"]
+    assert fns["expected_tools"](case, _run([]))["score"] is True

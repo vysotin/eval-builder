@@ -378,14 +378,9 @@ def parse_spec(spec: str) -> tuple[str, str, str | None]:
 
 def provider_ready(spec: str) -> tuple[bool, str]:
     """(ready, reason) for a model spec without instantiating it."""
-    provider, model, _ = parse_spec(spec)
-    if provider == CLAUDE_CLI_PROVIDER:
-        return (True, "") if claude_available() else (False, "claude CLI not on PATH")
-    if provider == SCRIPTED_PROVIDER:
-        return True, ""
-    from evalbuilder.config import _has_judge_key
+    from evalbuilder.config import provider_ready as _provider_ready
 
-    return (True, "") if _has_judge_key(spec) else (False, f"no API key for provider {provider!r}")
+    return _provider_ready(spec)
 
 
 def model_from_spec(spec: str, **overrides: Any):

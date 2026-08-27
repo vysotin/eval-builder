@@ -11,10 +11,18 @@ from dotenv import dotenv_values
 
 DEFAULT_JUDGE_MODEL = "anthropic:claude-sonnet-5"
 
+PROVIDER_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google_genai": "GOOGLE_API_KEY",
+}
+
 
 @dataclass(frozen=True)
 class Settings:
     judge_model: str = DEFAULT_JUDGE_MODEL
+    agent_model: str | None = None
+    generator_model: str | None = None
     langsmith_api_key: str | None = None
     langsmith_endpoint: str | None = None
     langsmith_project: str | None = None
@@ -32,21 +40,35 @@ class Settings:
 
         return cls(
             judge_model=get("EVALBUILDER_JUDGE_MODEL") or DEFAULT_JUDGE_MODEL,
+            agent_model=get("EVALBUILDER_AGENT_MODEL"),
+            generator_model=get("EVALBUILDER_GENERATOR_MODEL"),
             langsmith_api_key=get("LANGSMITH_API_KEY"),
             langsmith_endpoint=get("LANGSMITH_ENDPOINT"),
             langsmith_project=get("LANGSMITH_PROJECT"),
         )
 
 
-def _has_judge_key(model: str) -> bool:
+def provider_ready(model: str) -> tuple[bool, str]:
+    """(ready, reason) for a `provider:model` spec.
+
+    `claude-cli:` needs the claude binary (subscription auth); `scripted:` is always
+    ready; API providers need their key in the environment.
+    """
     provider = model.split(":", 1)[0]
-    keys = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "google_genai": "GOOGLE_API_KEY",
-    }
-    var = keys.get(provider)
-    return bool(var and os.environ.get(var))
+    if provider == "claude-cli":
+        from evalbuilder.claude_cli import claude_available
+
+        return (True, "") if claude_available() else (False, "claude CLI not on PATH")
+    if provider == "scripted":
+        return True, ""
+    var = PROVIDER_KEYS.get(provider)
+    if var and os.environ.get(var):
+        return True, ""
+    return False, f"no API key configured for provider {provider!r}"
+
+
+def _has_judge_key(model: str) -> bool:
+    return provider_ready(model)[0]
 
 
 def capability_check(settings: Settings, target_module: str | None = None) -> dict:
@@ -59,6 +81,10 @@ def capability_check(settings: Settings, target_module: str | None = None) -> di
         blocking.append(
             {"issue": "langgraph is not installed", "fix": "uv pip install langgraph"}
         )
+
+    from evalbuilder.claude_cli import claude_available
+
+    caps["claude_cli"] = claude_available()
 
     caps["judge"] = _has_judge_key(settings.judge_model)
     if not caps["judge"]:

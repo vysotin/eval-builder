@@ -38,3 +38,23 @@ def test_cli_check_outputs_json(monkeypatch):
     result = CliRunner().invoke(app, ["check"])
     assert result.exit_code == 0
     assert "ready" in json.loads(result.stdout)
+
+
+def test_capability_check_claude_cli_judge(monkeypatch):
+    from evalbuilder import claude_cli
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(claude_cli, "claude_available", lambda cli_path=None: True)
+    report = capability_check(Settings(judge_model="claude-cli:sonnet"))
+    assert report["capabilities"]["judge"] is True
+    assert report["capabilities"]["claude_cli"] is True
+    assert "judge" not in report["degraded"]
+
+
+def test_settings_agent_and_generator_models(tmp_path, monkeypatch):
+    for var in ("EVALBUILDER_AGENT_MODEL", "EVALBUILDER_GENERATOR_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    env = tmp_path / ".env"
+    env.write_text("EVALBUILDER_AGENT_MODEL=claude-cli:sonnet\nEVALBUILDER_GENERATOR_MODEL=claude-cli:opus\n")
+    s = Settings.load(env)
+    assert s.agent_model == "claude-cli:sonnet" and s.generator_model == "claude-cli:opus"

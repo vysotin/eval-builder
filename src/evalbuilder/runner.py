@@ -19,7 +19,17 @@ def run_dataset(
     mocked: bool,
     ids: list[str] | None = None,
     out_dir: Path,
+    model=None,
+    model_spec: str | None = None,
+    on_miss: str = "real",
+    fallback=None,
 ) -> RunArtifact:
+    """Execute cases and write `run-<id>.json`.
+
+    `model` is injected into the target factory (`build_agent(model=...)`) so the
+    same agent code can run against a scripted model in tests and a real one in evals.
+    `on_miss` is the mock miss policy (real / fallback / strict) for wrapped tools.
+    """
     if ids:
         by_id = {c.id: c for c in ds.cases}
         unknown = [i for i in ids if i not in by_id]
@@ -45,6 +55,7 @@ def run_dataset(
         dataset_name=ds.name,
         mocked=mocked,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        agent_model=model_spec,
     )
 
     for case in selected:
@@ -54,10 +65,12 @@ def run_dataset(
                     ds.mocks.get("tools", {}),
                     case.metadata.get("mocks", {}).get("tools", {}),
                 )
-                tools = wrap_tools(list(getattr(module, "TOOLS")), rules)
-                graph = target_mod.build_graph(module, ds.target, tools=tools)
+                tools = wrap_tools(
+                    list(getattr(module, "TOOLS")), rules, on_miss=on_miss, fallback=fallback
+                )
+                graph = target_mod.build_graph(module, ds.target, tools=tools, model=model)
             else:
-                graph = target_mod.build_graph(module, ds.target)
+                graph = target_mod.build_graph(module, ds.target, model=model)
         except Exception as e:  # noqa: BLE001 - factory failure is infrastructure
             artifact.case_runs.append(
                 CaseRun(

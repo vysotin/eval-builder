@@ -1,15 +1,20 @@
-"""Evaluators: deterministic checks first, OpenEvals LLM judges second.
+"""Evaluators: deterministic checks first, OpenEvals/AgentEvals LLM judges second.
 
 One metric per evaluator. Each evaluator is `fn(case, case_run) -> {key, score, comment}`
 or raises EvaluatorUnavailable — an evaluator problem is never an agent failure.
+
+Judge models are `provider:model` specs resolved by `claude_cli.model_from_spec`, so
+`claude-cli:sonnet` (subscription) and `anthropic:…` / `openai:…` (API keys) are
+interchangeable.
 """
 
 from __future__ import annotations
 
 import importlib
 import json
+from functools import lru_cache
 
-from evalbuilder.config import _has_judge_key
+from evalbuilder.config import provider_ready
 from evalbuilder.schemas import Case, CaseRun, Dataset, Report, RunArtifact
 
 SLICE_DIMS = ("intent", "failure_mode", "variant")
@@ -21,15 +26,49 @@ Return score 1 only when the response satisfies the contract; otherwise 0. Expla
 <inputs>{inputs}</inputs>
 <outputs>{outputs}</outputs>"""
 
+DETERMINISTIC_TYPES = ("expected_tools", "contains", "json_valid", "trajectory_match")
+JUDGE_TYPES = ("correctness", "contract", "openevals", "trajectory_llm")
+
 
 class EvaluatorUnavailable(Exception):
     pass
 
 
-def _make_judge(prompt: str, model: str, key: str):
+@lru_cache(maxsize=8)
+def _model(spec: str):
+    from evalbuilder.claude_cli import model_from_spec
+
+    return model_from_spec(spec)
+
+
+def _make_judge(prompt: str, model: str, key: str, **kwargs):
     from openevals.llm import create_llm_as_judge
 
-    return create_llm_as_judge(prompt=prompt, model=model, feedback_key=key)
+    return create_llm_as_judge(prompt=prompt, judge=_model(model), feedback_key=key, **kwargs)
+
+
+def _make_trajectory_judge(prompt: str, model: str, key: str):
+    from agentevals.trajectory.llm import create_trajectory_llm_as_judge
+
+    return create_trajectory_llm_as_judge(prompt=prompt, judge=_model(model), feedback_key=key)
+
+
+def openevals_prompt(name: str) -> str | None:
+    """`CONCISENESS_PROMPT` (or `conciseness`) → the OpenEvals rubric text, else None."""
+    from openevals import prompts
+
+    candidates = [name, f"{name.upper()}_PROMPT"]
+    for candidate in candidates:
+        value = getattr(prompts, candidate, None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _require_ready(model: str) -> None:
+    ready, reason = provider_ready(model)
+    if not ready:
+        raise EvaluatorUnavailable(f"judge model {model!r} unavailable: {reason}")
 
 
 def _args_subset(expected: dict, actual: dict) -> bool:
@@ -58,6 +97,14 @@ def _expected_tools(case: Case, case_run: CaseRun) -> dict:
                     f"actual: {[t['name'] for t in actual]}"
                 ),
             }
+    forbidden = case.reference_outputs.get("forbidden_tools", [])
+    hit = [t["name"] for t in actual if t["name"] in forbidden]
+    if hit:
+        return {
+            "key": "expected_tools",
+            "score": False,
+            "comment": f"forbidden tool(s) called: {hit}",
+        }
     return {"key": "expected_tools", "score": True, "comment": ""}
 
 
@@ -67,10 +114,12 @@ def _contains(spec: dict):
         if not needle:
             raise EvaluatorUnavailable("no reference substring for contains")
         response = case_run.outputs.get("response", "")
+        needles = needle if isinstance(needle, list) else [needle]
+        missing = [n for n in needles if n.lower() not in response.lower()]
         return {
             "key": "contains",
-            "score": needle.lower() in response.lower(),
-            "comment": f"looking for {needle!r}",
+            "score": not missing,
+            "comment": f"missing {missing}" if missing else f"found {needles}",
         }
 
     return fn
@@ -108,31 +157,58 @@ def _trajectory_match(spec: dict):
 
 def _judge(kind: str, spec: dict, judge_model: str):
     model = spec.get("model", judge_model)
+    key = spec.get("name") or kind
+    judge_kwargs = {}
+    if spec.get("continuous"):
+        judge_kwargs["continuous"] = True
 
     def fn(case: Case, case_run: CaseRun) -> dict:
-        if not _has_judge_key(model):
-            raise EvaluatorUnavailable(
-                f"judge model {model!r} has no API key configured"
-            )
+        _require_ready(model)
         if kind == "contract":
             contract = case.reference_outputs.get("contract")
             if not contract:
                 raise EvaluatorUnavailable("case has no reference contract")
-            prompt = spec.get("prompt") or CONTRACT_PROMPT.replace(
-                "{contract}", contract
-            )
+            prompt = spec.get("prompt") or CONTRACT_PROMPT.replace("{contract}", contract)
         else:
-            from openevals.prompts import CORRECTNESS_PROMPT
-
-            prompt = spec.get("prompt") or CORRECTNESS_PROMPT
-        judge = _make_judge(prompt, model, kind)
+            raw = spec.get("prompt") or kind
+            prompt = openevals_prompt(raw) or raw
+            if prompt == raw and "{outputs}" not in raw:
+                raise EvaluatorUnavailable(
+                    f"evaluator {key!r}: {raw!r} is neither an openevals prompt name "
+                    "nor a template with {outputs}"
+                )
+        judge = _make_judge(prompt, model, key, **judge_kwargs)
         result = judge(
             inputs=json.dumps(case.inputs, ensure_ascii=False),
             outputs=case_run.outputs.get("response", ""),
             reference_outputs=json.dumps(case.reference_outputs, ensure_ascii=False),
         )
         return {
-            "key": kind,
+            "key": key,
+            "score": result["score"],
+            "comment": str(result.get("comment") or ""),
+        }
+
+    return fn
+
+
+def _trajectory_llm(spec: dict, judge_model: str):
+    model = spec.get("model", judge_model)
+    key = spec.get("name") or "trajectory_llm"
+
+    def fn(case: Case, case_run: CaseRun) -> dict:
+        _require_ready(model)
+        from agentevals.trajectory.llm import TRAJECTORY_ACCURACY_PROMPT
+
+        prompt = spec.get("prompt") or TRAJECTORY_ACCURACY_PROMPT
+        judge = _make_trajectory_judge(prompt, model, key)
+        kwargs = {"outputs": case_run.trajectory}
+        reference = case.reference_outputs.get("trajectory")
+        if reference:
+            kwargs["reference_outputs"] = reference
+        result = judge(**kwargs)
+        return {
+            "key": key,
             "score": result["score"],
             "comment": str(result.get("comment") or ""),
         }
@@ -157,13 +233,27 @@ def build_evaluators(specs: list[dict], judge_model: str) -> list[tuple[str, cal
             out.append((kind, _json_valid))
         elif kind == "trajectory_match":
             out.append((kind, _trajectory_match(spec)))
+        elif kind == "trajectory_llm":
+            out.append((spec.get("name") or kind, _trajectory_llm(spec, judge_model)))
         elif kind in ("correctness", "contract"):
-            out.append((kind, _judge(kind, spec, judge_model)))
+            out.append((spec.get("name") or kind, _judge(kind, spec, judge_model)))
+        elif kind == "openevals":
+            if not spec.get("prompt"):
+                raise ValueError("openevals evaluator needs a prompt name or template")
+            name = spec.get("name") or spec["prompt"].lower().removesuffix("_prompt")
+            out.append((name, _judge(name, {**spec, "name": name}, judge_model)))
+        elif openevals_prompt(kind):
+            out.append((spec.get("name") or kind, _judge(kind, spec, judge_model)))
         elif kind == "custom":
             out.append((spec.get("name", "custom"), _custom(spec)))
         else:
             raise ValueError(f"unknown evaluator type {kind!r}")
     return out
+
+
+def is_judge_spec(spec: dict) -> bool:
+    kind = spec.get("type", "")
+    return kind in JUDGE_TYPES or (kind not in DETERMINISTIC_TYPES and kind != "custom")
 
 
 def score_run(

@@ -84,6 +84,7 @@ class RunArtifact(BaseModel):
     mocked: bool
     case_runs: list[CaseRun] = Field(default_factory=list)
     timestamp: str = ""
+    agent_model: str | None = None
 
 
 class Report(BaseModel):

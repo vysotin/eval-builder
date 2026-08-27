@@ -315,14 +315,26 @@ def run(
     mock: bool = typer.Option(False, "--mock/--no-mock"),
     ids: Optional[str] = typer.Option(None, "--ids", help="comma-separated case ids"),
     out: Path = typer.Option(Path("eval/results"), "--out"),
+    model: Optional[str] = typer.Option(
+        None, "--model", help="agent model spec, e.g. claude-cli:sonnet (default: target's own)"
+    ),
+    on_miss: str = typer.Option("real", "--on-miss", help="mock miss policy: real|fallback|strict"),
 ) -> None:
     """Execute approved cases against the target agent; write a run artifact."""
     from evalbuilder.runner import run_dataset
 
     ds = _load_ds(path)
     id_list = [s.strip() for s in ids.split(",") if s.strip()] if ids else None
+    agent_model = None
+    if model:
+        from evalbuilder.claude_cli import model_from_spec
+
+        agent_model = model_from_spec(model)
     try:
-        art = run_dataset(ds, path, mocked=mock, ids=id_list, out_dir=out)
+        art = run_dataset(
+            ds, path, mocked=mock, ids=id_list, out_dir=out,
+            model=agent_model, model_spec=model, on_miss=on_miss,
+        )
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)

@@ -18,11 +18,19 @@ def load_target(target: Target):
     return importlib.import_module(target.module)
 
 
-def build_graph(module, target: Target, tools=None):
+def build_graph(module, target: Target, tools=None, model=None):
+    """Call the target factory, passing only the overrides that were given.
+
+    The contract is `build_agent(model=None, tools=None)`; omitting an argument lets
+    the factory fall back to its own default (e.g. a scripted model for tests).
+    """
     factory = getattr(module, target.factory)
+    kwargs = {}
     if tools is not None:
-        return factory(tools=tools)
-    return factory()
+        kwargs["tools"] = tools
+    if model is not None:
+        kwargs["model"] = model
+    return factory(**kwargs)
 
 
 def _extract(state) -> tuple[list[dict], list[dict], str]:
