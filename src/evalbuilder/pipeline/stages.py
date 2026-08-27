@@ -19,7 +19,7 @@ from evalbuilder import simulate as sim
 from evalbuilder import target as target_mod
 from evalbuilder.config import Settings, capability_check, provider_ready
 from evalbuilder.evaluators import is_judge_spec, score_run
-from evalbuilder.mocking import merge_mock_rules, verify_dataset, wrap_tools
+from evalbuilder.mocking import merge_mock_rules, verify_dataset, with_fallback, wrap_tools
 from evalbuilder.pipeline import generator as gen_mod
 from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
 from evalbuilder.pipeline.config import PipelineConfig
@@ -312,6 +312,8 @@ def build_dataset(ctx: PipelineContext) -> dict:
     duplicates = 0
     for raw in cases:
         raw["metadata"].pop("_cell", None)
+        for tool, case_rules in (raw["metadata"].get("mocks", {}).get("tools", {}) or {}).items():
+            raw["metadata"]["mocks"]["tools"][tool] = with_fallback(case_rules, rules.get(tool, []))
         try:
             artifacts.add_case(ds, raw)
         except ValueError:
@@ -383,7 +385,7 @@ def review(ctx: PipelineContext) -> dict:
 
 def verify(ctx: PipelineContext) -> dict:
     ds = ctx.dataset()
-    misses = verify_dataset(ds)
+    misses = verify_dataset(ds, only_approved=True)
     if misses:
         raise ValueError(f"{len(misses)} expected tool call(s) have no mock rule: {misses[:3]}")
     if ctx.config.mocking.required:

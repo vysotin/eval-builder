@@ -81,10 +81,22 @@ def wrap_tools(
     ]
 
 
-def verify_dataset(ds) -> list[dict]:
+def with_fallback(case_rules: list[dict], dataset_rules: list[dict]) -> list[dict]:
+    """Case-level rules first, then the dataset-level rules unless the case already
+    ends with a wildcard — so a per-case error injection for one arg set keeps the
+    tool answerable for every other call."""
+    rules = list(case_rules)
+    if rules and not rules[-1].get("matchArgs"):
+        return rules
+    return rules + [r for r in dataset_rules if r not in rules]
+
+
+def verify_dataset(ds, only_approved: bool = False) -> list[dict]:
     """Expected tool calls in mocked cases that no rule answers: [{case, tool, args}]."""
     misses: list[dict] = []
     for c in ds.cases:
+        if only_approved and c.review.status != "approved":
+            continue
         merged = merge_mock_rules(
             ds.mocks.get("tools", {}), c.metadata.get("mocks", {}).get("tools", {})
         )

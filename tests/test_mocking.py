@@ -127,3 +127,20 @@ def test_cli_mock_set_dataset_level(tmp_path):
     assert r.exit_code == 0, r.output
     data = json.loads(ds_path.read_text())
     assert data["mocks"]["tools"]["get_weather"][0]["response"] == {"temp": 5}
+
+
+def test_with_fallback_and_verify_only_approved():
+    from evalbuilder.artifacts import add_case, set_review
+    from evalbuilder.mocking import verify_dataset, with_fallback
+    from evalbuilder.schemas import Dataset, Target
+
+    default = [{"matchArgs": {}, "response": {"ok": True}}]
+    inject = [{"matchArgs": {"order_id": "X"}, "response": {"error": "down"}}]
+    assert with_fallback(inject, default) == inject + default
+    assert with_fallback(default, default) == default  # already a wildcard
+    ds = Dataset(name="d", dataset_type="final_response", target=Target(module="m"), mocks={"tools": {"t": default}})
+    bad = add_case(ds, {"inputs": {"q": 1}, "reference_outputs": {"expected_tools": [{"name": "t", "args": {"a": 1}}]},
+                        "metadata": {"mocks": {"tools": {"t": [{"matchArgs": {"a": 2}, "response": 1}]}}}})
+    assert [m["case"] for m in verify_dataset(ds)] == [bad.id]
+    set_review(ds, [bad.id], "rejected", "no rule")
+    assert verify_dataset(ds, only_approved=True) == []

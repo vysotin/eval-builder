@@ -173,6 +173,7 @@ def run_pipeline(
     config_path: Path,
     *,
     resume: bool = False,
+    invalidate_from: str | None = None,
     log: Callable[[str], None] = lambda msg: None,
     generator_factory=None,
     settings: Settings | None = None,
@@ -196,6 +197,7 @@ def run_pipeline(
         skip=skip,
         max_retries=cfg.stages.max_retries,
         resume=resume,
+        invalidate_from=invalidate_from,
         log=log,
     )
     state = runner.run(ctx, name=cfg.name)

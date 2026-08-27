@@ -468,6 +468,7 @@ def pipeline_init(
 def pipeline_run(
     config: Path,
     resume: bool = typer.Option(False, "--resume", help="reuse completed stages from state.json"),
+    from_stage: Optional[str] = typer.Option(None, "--from", help="with --resume: rerun from this stage onward"),
     quiet: bool = typer.Option(False, "--quiet"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
 ) -> None:
@@ -481,7 +482,10 @@ def pipeline_run(
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
     log = (lambda msg: None) if quiet else (lambda msg: typer.echo(msg, err=True))
-    _, report = run_pipeline(config, resume=resume, log=log, settings=Settings.load(env_file), config=cfg)
+    _, report = run_pipeline(
+        config, resume=resume, invalidate_from=from_stage, log=log,
+        settings=Settings.load(env_file), config=cfg,
+    )
     typer.echo(summary_text(report), err=True)
     _emit(
         {

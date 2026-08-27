@@ -110,3 +110,12 @@ def test_details_and_artifacts_are_split(tmp_path):
     state = PipelineRunner(stages, tmp_path / "s.json").run(_ctx())
     assert state.stages["a"].artifacts == {"map": "m.json"}
     assert state.stages["a"].details == {"count": 3}
+
+
+def test_resume_invalidate_from_reruns_later_stages(tmp_path):
+    path = tmp_path / "s.json"
+    stages = [Stage("a", _ok("a")), Stage("b", _ok("b"), deps=("a",)), Stage("c", _ok("c"), deps=("b",))]
+    PipelineRunner(stages, path).run(_ctx())
+    ctx = _ctx()
+    PipelineRunner(stages, path, resume=True, invalidate_from="b").run(ctx)
+    assert ctx.calls == ["b", "c"]

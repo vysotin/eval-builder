@@ -83,11 +83,18 @@ class PipelineRunner:
     skip: set[str] = field(default_factory=set)
     max_retries: int = 1
     resume: bool = False
+    invalidate_from: str | None = None
     log: Callable[[str], None] = lambda msg: None
 
     def run(self, ctx: Any, name: str = "pipeline") -> PipelineState:
         if self.resume and Path(self.state_path).exists():
             state = PipelineState.load(self.state_path)
+            if self.invalidate_from:
+                names = [s.name for s in self.stages]
+                if self.invalidate_from not in names:
+                    raise ValueError(f"unknown stage {self.invalidate_from!r}")
+                for stale in names[names.index(self.invalidate_from):]:
+                    state.stages.pop(stale, None)
         else:
             state = PipelineState(name=name, started_at=datetime.now(timezone.utc).isoformat())
         ctx.state = state
