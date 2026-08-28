@@ -95,3 +95,40 @@ def test_agent_graph_dot_covers_nodes_and_tools(example):
     assert '"tool:lookup_order"' in dot and "digraph agent" in dot
     live = graph_dot(amap["graph"], amap["tools"], live=True, show_tools=False)
     assert "START -> \"classify\"" in live and "tool:" not in live
+
+
+INCIDENT_EXAMPLE = "docs/examples/incident-desk"
+
+
+@pytest.fixture(scope="module")
+def incident():
+    return loader.load_dir(INCIDENT_EXAMPLE)
+
+
+def test_incident_desk_example_loads_with_schema_data(incident):
+    assert incident.problems == [] and incident.name == "incident-desk"
+    tools = {t["name"]: t for t in incident.agent_map["tools"]}
+    assert tools["search_runbooks"]["schema_source"] == "args_schema"
+    assert tools["create_ticket"]["output_schema"]["title"] == "TicketReceipt" and "TicketRequest" in tools["create_ticket"]["models"]
+    assert tools["create_ticket"]["side_effecting"] and any(e["kind"] == "malformed_output" for e in tools["create_ticket"]["edge_cases"])
+    edges = [c for c in incident.dataset["cases"] if c["metadata"].get("edge")]
+    assert edges and {c["metadata"]["failure_mode"] for c in edges} <= {"input_validation", "tool_error_handling"}
+    assert incident.report["config"]["models"]["generator"] == "claude-cli:claude-sonnet-5"
+    assert incident.report["config"]["instructions"].startswith("Ops domain")
+    assert "schema-edge" in incident.report["coverage"]["by_kind"]
+    assert incident.verdict in ("pass", "fail")
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_incident_desk_pages_render(page, incident):
+    at = _run(page, incident)
+    assert _errors(at) == []
+    if at.warning:  # an optional stage did not produce its artifact: the page must say which one
+        assert "written by stage" in at.warning[0].value
+    else:
+        assert [h.value for h in at.header] == [EXPECTED_HEADERS[page]]
+    if page == "agent":
+        text = "\n".join(m.value for m in at.markdown)
+        assert "Output schema" in text and "Schema edge cases" in text
+    if page == "dataset":
+        assert at.selectbox(key="ds_case").value.startswith("case-") and len(at.subheader) >= 3
