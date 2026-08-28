@@ -24,8 +24,8 @@ when they want a verdict.
    evalbuilder pipeline init eval/pipeline.yaml --name NAME --source path/to/agent.py --module pkg.agent
    ```
 
-   - `models.*` default to `claude-cli:sonnet` (Claude Code subscription via the
-     `claude` binary; no API key). API-key providers are interchangeable:
+   - `models.*` default to `claude-cli:claude-sonnet-5` (Claude Sonnet 5 through the
+     Claude Code subscription via the `claude` binary; no API key). API-key providers are interchangeable:
      `anthropic:claude-sonnet-5` (`ANTHROPIC_API_KEY`), `openai:gpt-5`
      (`OPENAI_API_KEY`), `gemini:gemini-2.5-pro` (`GOOGLE_API_KEY`); each needs its
      package (`uv sync --extra anthropic|openai|gemini|llm`). `evalbuilder check`
@@ -36,6 +36,12 @@ when they want a verdict.
      it the pipeline stops at `awaiting_review` and writes a report saying so.
    - `mocking.required: true` (default) means every introspected tool gets a fixture;
      `on_miss: strict` means an unmatched call is an error, never a real call.
+   - `instructions` (free text) and `feedback` entries reach every generation prompt;
+     `coverage.per_tool_edge_cases` adds schema-derived edge cases per tool (missing /
+     wrong / out-of-enum / boundary input, malformed tool output) from the tools'
+     pydantic / `args_schema` / return-annotation schemas captured in `agent-map.json`.
+   - The same setup is available interactively: `evalbuilder ui` → **Pipeline setup**
+     (discover the target's tools and schemas, fill the form, edit the YAML, run).
 
 3. Run it. Stages print to stderr; the JSON summary goes to stdout; exit code 1 unless
    the verdict is `pass`:
@@ -44,9 +50,16 @@ when they want a verdict.
    evalbuilder pipeline run eval/pipeline.yaml
    evalbuilder pipeline run eval/pipeline.yaml --resume     # reuse completed stages after a fix
    evalbuilder pipeline run eval/pipeline.yaml --resume --from dataset   # regenerate from a stage on
+   evalbuilder pipeline run eval/pipeline.yaml --until dataset            # stop after cases + mocks (exit 0)
    evalbuilder pipeline report eval/pipeline/NAME           # human summary of report.json
    evalbuilder ui eval/pipeline/NAME                        # Streamlit report UI over every artifact
    ```
+
+   When the user wants to look at the generated dataset before anything runs: `--until
+   dataset`, read `dataset.json` / `mock-rules.json` with them, add their comments as
+   `feedback` entries in the config (`{at, note, from_stage}`), regenerate with
+   `--resume --from dataset --until dataset`, then `--resume` once they approve. The UI's
+   **Run & review** page does the same loop with buttons.
 
 4. Read the report the way the run skill reads a score report — verdict first, then
    the parts that explain it:

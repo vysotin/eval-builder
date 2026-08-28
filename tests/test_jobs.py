@@ -69,3 +69,14 @@ def test_stage_statuses_and_stopped_after(tmp_path):
     assert st["status"] == "none" and st["stages"]["discover"]["status"] == "ok" and st["stopped_after"] == "dataset"
     (out / "job.json").write_text(json.dumps({"schema": jobs.JOB_SCHEMA, "pid": 99999999, "finished_at": None}))
     assert jobs.job_status(out)["status"] == "lost"
+
+
+def test_real_job_argv_runs_the_cli_module(tmp_path):
+    """`python -m evalbuilder.cli pipeline run` must actually run (module entry point)."""
+    cfg = tmp_path / "bad.yaml"
+    cfg.write_text("name: only\n")
+    out = tmp_path / "out"
+    jobs.start_job(cfg, out, mode="dataset")
+    st = _wait(out, "finished", timeout=60)
+    assert st["exit_code"] == 2, jobs.tail_log(out)
+    assert "invalid pipeline config" in jobs.tail_log(out)

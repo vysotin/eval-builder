@@ -11,8 +11,14 @@ agents**, an **autonomous pipeline** that does the whole job from one config fil
 - run cases repeatedly, score them with deterministic checks and LLM judges, aggregate
   pass rates vs thresholds, slices and stability, simulate multi-turn conversations,
   and write a report with a `pass | fail | incomplete` verdict;
-- use any model through one `provider:model` spec: the Claude Code CLI (subscription),
-  or Anthropic / OpenAI / Gemini API keys.
+- capture every tool's **input/output schema** (pydantic models, `args_schema`, return
+  annotations) and derive deterministic **schema edge cases** — missing / mistyped /
+  out-of-range input, malformed tool output — that become coverage cells;
+- drive it all from the **UI**: initialise a config interactively (free-text rules and
+  instructions included), run everything autonomously or stop after dataset + mocks,
+  comment, regenerate, then approve and evaluate;
+- use any model through one `provider:model` spec: the Claude Code CLI (subscription,
+  Claude Sonnet 5 by default), or Anthropic / OpenAI / Gemini API keys.
 
 ```
                        ┌──────────────── skills (policy prose, Claude Code) ────────────────┐
@@ -30,8 +36,9 @@ your LangGraph agent ─►│ agent-eval-discover │ agent-eval-dataset │ ag
                                    eval/pipeline/<name>/   (agent-map.json, dataset.json,
                                    results/run-*.json, aggregate.json, report.json, …)
                                                       │
-                       evalbuilder ui  ◄──────────────┘  Streamlit report: graph, intents, dataset,
-                                                         coverage, eval results, stability, simulation
+                       evalbuilder ui  ◄──────────────┘  Streamlit: Pipeline setup → Run & review →
+                                                         report pages (graph, intents, dataset, coverage,
+                                                         eval results, stability, simulation, analysis)
 ```
 
 ## Contents
@@ -41,10 +48,11 @@ your LangGraph agent ─►│ agent-eval-discover │ agent-eval-dataset │ ag
 3. [Repository layout](#repository-layout)
 4. [The autonomous pipeline](#the-autonomous-pipeline)
    - [Config](#config) · [Stages](#stages) · [Review gate](#review-gate) ·
-     [Resume](#resume) · [Verdict and report](#verdict-and-report)
+     [Resume, stop early, feedback loop](#resume-stop-early-feedback-loop) ·
+     [Tool schemas and edge cases](#tool-schemas-and-edge-cases) · [Verdict and report](#verdict-and-report)
 5. [Models and providers](#models-and-providers)
 6. [Artifacts and naming convention](#artifacts-and-naming-convention)
-7. [Report UI](#report-ui)
+7. [UI: setup, run & review, report](#ui-setup-run--review-report)
 8. [Interactive skills](#interactive-skills)
 9. [CLI reference](#cli-reference)
 10. [Dataset format, mocking, target contract](#dataset-format)
@@ -83,17 +91,29 @@ uv run evalbuilder pipeline init eval/pipeline.yaml --name support-bot \
 # 2. edit eval/pipeline.yaml: constraints, coverage, evaluators, thresholds,
 #    models, and — to let the pipeline approve generated cases — review.auto_approve + approved_by
 
-# 3. run (exit code 1 unless verdict == pass); ~45 min for 16 cases × 2 repeats with claude-cli:sonnet
+# 3. run (exit code 1 unless verdict == pass); ~45 min for 16 cases × 2 repeats with claude-cli:claude-sonnet-5
 uv run evalbuilder pipeline run eval/pipeline.yaml
+#    …or only generate the dataset + mocks, look at them, then continue:
+uv run evalbuilder pipeline run eval/pipeline.yaml --until dataset
+uv run evalbuilder pipeline run eval/pipeline.yaml --resume
 
 # 4. read it
 uv run evalbuilder pipeline report eval/pipeline/support-bot     # terminal summary
 uv run evalbuilder ui eval/pipeline/support-bot                  # Streamlit report at http://localhost:8501
 ```
 
+Prefer clicking? `uv run evalbuilder ui` → **Pipeline setup** does steps 1–3 interactively
+(pick an example agent, discover its tools and schemas, fill the form including free-text
+rules, edit the YAML, run everything or stop after the dataset), **Run & review** shows the
+job live and hosts the comment → regenerate → approve → evaluate loop.
+
 No key, no `claude` binary? Look at a finished run right away — the repository ships
-the artifacts of a real run: `uv run evalbuilder ui docs/examples/support-bot`.
-A ready-to-run config is in `examples/support_bot/pipeline.yaml`.
+the artifacts of real runs: `uv run evalbuilder ui docs/examples/support-bot`.
+Ready-to-run configs sit next to each example agent (`examples/*/pipeline.yaml`); three
+example agents ship with several subagents and external (mocked) tools:
+`support_bot` (router + 2 specialists), `incident_desk` (classifier + 4 specialists,
+pydantic in/out models, `args_schema`), `loan_desk` (router + 3 chained specialists,
+nested pydantic models, consent/confirmation gates).
 
 ## Repository layout
 
@@ -105,6 +125,8 @@ src/evalbuilder/
   discover.py         AST + live introspection of a LangGraph module → agent-map
   target.py           target contract: build_agent(model=None, tools=None) + TOOLS
   mocking.py          ADK-style tool mocks (ordered rules, matchArgs subset, miss policy), verify
+  tool_schemas.py     tool args/output schemas (pydantic, args_schema, annotations), JSON-schema-subset
+                      validator, sample/corrupt payloads, deterministic schema edge cases
   runner.py           run approved cases, capture trajectory / tool calls / node path
   evaluators.py       deterministic evaluators + OpenEvals/AgentEvals judges, score_run
   simulate.py         multi-turn scenarios with a simulated user, violation mining
@@ -113,7 +135,7 @@ src/evalbuilder/
   providers.py        API-key providers (anthropic/openai/google_genai), aliases, readiness, @effort
   claude_cli.py       ChatClaudeCLI: Claude Code CLI as a LangChain chat model; model_from_spec
   config.py           .env settings, capability_check
-  testing.py          ScriptedChatModel for fully offline tests
+  testing.py          ScriptedChatModel + SchemaScriptedModel (offline generators) for fully offline runs
   pipeline/
     config.py         evalbuilder/pipeline-config/v1 (pydantic), template, semantic checks
     engine.py         stage runner: deps, retries, skip, awaiting_review, persisted state.json
@@ -124,17 +146,21 @@ src/evalbuilder/
     aggregate.py      repeat-aware aggregation: pass rates, thresholds, slices, stability
     report.py         report assembly + run_pipeline entry point
     layout.py         THE artifact naming convention (kinds, files, schema ids, legacy names)
+    jobs.py           background pipeline jobs for the UI (job.json + pipeline.log, wrapper entry point)
+    setup.py          interactive setup helpers: target discovery/preview, config from form, feedback/approval
   ui/
     app.py            Streamlit entry point (sidebar source picker, st.navigation)
     loader.py         Bundle: load a directory by file name or uploads by schema id
     common.py         palette, charts (Altair), tables, transcript widgets
-    app_pages/        overview, agent, intents, dataset, coverage, results, stability,
-                      simulation, analysis, stages
+    app_pages/        setup (pipeline setup), run (run & review), overview, agent, intents, dataset,
+                      coverage, results, stability, simulation, analysis, stages
 skills/               five Claude Code skills (symlinked into .claude/skills/)
-examples/             weather_bot, travel_planner, support_bot (+ pipeline.yaml) — offline scripted models
-docs/examples/support-bot/   artifacts of a real pipeline run (UI demo + test fixture)
+examples/             weather_bot, travel_planner, support_bot, incident_desk, loan_desk — each with a
+                      scripted default model; support_bot/incident_desk/loan_desk also ship pipeline.yaml
+                      and offline.py (a SchemaScriptedModel generator for LLM-free pipeline runs)
+docs/examples/support-bot/, incident-desk/   artifacts of real pipeline runs (UI demo + test fixtures)
 docs/superpowers/     design specs and implementation plans
-tests/                offline pytest suite; tests/ui/ = Playwright browser tests
+tests/                offline pytest suite; tests/ui/ = Playwright browser tests (report pages + interactive flows)
 ```
 
 ## The autonomous pipeline
@@ -157,12 +183,15 @@ target:
   source: examples/support_bot/agent.py     # agent source (AST discovery)
   module: examples.support_bot.agent        # importable module exposing TOOLS + build_agent
 models:
-  agent: claude-cli:sonnet                  # injected into build_agent(model=…); omit = target's own
-  judge: claude-cli:sonnet                  # LLM-as-judge
-  generator: claude-cli:sonnet              # authors intents/scenarios/cases/mocks/analysis
+  agent: claude-cli:claude-sonnet-5         # injected into build_agent(model=…); omit = target's own
+  judge: claude-cli:claude-sonnet-5         # LLM-as-judge
+  generator: claude-cli:claude-sonnet-5     # authors intents/scenarios/cases/mocks/analysis
 constraints:
   - "Never call issue_refund before the customer explicitly confirms with yes."
-coverage: {total_cases: 12, per_intent: {happy: 1, failure: 1}, per_failure_category: 1, out_of_intent: 2, multi_turn_share: 0.15}
+instructions: |                             # free-text general rules for the generator
+  Customers write short, impatient messages. Prefer realistic order ids.
+feedback: []                                # reviewer comments appended between runs (see the feedback loop)
+coverage: {total_cases: 12, per_intent: {happy: 1, failure: 1}, per_failure_category: 1, out_of_intent: 2, multi_turn_share: 0.15, per_tool_edge_cases: 2}
 evaluators: [{type: expected_tools}, {type: contains}, {type: contract}, {type: correctness}]
 thresholds: {default: 0.7, metrics: {expected_tools: 0.8}, slice_min: 0.5, overall_pass: 0.75}
 runs: {repeats: 2}
@@ -203,11 +232,54 @@ explicit human authorization recorded in every case's review note. Without it th
 stops at `awaiting_review`, writes the report, and you either approve by hand
 (`evalbuilder review DATASET --approve ids…`) or flip the config and `--resume`.
 
-### Resume
+### Resume, stop early, feedback loop
 
 `state.json` records every stage. `--resume` reuses completed stages (the report is
 always rebuilt); `--resume --from STAGE` regenerates from a stage on, e.g. after
 editing thresholds (`--from aggregate`) or the agent (`--from run`).
+
+`--until STAGE` stops deliberately after a stage (later stages are `skipped` with the
+reason `stopped after <stage> (--until)`, the report still lands, exit code 0). The
+typical loop:
+
+```bash
+evalbuilder pipeline run cfg.yaml --until dataset          # intents, mocks, cases — nothing runs yet
+# read dataset.json / mock-rules.json (or the UI), then add a comment to the config:
+#   feedback:
+#     - {at: 2026-08-28T10:00:00, note: "more multi-turn refund cases; EU order ids", from_stage: dataset}
+evalbuilder pipeline run cfg.yaml --resume --from dataset --until dataset   # regenerate with the feedback
+evalbuilder pipeline run cfg.yaml --resume                                 # approve (review gate) + evaluate
+```
+
+`instructions` (free text) and every `feedback` entry are appended to the generator's
+prompts (map, mocks, cases, self-review, simulation scenarios) as `USER INSTRUCTIONS`
+and `REVIEWER FEEDBACK`. Cases already approved or rejected by hand (`evalbuilder review`,
+the UI) are kept: the review stage only judges `pending` cases and succeeds with
+`already_reviewed` when none are left.
+
+### Tool schemas and edge cases
+
+Discovery records for every tool its `args_schema` (explicit pydantic `args_schema=`
+class or the signature, with `$defs` for nested models), `output_schema` (return
+annotation: pydantic model, TypedDict, dataclass or primitive), `schema_source`
+(`args_schema` / `annotations` / `ast`), the pydantic `models` involved, and whether the
+docstring declares it `side_effecting`. From those schemas `evalbuilder.tool_schemas`
+derives deterministic **edge cases** (no LLM):
+
+| kind | trigger | failure mode | expected behavior |
+|---|---|---|---|
+| `missing_required` | a required argument | `input_validation` | ask for the field, never call the tool with a placeholder |
+| `wrong_type` | non-string type, `pattern`, `format`, nested model | `input_validation` | do not pass the malformed value; ask or explain |
+| `out_of_enum` | `Literal` / `enum` | `input_validation` | offer the allowed values |
+| `boundary` | `ge/le/gt/lt`, `min/max_length`, `min/max_items` | `input_validation` | refuse / adjust and explain the limit |
+| `malformed_output` | output schema with required fields | `tool_error_handling` | say the result was incomplete, never fabricate |
+
+`coverage.per_tool_edge_cases` (default 2) turns the first N per tool into `schema-edge`
+coverage cells; the generator writes the user message and contract, and for
+`malformed_output` the pipeline itself injects a per-case mock override that drops a
+required field. Generated fixtures are validated against `output_schema` (non-conforming
+defaults are replaced by a schema-conformant sample, bad variants dropped, all reported
+in `problems`), and `expected_tools[].args` are type-checked against `args_schema`.
 
 ### Verdict and report
 
@@ -282,7 +354,7 @@ Directories written before this convention (`mocks.json`, `plan.json`,
 The standalone commands write with the same names (`evalbuilder score` →
 `score-report-<id>.json`, `evalbuilder simulate` → `simulation-<id>.json`).
 
-## Report UI
+## UI: setup, run & review, report
 
 ```bash
 uv sync --extra ui
@@ -292,15 +364,32 @@ uv run evalbuilder ui DIR --port 8600 --headless   # server only
 uv run streamlit run src/evalbuilder/ui/app.py -- --dir DIR     # equivalent
 ```
 
+**Pipeline setup** initialises a run interactively: pick an example agent (any module
+under `examples/` exposing `TOOLS` + `build_agent`) or type source/module, *Discover
+structure* (AST + live introspection, no LLM) shows nodes, tools, schema sources,
+pydantic models, side effects and the derived edge cases; the form covers models
+(Claude Sonnet 5 via claude-cli by default), constraints, **free-text general rules and
+instructions**, coverage (incl. edge cases per tool), evaluators, thresholds, repeats,
+mock policy, review approval and paths; *Generate YAML* fills an editable YAML editor;
+*Validate* / *Save config* / *Generate dataset & mocks only* / *Run full pipeline*.
+
+**Run & review** follows the background job (`job.json` + `pipeline.log`, stage table
+refreshed every 2 s), and after a dataset-only run shows the review loop: dataset
+summary (statuses, failure modes, schema-edge cases, mocked tools), a comment box whose
+text is appended to the config's `feedback`, *Save feedback & regenerate* (`--resume
+--from map|mocks|dataset --until dataset`), and *Approve remaining cases & run
+evaluation* (records the approver, rejects selected cases, `--resume`). *Open results*
+loads the output directory into the report pages.
+
 The sidebar loads a pipeline output directory (by file name) or **uploaded files**
-(identified by their embedded `schema` id, falling back to the file name). Pages:
+(identified by their embedded `schema` id, falling back to the file name). Report pages:
 
 | page | shows |
 |---|---|
 | Overview | verdict + reasons, overall score, metric pass rates vs thresholds, coverage, stability, stage timeline, analysis summary, problems |
-| Agent graph & tools | the graph as Graphviz (AST edges or compiled/live edges, tool links), node prompts, tools with argument schemas, constraints, topics |
+| Agent graph & tools | the graph as Graphviz (AST edges or compiled/live edges, tool links), node prompts, tools with argument/output schemas, pydantic models, side effects and schema edge cases, constraints, topics |
 | Intents & scenarios | intents with evidence and case counts, scenarios by intent (happy/failure), failure scenarios, structurally applicable failure types |
-| Dataset & mocks | filterable case table, case detail (inputs, references, metadata, per-case mocks, review note), review counts, tool fixtures |
+| Dataset & mocks | filterable case table (incl. schema-edge kind), case detail (inputs, references, metadata, edge, per-case mocks, review note), review counts, tool fixtures |
 | Coverage | planned vs covered by kind, plan cells, gaps |
 | Eval results | aggregate metrics vs thresholds, per-run metrics, slice heatmaps (intent / failure mode / variant), per-case score matrix across runs, failing cases with judge comments, case drill-down with trajectory transcript and scores per run |
 | Stability | unstable cases / outputs / evaluators, suspect judge comments, per-case hashes |
@@ -408,17 +497,23 @@ configured; a missing key is degraded, never blocking.
 ## Testing
 
 ```bash
-uv run pytest                     # offline suite (~150 tests): CLI, pipeline e2e with scripted models,
-                                  # providers, naming convention, UI loader, headless page tests (AppTest)
-uv run pytest -m ui               # Playwright browser tests: starts the Streamlit app on a free port
-                                  # against docs/examples/support-bot and walks every page
-EVALBUILDER_UI_SHOTS=shots uv run pytest -m ui    # also saves a screenshot per page
+uv run pytest                     # offline suite (~230 tests): CLI, pipeline e2e with scripted models and
+                                  # offline generators, tool schemas / edge cases, jobs, providers, naming
+                                  # convention, UI loader, headless page tests (AppTest) incl. setup / run pages
+uv run pytest -m ui               # Playwright browser tests: report pages (tests/ui/test_playwright.py) and the
+                                  # interactive flows (tests/ui/test_playwright_flows.py): setup → discover →
+                                  # generate/validate/save YAML; dataset-only run → review → feedback →
+                                  # regenerate → approve → evaluate → results; full autonomous run
+EVALBUILDER_UI_SHOTS=shots uv run pytest -m ui    # also saves screenshots
 ```
 
 Browser tests skip themselves when playwright/chromium is missing
-(`uv run playwright install chromium`). The Streamlit pages are also exercised without a
-browser via `streamlit.testing.v1.AppTest` (`tests/test_ui_pages.py`), so the default
-suite already covers rendering.
+(`uv run playwright install chromium`). The flow tests run the real pipeline as a
+background job with offline models (`scripted:examples.support_bot.agent:default_scripted_model`
++ `scripted:examples.support_bot.offline:generator_model`) and assert on the artifacts
+written to disk, so they finish in seconds. The Streamlit pages are also exercised without
+a browser via `streamlit.testing.v1.AppTest` (`tests/test_ui_pages.py`,
+`tests/test_ui_pipeline_pages.py`).
 
 ## Troubleshooting
 

@@ -544,3 +544,7 @@ def pipeline_report(path: Path) -> None:
         typer.echo(f"no report at {report_path}", err=True)
         raise typer.Exit(1)
     typer.echo(summary_text(json.loads(report_path.read_text())))
+
+
+if __name__ == "__main__":  # `python -m evalbuilder.cli …` (background jobs)
+    app()

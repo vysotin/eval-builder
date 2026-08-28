@@ -392,6 +392,11 @@ def model_from_spec(spec: str, **overrides: Any):
         module_name, _, fn_name = model.rpartition(":")
         if not module_name:
             raise ValueError("scripted spec must be scripted:module.path:factory")
+        import sys
+
+        cwd = os.getcwd()
+        if cwd not in sys.path:  # scripted factories usually live in the repo, next to the target
+            sys.path.insert(0, cwd)
         return getattr(importlib.import_module(module_name), fn_name)()
     from evalbuilder.providers import build_model
 

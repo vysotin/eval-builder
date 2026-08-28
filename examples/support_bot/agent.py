@@ -276,6 +276,7 @@ def default_scripted_model() -> ScriptedChatModel:
                 lambda m, _msgs: tool_call("lookup_order", {"order_id": m.group(1)}),
             ),
             (r"refund|return", lambda m, _msgs: ai("Which order would you like refunded? Please share the order id.")),
+            (r"order|track|deliver", lambda m, _msgs: ai("Which order would you like me to check? Please share the order id.")),
             (r"(.+)", lambda m, _msgs: tool_call("search_kb", {"query": m.group(1).strip()[:80]})),
         ],
     )

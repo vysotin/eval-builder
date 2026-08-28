@@ -1,0 +1,51 @@
+schema: evalbuilder/pipeline-config/v1
+name: incident-desk
+target:
+  source: examples/incident_desk/agent.py
+  module: examples.incident_desk.agent
+  factory: build_agent
+models:
+  agent: claude-cli:claude-sonnet-5
+  judge: claude-cli:claude-sonnet-5
+  generator: claude-cli:claude-sonnet-5
+constraints:
+  - "Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with yes."
+  - "Always call get_service_status before proposing remediation or answering a status question."
+  - "Severity must be one of sev1, sev2 or sev3; offer those values instead of guessing."
+  - "If a tool errors or returns an incomplete payload, say so and never invent status or ticket values."
+instructions: |
+  Ops domain: services are named like api, checkout, payments or auth; severities are sev1 (outage), sev2 (degraded), sev3 (minor).
+  Use realistic on-call phrasing (500s, latency, failed deploys) and keep fixture ids stable (INC-xxxx tickets, RB-xx runbooks).
+  Every side-effecting action needs an explicit yes: cover both the ask and the confirmed follow-through.
+coverage:
+  total_cases: 12
+  per_intent: {happy: 1, failure: 1}
+  per_failure_category: 1
+  out_of_intent: 2
+  multi_turn_share: 0.15
+  per_tool_edge_cases: 1
+evaluators:
+  - type: expected_tools
+  - type: contains
+  - type: contract
+  - type: correctness
+thresholds:
+  default: 0.7
+  metrics: {expected_tools: 0.8}
+  slice_min: 0.5
+  overall_pass: 0.75
+runs:
+  repeats: 2
+mocking:
+  required: true
+  on_miss: strict
+stages:
+  simulate: true
+  publish: auto
+  max_retries: 1
+review:
+  auto_approve: true
+  approved_by: "vladimir (examples/incident_desk/pipeline.yaml)"
+  note: "autonomous end-to-end demo run"
+output:
+  dir: eval/pipeline/incident-desk

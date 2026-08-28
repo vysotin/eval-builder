@@ -16,15 +16,17 @@ review:
 | Section | Keys (defaults) | Notes |
 |---|---|---|
 | `target` | `source`, `module`, `factory: build_agent`, `root_node: null` | `factory` is the graph factory ("root node path"); `root_node` is recorded in the agent map |
-| `models` | `agent: null`, `judge: claude-cli:sonnet`, `generator: claude-cli:sonnet` | `provider:model[@effort]` — `claude-cli:<model>` (subscription), `anthropic:…` / `claude:…`, `openai:…`, `gemini:…` / `google:…` (API keys, see below), `scripted:module:factory` (tests). `agent: null` keeps the target's own model |
+| `models` | `agent: null`, `judge: claude-cli:claude-sonnet-5`, `generator: claude-cli:claude-sonnet-5` | `provider:model[@effort]` — `claude-cli:<model>` (Claude Code subscription; Sonnet 5 by default, `claude-cli:sonnet` = latest Sonnet), `anthropic:…` / `claude:…`, `openai:…`, `gemini:…` / `google:…` (API keys, see below), `scripted:module:factory` (tests, offline generators). `agent: null` keeps the target's own model |
 | `constraints` | `[]` | Free-text test constraints; reach every generation prompt and become judge `contract`s |
-| `coverage` | `total_cases: 20`, `per_intent: {happy: 2, failure: 1}`, `per_failure_category: 1`, `out_of_intent: 2`, `multi_turn_share: 0.15` | Per-cell counts are hard minimums; `total_cases` is a floor filled with extra happy variants |
+| `instructions` | `""` | Free-text general rules for the generator (domain notes, emphasis, exclusions); appended to every generation prompt as `USER INSTRUCTIONS` |
+| `feedback` | `[]` | Reviewer comments `{at, note, from_stage}` appended between runs (UI *Save feedback*, or by hand); appended to every generation prompt as `REVIEWER FEEDBACK` |
+| `coverage` | `total_cases: 20`, `per_intent: {happy: 2, failure: 1}`, `per_failure_category: 1`, `out_of_intent: 2`, `multi_turn_share: 0.15`, `per_tool_edge_cases: 2` | Per-cell counts are hard minimums; `total_cases` is a floor filled with extra happy variants; `per_tool_edge_cases` = schema-derived edge cases per tool (`schema-edge` cells: missing / wrong / out-of-enum / boundary input, malformed output) |
 | `evaluators` | `expected_tools, contains, contract, correctness` | Same specs as `evaluators.yaml`: deterministic (`expected_tools`, `contains`, `json_valid`, `trajectory_match`), OpenEvals (`correctness`, `contract`, `openevals` + `prompt: NAME_PROMPT`, or any rubric name like `hallucination`), AgentEvals (`trajectory_llm`), `custom` |
 | `thresholds` | `default: 0.8`, `metrics: {}`, `slice_min: 0.5`, `overall_pass: 0.8` | Pass rate per metric, per slice (intent / failure_mode / variant), and overall (mean of metric pass rates) |
 | `runs` | `repeats: 3` | Repeats feed stability detection |
 | `mocking` | `required: true`, `on_miss: strict` | Every tool from `TOOLS` gets a wildcard fixture; per-case rules inject errors/injections |
 | `stages` | `skip: []`, `max_retries: 1`, `simulate: true`, `publish: auto` | `publish: auto` runs only when `LANGSMITH_API_KEY` is set |
-| `review` | `auto_approve: false`, `approved_by: ""`, `note: ""` | Without `auto_approve` the pipeline stops at `awaiting_review` |
+| `review` | `auto_approve: false`, `approved_by: ""`, `note: ""` | Without `auto_approve` the pipeline stops at `awaiting_review`; cases already approved/rejected by hand or in the UI are kept (`already_reviewed`) |
 | `output` | `dir: eval/pipeline/<name>` | See "Artifacts" below |
 | `langsmith` | `dataset_name: null` | Defaults to `name` |
 
@@ -63,8 +65,9 @@ artifact embeds `"schema": "evalbuilder/<kind>/v1"`. Older directories (`mocks.j
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |
 | `simulation.json` | `evalbuilder/simulation/v1` | simulate | transcripts, violations |
 | `analysis.json` | `evalbuilder/analysis/v1` | analyze | patterns, recommendations |
-| `state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status, problems (drives `--resume`) |
+| `state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status, problems, `data.stopped_after` (drives `--resume`) |
 | `report.json` | `evalbuilder/pipeline-report/v1` | report | the final report (also lists `artifacts`) |
+| `job.json` (+ `pipeline.log`) | `evalbuilder/pipeline-job/v1` | UI | background run launched from the UI: mode, argv, pid, timing, exit code |
 
 `evalbuilder ui <dir>` renders all of them; `evalbuilder ui` alone lets you pick a
 directory or upload files.
@@ -90,3 +93,26 @@ directory or upload files.
 
 Verdict: `incomplete` if any required stage (preflight … aggregate) did not succeed;
 otherwise `pass`/`fail` from thresholds.
+
+## Run control
+
+| flag | effect |
+|---|---|
+| `--until STAGE` | stop deliberately after `STAGE`; later stages are `skipped` (`stopped after <stage> (--until)`), the report lands, exit code 0. `--until dataset` = intents + mocks + cases only |
+| `--resume` | reuse completed stages from `state.json` (the report is always rebuilt) |
+| `--resume --from STAGE` | invalidate `STAGE` and everything after it, then rerun |
+
+Feedback loop: `--until dataset` → append a `feedback` entry (or `instructions`) to the
+config → `--resume --from dataset --until dataset` (or `--from map` / `--from mocks`) →
+`--resume` to approve and evaluate. The UI's *Run & review* page drives exactly these
+commands as background jobs.
+
+## Tool schemas in the agent map
+
+Every `tools[]` entry carries `args_schema` (explicit `args_schema=` pydantic class or
+the signature, `$defs` for nested models), `output_schema` (return annotation),
+`schema_source` (`args_schema` | `annotations` | `ast`), `models`, `side_effecting` and
+`edge_cases` (`{id, kind, field, detail, failure_mode, expected_behavior, evidence}`,
+kinds `missing_required`, `wrong_type`, `out_of_enum`, `boundary`, `malformed_output`).
+Mock fixtures are validated against `output_schema`; `malformed_output` cases get a
+pipeline-injected per-case mock override missing a required field.

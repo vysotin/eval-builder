@@ -79,10 +79,11 @@ def _render_preview(preview: dict) -> None:
             with c2:
                 st.markdown("`output_schema`")
                 code_json(t.get("output_schema") or {})
-            table([
-                {"kind": e["kind"], "field": e.get("field") or "—", "failure mode": e["failure_mode"], "expected behavior": e["expected_behavior"]}
-                for e in t.get("edge_cases") or []
-            ])
+            edges = t.get("edge_cases") or []
+            st.markdown("**Edge cases derived from the schemas**" if edges else "_no schema edge cases (no constraints, enums or required fields)_")
+            for e in edges:
+                field = f" `{e['field']}`" if e.get("field") else ""
+                st.markdown(f"- **{e['kind']}**{field} → `{e['failure_mode']}`: {e['expected_behavior']}")
 
 
 def render() -> None:
