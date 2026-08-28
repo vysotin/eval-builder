@@ -16,6 +16,7 @@ import re
 from functools import lru_cache
 
 from evalbuilder.config import provider_ready
+from evalbuilder.mocking import args_subset
 from evalbuilder.schemas import Case, CaseRun, Dataset, Report, RunArtifact
 
 SLICE_DIMS = ("intent", "failure_mode", "variant")
@@ -79,7 +80,7 @@ def _require_ready(model: str) -> None:
 
 
 def _args_subset(expected: dict, actual: dict) -> bool:
-    return all(actual.get(k) == v for k, v in (expected or {}).items())
+    return args_subset(expected, actual)
 
 
 def _expected_tools(case: Case, case_run: CaseRun) -> dict:

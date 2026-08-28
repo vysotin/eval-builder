@@ -187,3 +187,20 @@ Widgets carry stable `key`s and headings carry anchors for Playwright.
 
 README (pipeline control: `--until`, feedback loop, UI setup/run pages, schema edge
 cases, new examples), config reference, pipeline skill, memory.
+
+## 9. Implementation notes (deviations found while building)
+
+- Jobs run through a wrapper entry point (`python -m evalbuilder.pipeline.jobs run
+  job.json`) that finalises `job.json` itself; `evalbuilder.cli` gained a `__main__`
+  guard so `python -m evalbuilder.cli` works from the wrapper.
+- `mocking.match_rule` / `evaluators` subset matching became recursive for nested
+  (pydantic-model) arguments, and matcher validation (`matchArgs`, `expected_tools[].args`)
+  uses `validate(partial=True)` — the live run showed the generator writes partial nested
+  matchers, which the strict validator rejected.
+- `@tool(handle_tool_error=True)` is not accepted by the installed langchain_core; the
+  examples set `handle_tool_error = True` on the tool object. `loan_desk.document_status`
+  gained an optional `Literal` `doc_type` so a top-level enum edge exists.
+- Playwright: Streamlit 1.62 renders select widgets with react-aria (`[role='option']`),
+  `st.dataframe` on canvas (no DOM text), and the status widget can appear late after a
+  click; the flow suite polls `job.json` on disk before trusting the page.
+- `docs/examples/incident-desk/` holds the committed live run (Sonnet 5 via claude-cli).

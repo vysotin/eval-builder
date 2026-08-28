@@ -129,3 +129,10 @@ def test_edge_cases_round_robin_and_details():
     assert malformed["failure_mode"] == "tool_error_handling" and malformed["field"] is None
     assert ts.edge_cases({"name": "bare"}) == []
     assert ts.tool_edge_cases([{"name": "ping", "args_schema": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"]}}])["ping"][0]["kind"] == "missing_required"
+
+
+def test_partial_validation_skips_required_for_matchers():
+    nested = ts.resolve_args_schema(create_ticket)[0]
+    partial = {"ticket": {"priority": "p1"}}
+    assert ts.validate(partial, nested) and ts.validate(partial, nested, partial=True) == []
+    assert ts.validate({"ticket": {"priority": "p9"}}, nested, partial=True) == ["$.ticket.priority: 'p9' not in enum ['p1', 'p2', 'p3']"]

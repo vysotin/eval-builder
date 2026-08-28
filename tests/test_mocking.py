@@ -144,3 +144,18 @@ def test_with_fallback_and_verify_only_approved():
     assert [m["case"] for m in verify_dataset(ds)] == [bad.id]
     set_review(ds, [bad.id], "rejected", "no rule")
     assert verify_dataset(ds, only_approved=True) == []
+
+
+def test_nested_subset_matching_for_model_arguments():
+    from evalbuilder.mocking import args_subset, match_rule
+
+    rules = [
+        {"matchArgs": {"ticket": {"service": "api", "severity": "sev1"}}, "response": {"ticket_id": "INC-1"}},
+        {"matchArgs": {}, "response": {"ticket_id": "INC-0"}},
+    ]
+    full = {"ticket": {"title": "API down", "service": "api", "severity": "sev1", "summary": "500s"}}
+    assert match_rule(rules, full)["response"] == {"ticket_id": "INC-1"}
+    assert match_rule(rules, {"ticket": {"service": "api", "severity": "sev2"}})["response"] == {"ticket_id": "INC-0"}
+    assert match_rule(rules, {"ticket": "text"})["response"] == {"ticket_id": "INC-0"}
+    assert args_subset({"a": {"b": 1}}, {"a": {"b": 1, "c": 2}}) and not args_subset({"a": {"b": 1}}, {"a": {"c": 2}})
+    assert args_subset({}, {"x": 1}) and not args_subset({"x": 1}, {})

@@ -367,7 +367,7 @@ def _present_arg_problems(args: dict, tool: dict) -> list[str]:
     problems: list[str] = []
     for key, value in (args or {}).items():
         if key in props:
-            problems += tool_schemas.validate(value, props[key], defs, f"$.{key}")
+            problems += tool_schemas.validate(value, props[key], defs, f"$.{key}", partial=True)
     return problems
 
 

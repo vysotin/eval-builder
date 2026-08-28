@@ -123,8 +123,10 @@ def _type_ok(value: Any, type_name: str) -> bool:
     return isinstance(value, _TYPES.get(type_name, (object,)))
 
 
-def validate(value: Any, schema: dict | None, defs: dict | None = None, path: str = "$") -> list[str]:
-    """Problems of `value` against `schema` (empty list = conforms). Unknown keywords are ignored."""
+def validate(value: Any, schema: dict | None, defs: dict | None = None, path: str = "$", partial: bool = False) -> list[str]:
+    """Problems of `value` against `schema` (empty list = conforms). Unknown keywords are ignored.
+    `partial=True` skips `required` at every level (for subset matchers such as mock `matchArgs`
+    and `expected_tools[].args`)."""
     if not schema:
         return []
     defs = defs if defs is not None else dict(schema.get("$defs", {}))
@@ -138,13 +140,13 @@ def validate(value: Any, schema: dict | None, defs: dict | None = None, path: st
     for key in ("anyOf", "oneOf"):
         if key in schema:
             branches = schema[key]
-            results = [validate(value, b, defs, path) for b in branches]
+            results = [validate(value, b, defs, path, partial) for b in branches]
             if not any(not r for r in results):
                 return [f"{path}: matches no {key} branch ({'; '.join(r[0] for r in results if r)})"]
             return []
     if "allOf" in schema:
         for b in schema["allOf"]:
-            errors += validate(value, b, defs, path)
+            errors += validate(value, b, defs, path, partial)
 
     types = schema.get("type")
     if types is not None:
@@ -154,12 +156,12 @@ def validate(value: Any, schema: dict | None, defs: dict | None = None, path: st
 
     if isinstance(value, dict) and (schema.get("type") == "object" or "properties" in schema or "required" in schema):
         props = schema.get("properties", {}) or {}
-        for req in schema.get("required", []) or []:
+        for req in ([] if partial else schema.get("required", []) or []):
             if req not in value:
                 errors.append(f"{path}: missing required {req!r}")
         for name, sub in props.items():
             if name in value:
-                errors += validate(value[name], sub, defs, f"{path}.{name}")
+                errors += validate(value[name], sub, defs, f"{path}.{name}", partial)
         if schema.get("additionalProperties") is False:
             for extra in value:
                 if extra not in props:
@@ -168,7 +170,7 @@ def validate(value: Any, schema: dict | None, defs: dict | None = None, path: st
         items = schema.get("items")
         if isinstance(items, dict):
             for i, item in enumerate(value):
-                errors += validate(item, items, defs, f"{path}[{i}]")
+                errors += validate(item, items, defs, f"{path}[{i}]", partial)
         if "minItems" in schema and len(value) < schema["minItems"]:
             errors.append(f"{path}: fewer than {schema['minItems']} items")
         if "maxItems" in schema and len(value) > schema["maxItems"]:

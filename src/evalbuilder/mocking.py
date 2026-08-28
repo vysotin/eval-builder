@@ -15,13 +15,29 @@ class MockMissError(Exception):
         )
 
 
+def args_subset(expected: dict, actual: dict) -> bool:
+    """`expected` ⊆ `actual`, recursively for nested objects (pydantic-model arguments):
+    every expected key must be present with an equal value, or a nested subset."""
+    if not isinstance(actual, dict):
+        return False
+    for key, value in (expected or {}).items():
+        if key not in actual:
+            return False
+        if isinstance(value, dict) and isinstance(actual[key], dict):
+            if not args_subset(value, actual[key]):
+                return False
+        elif actual[key] != value:
+            return False
+    return True
+
+
 def match_rule(rules: list[dict], args: dict) -> dict | None:
-    """First rule whose matchArgs is a subset of args; {} matches anything."""
+    """First rule whose matchArgs is a (recursive) subset of args; {} matches anything."""
     for rule in rules:
         match_args = rule.get("matchArgs", {})
         if not match_args:
             return rule
-        if all(args.get(k) == v for k, v in match_args.items()):
+        if args_subset(match_args, args):
             return rule
     return None
 
