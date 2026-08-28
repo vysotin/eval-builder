@@ -125,6 +125,10 @@ ARTIFACTS: dict[str, ArtifactKind] = {
             "pipeline_report", "report.json", "evalbuilder/pipeline-report/v1", "report",
             "The final report: verdict, stages, metrics, slices, stability, coverage, analysis, problems.",
         ),
+        ArtifactKind(
+            "pipeline_job", "job.json", "evalbuilder/pipeline-job/v1", "ui",
+            "A pipeline run launched in the background (UI): mode, argv, pid, timing, exit code, log path.",
+        ),
     ]
 }
 

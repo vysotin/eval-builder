@@ -68,3 +68,63 @@ def test_ast_names_llm_nodes_by_assignment_and_skips_shim():
     support = next(n for n in m.graph["nodes"] if n["id"] == "support_agent")
     assert "issue_refund ONLY" in support["prompt"]
     assert "lookup_order" in support["tools"]
+
+
+PYDANTIC_SOURCE = '''
+from typing import Literal
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+
+class Query(BaseModel):
+    """Search query."""
+    text: str = Field(description="what to search")
+    severity: Literal["low", "high"] = "low"
+    limit: int = Field(3, ge=1, le=10)
+
+class Receipt(BaseModel):
+    ticket_id: str
+    url: str | None = None
+
+class Ticket(BaseModel):
+    title: str = Field(..., min_length=3)
+    priority: Literal["p1", "p2"]
+    tags: list[str] = []
+    receipt: Receipt | None = None
+
+@tool(args_schema=Query)
+def search(text: str, severity: str = "low", limit: int = 3) -> dict:
+    """Search things."""
+    return {}
+
+@tool
+def create(ticket: Ticket, note: str | None = None) -> Receipt:
+    """Create a ticket. Side-effecting: only call after the user confirms."""
+    return Receipt(ticket_id="T1")
+
+TOOLS = [search, create]
+'''
+
+
+def test_ast_discovery_resolves_pydantic_schemas(tmp_path):
+    src = tmp_path / "agent.py"
+    src.write_text(PYDANTIC_SOURCE)
+    amap = discover_from_source(src)
+    by_name = {t["name"]: t for t in amap.tools}
+    search = by_name["search"]
+    assert search["schema_source"] == "args_schema"
+    assert search["args_schema"]["properties"]["severity"]["enum"] == ["low", "high"]
+    assert search["args_schema"]["properties"]["limit"] == {"type": "integer", "default": 3, "minimum": 1, "maximum": 10}
+    assert search["args_schema"]["required"] == ["text"] and search["args_schema"]["description"] == "Search query."
+    create = by_name["create"]
+    assert create["schema_source"] == "ast" and create["side_effecting"] is True
+    assert create["args_schema"]["properties"]["ticket"] == {"$ref": "#/$defs/Ticket"}
+    assert set(create["args_schema"]["$defs"]) == {"Ticket", "Receipt"}
+    ticket = create["args_schema"]["$defs"]["Ticket"]
+    assert ticket["required"] == ["title", "priority"] and ticket["properties"]["title"]["minLength"] == 3
+    assert ticket["properties"]["tags"] == {"type": "array", "items": {"type": "string"}, "default": []}
+    assert create["args_schema"]["properties"]["note"] == {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None}
+    assert create["output_schema"]["title"] == "Receipt" and create["output_schema"]["required"] == ["ticket_id"]
+    assert create["models"] == ["Receipt", "Ticket"]
+    kinds = [e["kind"] for e in create["edge_cases"]]
+    assert kinds[:3] == ["missing_required", "wrong_type", "malformed_output"]
+    assert amap.app["models"] == ["Query", "Receipt", "Ticket"]

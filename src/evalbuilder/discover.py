@@ -7,6 +7,7 @@ import hashlib
 import importlib
 from pathlib import Path
 
+from evalbuilder import tool_schemas
 from evalbuilder.schemas import AgentMap
 
 DEFAULT_DECISIONS = [
@@ -24,22 +25,168 @@ _TYPE_MAP = {
     "float": "number",
     "bool": "boolean",
     "list": "array",
+    "List": "array",
     "dict": "object",
+    "Dict": "object",
+    "Any": None,
 }
 
+_MODEL_BASES = {"BaseModel", "TypedDict"}
 _SKIP_PARAMS = {"self", "ctx", "config", "state", "tool_context", "context"}
+_FIELD_KEYWORDS = {
+    "description": "description", "ge": "minimum", "le": "maximum", "gt": "exclusiveMinimum",
+    "lt": "exclusiveMaximum", "min_length": "minLength", "max_length": "maxLength", "pattern": "pattern",
+}
 
 
-def _annotation_to_type(node) -> dict:
+def _literal_value(node):
+    if isinstance(node, ast.Constant):
+        return node.value
+    return ast.unparse(node)
+
+
+def _annotation_schema(node, models: dict[str, dict]) -> dict:
+    """JSON-schema fragment for a type annotation; model names become `$ref`s."""
     if node is None:
         return {}
-    name = ast.unparse(node)
-    if "Context" in name:
-        return {"skip": True}
-    base = name.split("[", 1)[0]
-    if base in _TYPE_MAP:
-        return {"type": _TYPE_MAP[base]}
+    if isinstance(node, ast.Constant) and node.value is None:
+        return {"type": "null"}
+    if isinstance(node, ast.Name):
+        if node.id in models:
+            return {"$ref": f"#/$defs/{node.id}"}
+        mapped = _TYPE_MAP.get(node.id, "?")
+        return {} if mapped in (None, "?") else {"type": mapped}
+    if isinstance(node, ast.Attribute):
+        return _annotation_schema(ast.Name(id=node.attr), models)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        branches = [_annotation_schema(node.left, models), _annotation_schema(node.right, models)]
+        return {"anyOf": branches}
+    if isinstance(node, ast.Subscript):
+        base = node.value.id if isinstance(node.value, ast.Name) else (node.value.attr if isinstance(node.value, ast.Attribute) else "")
+        args = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        if base == "Literal":
+            return {"enum": [_literal_value(a) for a in args]}
+        if base == "Optional":
+            return {"anyOf": [_annotation_schema(args[0], models), {"type": "null"}]}
+        if base in ("list", "List", "Sequence", "Iterable"):
+            return {"type": "array", "items": _annotation_schema(args[0], models)}
+        if base in ("dict", "Dict", "Mapping"):
+            return {"type": "object"}
+        if base in ("Annotated",):
+            return _annotation_schema(args[0], models)
+        return _annotation_schema(node.value, models)
     return {}
+
+
+def _field_schema(value, schema: dict) -> tuple[dict, bool]:
+    """Apply a `Field(...)` default/keywords; returns (schema, required)."""
+    schema = dict(schema)
+    if value is None:
+        return schema, True
+    if isinstance(value, ast.Call) and _call_name(value) == "Field":
+        default = value.args[0] if value.args else None
+        for kw in value.keywords:
+            if kw.arg == "default":
+                default = kw.value
+            elif kw.arg in _FIELD_KEYWORDS and isinstance(kw.value, ast.Constant):
+                schema[_FIELD_KEYWORDS[kw.arg]] = kw.value.value
+        if default is None or (isinstance(default, ast.Constant) and default.value is Ellipsis):
+            return schema, True
+        if isinstance(default, ast.Constant):
+            schema["default"] = default.value
+        return schema, False
+    if isinstance(value, ast.Constant):
+        if value.value is Ellipsis:
+            return schema, True
+        schema["default"] = value.value
+    elif isinstance(value, (ast.List, ast.Dict)):
+        try:
+            schema["default"] = ast.literal_eval(value)
+        except ValueError:
+            pass
+    return schema, False
+
+
+def _is_model_class(node: ast.ClassDef) -> bool:
+    for base in node.bases:
+        name = base.id if isinstance(base, ast.Name) else (base.attr if isinstance(base, ast.Attribute) else "")
+        if name in _MODEL_BASES:
+            return True
+    return False
+
+
+def _pydantic_models(tree: ast.Module) -> dict[str, dict]:
+    """JSON schemas of the pydantic / TypedDict classes defined at module level."""
+    models: dict[str, dict] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and _is_model_class(node):
+            models[node.name] = {}  # placeholder so fields can reference each other
+    for node in tree.body:
+        if not (isinstance(node, ast.ClassDef) and node.name in models):
+            continue
+        props: dict = {}
+        required: list[str] = []
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                schema, is_required = _field_schema(stmt.value, _annotation_schema(stmt.annotation, models))
+                props[stmt.target.id] = schema
+                if is_required:
+                    required.append(stmt.target.id)
+        entry = {"type": "object", "title": node.name, "properties": props, "required": required}
+        doc = ast.get_docstring(node)
+        if doc:
+            entry["description"] = doc
+        models[node.name] = entry
+    return models
+
+
+def _refs_in(schema, out: set[str]) -> None:
+    if isinstance(schema, dict):
+        ref = schema.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            out.add(ref.split("/")[-1])
+        for v in schema.values():
+            _refs_in(v, out)
+    elif isinstance(schema, list):
+        for v in schema:
+            _refs_in(v, out)
+
+
+def _with_defs(schema: dict, models: dict[str, dict]) -> dict:
+    """Attach `$defs` for every model the schema references (transitively)."""
+    needed: set[str] = set()
+    _refs_in(schema, needed)
+    done: set[str] = set()
+    while needed - done:
+        name = (needed - done).pop()
+        done.add(name)
+        _refs_in(models.get(name, {}), needed)
+    if done:
+        schema = dict(schema)
+        schema["$defs"] = {n: {k: v for k, v in models[n].items()} for n in sorted(done) if n in models}
+    return schema
+
+
+def _function_schema(fn: ast.FunctionDef, models: dict[str, dict] | None = None) -> dict:
+    models = models or {}
+    properties: dict = {}
+    required: list[str] = []
+    args = fn.args.args
+    defaults_offset = len(args) - len(fn.args.defaults)
+    for i, arg in enumerate(args):
+        if arg.arg in _SKIP_PARAMS:
+            continue
+        name = ast.unparse(arg.annotation) if arg.annotation is not None else ""
+        if "Context" in name or "RunnableConfig" in name:
+            continue
+        properties[arg.arg] = _annotation_schema(arg.annotation, models)
+        if i < defaults_offset:
+            required.append(arg.arg)
+        else:
+            default = fn.args.defaults[i - defaults_offset]
+            if isinstance(default, ast.Constant):
+                properties[arg.arg]["default"] = default.value
+    return _with_defs({"type": "object", "properties": properties, "required": required}, models)
 
 
 def _is_tool_decorator(dec) -> bool:
@@ -51,21 +198,23 @@ def _is_tool_decorator(dec) -> bool:
     return False
 
 
-def _function_schema(fn: ast.FunctionDef) -> dict:
-    properties: dict = {}
-    required: list[str] = []
-    args = fn.args.args
-    defaults_offset = len(args) - len(fn.args.defaults)
-    for i, arg in enumerate(args):
-        if arg.arg in _SKIP_PARAMS:
-            continue
-        info = _annotation_to_type(arg.annotation)
-        if info.get("skip"):
-            continue
-        properties[arg.arg] = {k: v for k, v in info.items() if k != "skip"}
-        if i < defaults_offset:
-            required.append(arg.arg)
-    return {"type": "object", "properties": properties, "required": required}
+def _decorator_args_schema(fn: ast.FunctionDef, models: dict[str, dict]) -> dict | None:
+    """`@tool(args_schema=Model)` → that model's schema (with `$defs`)."""
+    for dec in fn.decorator_list:
+        if isinstance(dec, ast.Call) and _is_tool_decorator(dec):
+            for kw in dec.keywords:
+                if kw.arg == "args_schema" and isinstance(kw.value, ast.Name) and kw.value.id in models:
+                    schema = {k: v for k, v in models[kw.value.id].items() if k != "title"}
+                    return _with_defs(schema, models)
+    return None
+
+
+def _return_schema(fn: ast.FunctionDef, models: dict[str, dict]) -> dict:
+    schema = _annotation_schema(fn.returns, models)
+    if schema.get("$ref"):
+        name = schema["$ref"].split("/")[-1]
+        return _with_defs(dict(models.get(name, {})), models) if name in models else {}
+    return _with_defs(schema, models)
 
 
 def _const_str(node, constants: dict[str, str]) -> str | None:
@@ -103,19 +252,28 @@ def discover_from_source(source_path: Path) -> AgentMap:
                     e.id for e in value.elts if isinstance(e, ast.Name)
                 ]
 
+    models = _pydantic_models(tree)
     tools: list[dict] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and any(
             _is_tool_decorator(d) for d in node.decorator_list
         ):
-            tools.append(
-                {
-                    "name": node.name,
-                    "description": ast.get_docstring(node) or "",
-                    "args_schema": _function_schema(node),
-                    "used_by": [],
-                }
-            )
+            explicit = _decorator_args_schema(node, models)
+            args_schema = explicit if explicit is not None else _function_schema(node, models)
+            output_schema = _return_schema(node, models)
+            doc = ast.get_docstring(node) or ""
+            entry = {
+                "name": node.name,
+                "description": doc,
+                "args_schema": args_schema,
+                "output_schema": output_schema,
+                "schema_source": "args_schema" if explicit is not None else "ast",
+                "models": list(dict.fromkeys(tool_schemas.model_names(args_schema) + tool_schemas.model_names(output_schema))),
+                "side_effecting": bool(tool_schemas.SIDE_EFFECT_RX.search(doc)),
+                "used_by": [],
+            }
+            entry["edge_cases"] = tool_schemas.edge_cases(entry)
+            tools.append(entry)
 
     nodes: list[dict] = []
     edges: list[list[str]] = []
@@ -220,7 +378,7 @@ def discover_from_source(source_path: Path) -> AgentMap:
 
     return AgentMap(
         source_sha256=hashlib.sha256(source.encode()).hexdigest(),
-        app={"source": str(source_path)},
+        app={"source": str(source_path), "models": sorted(models)},
         graph={
             "nodes": nodes,
             "edges": edges,

@@ -119,3 +119,25 @@ def test_resume_invalidate_from_reruns_later_stages(tmp_path):
     ctx = _ctx()
     PipelineRunner(stages, path, resume=True, invalidate_from="b").run(ctx)
     assert ctx.calls == ["b", "c"]
+
+
+def test_stop_after_skips_later_stages_but_report_runs(tmp_path):
+    stages = [
+        Stage("a", _ok("a")),
+        Stage("b", _ok("b"), deps=("a",)),
+        Stage("c", _ok("c"), deps=("b",)),
+        Stage("report", _ok("report"), always=True),
+    ]
+    ctx = _ctx()
+    state = PipelineRunner(stages, tmp_path / "state.json", stop_after="b").run(ctx)
+    assert ctx.calls == ["a", "b", "report"]
+    assert state.stages["c"].status == "skipped" and state.stages["c"].reason == "stopped after b (--until)"
+    assert state.data["stopped_after"] == "b"
+    # resuming without the stop runs the rest from the cache
+    ctx2 = _ctx()
+    state2 = PipelineRunner(stages, tmp_path / "state.json", resume=True).run(ctx2)
+    assert ctx2.calls == ["c", "report"] and state2.stages["c"].status == "ok"
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown stage"):
+        PipelineRunner(stages, tmp_path / "s2.json", stop_after="zzz").run(_ctx())

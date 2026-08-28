@@ -88,6 +88,7 @@ class PipelineRunner:
     max_retries: int = 1
     resume: bool = False
     invalidate_from: str | None = None
+    stop_after: str | None = None  # stop deliberately after this stage (later stages are skipped)
     log: Callable[[str], None] = lambda msg: None
 
     def run(self, ctx: Any, name: str = "pipeline") -> PipelineState:
@@ -102,7 +103,11 @@ class PipelineRunner:
         else:
             state = PipelineState(name=name, started_at=datetime.now(timezone.utc).isoformat())
         ctx.state = state
+        names = [s.name for s in self.stages]
+        if self.stop_after and self.stop_after not in names:
+            raise ValueError(f"unknown stage {self.stop_after!r}")
         stopped: str | None = None
+        stop_reason: str | None = None
 
         for stage in self.stages:
             rec = state.record(stage.name)
@@ -117,7 +122,7 @@ class PipelineRunner:
                 continue
 
             if stopped and not stage.always:
-                self._mark(state, stage, "skipped", reason=f"pipeline stopped at {stopped}")
+                self._mark(state, stage, "skipped", reason=stop_reason or f"pipeline stopped at {stopped}")
                 continue
 
             failed_deps = [d for d in stage.deps if not state.succeeded(d)]
@@ -134,6 +139,10 @@ class PipelineRunner:
             if state.stages[stage.name].status not in OK_STATUSES and not stage.optional:
                 if state.stages[stage.name].status == "awaiting_review":
                     stopped = stage.name
+            if self.stop_after == stage.name and not stopped:
+                stopped = stage.name
+                stop_reason = f"stopped after {stage.name} (--until)"
+                state.data["stopped_after"] = stage.name
         return state
 
     def _mark(self, state: PipelineState, stage: Stage, status: str, reason: str | None = None) -> None:

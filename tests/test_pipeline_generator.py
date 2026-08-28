@@ -198,3 +198,25 @@ def test_plan_topics_rotate_and_out_of_intent_is_guaranteed():
     assert {c.topic for c in intent_cells} == {"orders", "returns", "warranty"}
     oos = [c for c in cells if c.failure_mode == "out_of_scope"]
     assert len(oos) == 1 and oos[0].count == 2 and oos[0].kind == "out-of-intent"
+
+
+def test_schema_scripted_model_dispatches_on_schema_title():
+    from evalbuilder.pipeline.generator import Generator
+    from evalbuilder.testing import SchemaScriptedModel, ScriptMissError, cells_in_prompt
+
+    seen = {}
+
+    def cases(messages):
+        seen["cells"] = cells_in_prompt(messages[-1].content)
+        return {"cases": []}
+
+    model = SchemaScriptedModel(handlers={"agent_map": {"intents": []}, "cases": cases})
+    gen = Generator(model)
+    assert gen.ask("s", "u", {"title": "agent_map"}) == {"intents": []}
+    gen.ask("s", "CELLS TO FILL:\n[{\"cell\": 0}]", {"title": "cases"})
+    assert seen["cells"] == [{"cell": 0}] and model.calls == ["agent_map", "cases"]
+    import pytest
+
+    with pytest.raises(ScriptMissError):
+        gen.ask("s", "u", {"title": "unknown"})
+    assert model.invoke("hi").content == "ok"

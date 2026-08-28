@@ -17,6 +17,7 @@ from evalbuilder import artifacts
 from evalbuilder import discover as discovery
 from evalbuilder import simulate as sim
 from evalbuilder import target as target_mod
+from evalbuilder import tool_schemas
 from evalbuilder.config import Settings, capability_check, provider_ready
 from evalbuilder.evaluators import is_judge_spec, score_run
 from evalbuilder.mocking import merge_mock_rules, verify_dataset, with_fallback, wrap_tools
@@ -228,15 +229,16 @@ def preflight(ctx: PipelineContext) -> dict:
 
 
 def _live_tools(module) -> list[dict]:
+    """Schemas, models, side effects and edge cases of every live tool in `TOOLS`."""
     out = []
     for t in getattr(module, "TOOLS", []) or []:
-        schema: dict = {}
         try:
-            schema = t.tool_call_schema.model_json_schema()
-        except Exception:  # noqa: BLE001
-            schema = {"type": "object", "properties": dict(getattr(t, "args", {}) or {})}
-        schema.pop("title", None)
-        out.append({"name": t.name, "description": t.description or "", "args_schema": schema})
+            out.append(tool_schemas.describe_tool(t))
+        except Exception:  # noqa: BLE001 - keep the bare minimum for odd tool types
+            out.append({"name": t.name, "description": getattr(t, "description", "") or "",
+                        "args_schema": {"type": "object", "properties": dict(getattr(t, "args", {}) or {})},
+                        "output_schema": {}, "schema_source": "annotations", "models": [], "side_effecting": False,
+                        "edge_cases": []})
     return out
 
 
@@ -255,19 +257,34 @@ def discover(ctx: PipelineContext) -> dict:
         live = {}
     for t in amap.tools:
         if t["name"] in live:
-            t["args_schema"] = live[t["name"]]["args_schema"] or t["args_schema"]
-            t["description"] = live[t["name"]]["description"] or t["description"]
+            lt = live[t["name"]]
+            t["args_schema"] = lt["args_schema"] or t["args_schema"]
+            t["description"] = lt["description"] or t["description"]
+            if lt.get("output_schema"):
+                t["output_schema"] = lt["output_schema"]
+            t["schema_source"] = lt.get("schema_source") or t.get("schema_source", "ast")
+            t["models"] = lt.get("models") or t.get("models", [])
+            t["side_effecting"] = bool(lt.get("side_effecting", t.get("side_effecting", False)))
+            t["edge_cases"] = tool_schemas.edge_cases(t)
             t["live"] = True
     known = {t["name"] for t in amap.tools}
     for name, t in live.items():
         if name not in known:
             amap.tools.append({**t, "used_by": [], "live": True})
+    if cfg.coverage.per_tool_edge_cases <= 0:
+        for t in amap.tools:
+            t["edge_cases"] = []
     ctx.save_agent_map(amap)
     return {
         "artifacts": {"agent_map": str(ctx.map_path)},
         "tools": [t["name"] for t in amap.tools],
         "nodes": [n["id"] for n in amap.graph["nodes"]],
         "live_nodes": amap.graph["live"].get("nodes", []),
+        "schemas": {
+            t["name"]: {"source": t.get("schema_source"), "models": t.get("models", []),
+                        "output": bool(t.get("output_schema")), "edge_cases": len(t.get("edge_cases") or [])}
+            for t in amap.tools
+        },
     }
 
 
@@ -372,6 +389,17 @@ def review(ctx: PipelineContext) -> dict:
     cfg = ctx.config
     ds = ctx.dataset()
     pending = [c for c in ds.cases if c.review.status == "pending"]
+    if not pending:
+        approved = [c for c in ds.cases if c.review.status == "approved"]
+        if not approved:
+            raise ValueError("dataset has no pending or approved cases")
+        coverage = achieved(ctx.cells(), [c.model_dump() for c in approved])
+        coverage_path = ctx.save_artifact("coverage", coverage)
+        return {
+            "artifacts": {"dataset": str(ctx.dataset_path), "coverage": str(coverage_path)},
+            "already_reviewed": True, "approved": len(approved), "rejected": {},
+            "approved_by": "reviewed before this run", "coverage_pct": coverage["coverage_pct"],
+        }
     rejected: dict[str, str] = {}
     try:
         reviews = gen_mod.self_review(

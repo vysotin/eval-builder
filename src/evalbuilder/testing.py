@@ -115,3 +115,69 @@ class ScriptedChatModel(BaseChatModel):
                     generations=[ChatGeneration(message=factory(m, messages))]
                 )
         raise ScriptMissError(text, [p for p, _ in self.script])
+
+
+# ── schema-dispatched structured output (offline generators) ───
+
+
+def cells_in_prompt(text: str) -> list[dict]:
+    """The coverage cells embedded in a case-authoring prompt (`CELLS TO FILL:` JSON)."""
+    if "CELLS TO FILL:\n" not in text:
+        return []
+    body = text.split("CELLS TO FILL:\n", 1)[1]
+    body = body.split("\n\nThese cells", 1)[0]
+    return json.loads(body)
+
+
+class SchemaScriptedModel(BaseChatModel):
+    """Chat model whose `with_structured_output(schema)` dispatches on the schema title.
+
+    `handlers` maps a JSON-schema title (e.g. `agent_map`, `cases`) to either a dict or a
+    callable `(messages) -> dict`; callables can read the prompt (e.g. `cells_in_prompt`).
+    Plain generation replies with `reply`. Used as `scripted:module:factory` for the
+    pipeline generator so a whole pipeline runs offline (tests, UI flows).
+    """
+
+    handlers: dict[str, Any]
+    reply: str = "ok"
+    calls: list[str] = []
+
+    @property
+    def _llm_type(self) -> str:
+        return "schema-scripted"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def with_structured_output(self, schema, **kwargs):
+        json_schema = schema if isinstance(schema, dict) else schema.model_json_schema()
+        title = json_schema.get("title", "?")
+
+        def _call(inputs):
+            from langchain_core.messages import convert_to_messages
+
+            if isinstance(inputs, str):
+                messages = [HumanMessage(content=inputs)]
+            elif hasattr(inputs, "to_messages"):
+                messages = list(inputs.to_messages())
+            else:
+                messages = convert_to_messages(list(inputs))
+            handler = self.handlers.get(title)
+            if handler is None:
+                raise ScriptMissError(f"schema:{title}", sorted(self.handlers))
+            value = handler(messages) if callable(handler) else handler
+            self.calls.append(title)
+            if hasattr(schema, "model_validate"):
+                return schema.model_validate(value)
+            return value
+
+        return RunnableLambda(_call)
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs,
+    ) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.reply))])

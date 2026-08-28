@@ -70,3 +70,28 @@ def test_template_is_loadable(tmp_path):
     p.write_text(template("demo", "examples/weather_bot/agent.py", "examples.weather_bot.agent"))
     cfg = load_config(p)
     assert cfg.name == "demo" and cfg.problems() == []
+
+
+def test_new_fields_defaults_and_yaml_round_trip(tmp_path):
+    from evalbuilder.pipeline.config import DEFAULT_MODEL, PipelineConfig, load_config, parse_config
+
+    cfg = PipelineConfig(name="x", target={"source": "examples/weather_bot/agent.py", "module": "examples.weather_bot.agent"})
+    assert cfg.models.judge == DEFAULT_MODEL == "claude-cli:claude-sonnet-5"
+    assert cfg.coverage.per_tool_edge_cases == 2 and cfg.instructions == "" and cfg.feedback == []
+    assert cfg.guidance() == ""
+    cfg.instructions = "Focus on refunds.\nNever invent order ids."
+    entry = cfg.add_feedback("More multi-turn cases please", from_stage="dataset")
+    assert entry.at and cfg.feedback[0].note == "More multi-turn cases please"
+    text = cfg.guidance()
+    assert text.startswith("USER INSTRUCTIONS") and "REVIEWER FEEDBACK" in text and "(rerun from dataset)" in text
+    yaml_text = cfg.to_yaml()
+    assert yaml_text.startswith("schema: evalbuilder/pipeline-config/v1\nname: x\n") and "# free-text general rules" in yaml_text
+    assert parse_config(yaml_text) == cfg
+    path = cfg.save(tmp_path / "p.yaml")
+    assert load_config(path) == cfg
+    with pytest.raises(ValueError, match="must be a mapping"):
+        parse_config("")
+    with pytest.raises(ValueError, match="thresholds.default"):
+        parse_config(yaml_text.replace("default: 0.8", "default: nope"))
+    cfg.coverage.per_tool_edge_cases = -1
+    assert "coverage.per_tool_edge_cases must be >= 0" in cfg.problems()

@@ -469,11 +469,13 @@ def pipeline_run(
     config: Path,
     resume: bool = typer.Option(False, "--resume", help="reuse completed stages from state.json"),
     from_stage: Optional[str] = typer.Option(None, "--from", help="with --resume: rerun from this stage onward"),
+    until: Optional[str] = typer.Option(None, "--until", help="stop after this stage (e.g. dataset: generate cases + mocks only)"),
     quiet: bool = typer.Option(False, "--quiet"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
 ) -> None:
-    """Run every stage from config to report.json; exit 1 unless the verdict is pass."""
-    from evalbuilder.pipeline.config import load_config
+    """Run every stage from config to report.json; exit 1 unless the verdict is pass
+    (exit 0 when stopped deliberately with --until)."""
+    from evalbuilder.pipeline.config import STAGE_NAMES, load_config
     from evalbuilder.pipeline.report import run_pipeline, summary_text
 
     try:
@@ -481,9 +483,12 @@ def pipeline_run(
     except (ValueError, FileNotFoundError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
+    if until and until not in STAGE_NAMES:
+        typer.echo(f"--until must be one of {', '.join(STAGE_NAMES)}", err=True)
+        raise typer.Exit(2)
     log = (lambda msg: None) if quiet else (lambda msg: typer.echo(msg, err=True))
     _, report = run_pipeline(
-        config, resume=resume, invalidate_from=from_stage, log=log,
+        config, resume=resume, invalidate_from=from_stage, until=until, log=log,
         settings=Settings.load(env_file), config=cfg,
     )
     typer.echo(summary_text(report), err=True)
@@ -496,6 +501,9 @@ def pipeline_run(
             "problems": len(report["problems"]),
         }
     )
+    if until:
+        stopped = all(v["status"] in ("ok", "recovered", "skipped") for v in report["stages"].values())
+        raise typer.Exit(0 if stopped else 1)
     if report["verdict"] != "pass":
         raise typer.Exit(1)
 

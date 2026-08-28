@@ -23,9 +23,9 @@ def test_kinds_files_and_schemas_are_unique():
     assert len(schemas) == len(set(schemas))
     for a in ARTIFACTS.values():
         if a.schema:
-            assert a.schema == f"evalbuilder/{a.file.split('/')[-1].split('.')[0].replace('-{run_id}', '')}/v1" or a.kind in ("pipeline_state", "pipeline_report"), a.kind
+            assert a.schema == f"evalbuilder/{a.file.split('/')[-1].split('.')[0].replace('-{run_id}', '')}/v1" or a.kind in ("pipeline_state", "pipeline_report", "pipeline_job"), a.kind
         stem = a.file.split("/")[-1].replace("-{run_id}", "").rsplit(".", 1)[0]
-        assert stem == a.kind.replace("_", "-") or a.kind in ("pipeline_state", "pipeline_report"), a.kind
+        assert stem == a.kind.replace("_", "-") or a.kind in ("pipeline_state", "pipeline_report", "pipeline_job"), a.kind
 
 
 def test_schema_ids_match_pydantic_models():
