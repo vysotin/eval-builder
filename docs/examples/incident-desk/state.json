@@ -1,0 +1,462 @@
+{
+  "schema": "evalbuilder/pipeline-state/v1",
+  "name": "incident-desk",
+  "started_at": "2026-08-28T10:07:37.760610+00:00",
+  "updated_at": "2026-08-28T14:52:07.353367+00:00",
+  "stages": {
+    "preflight": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.019,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {
+        "capabilities": {
+          "langgraph": true,
+          "claude_cli": true,
+          "provider_anthropic": false,
+          "provider_openai": false,
+          "provider_google_genai": false,
+          "judge": false,
+          "langsmith": false,
+          "target": true
+        },
+        "degraded": [
+          "judge",
+          "langsmith"
+        ],
+        "models": {
+          "agent": {
+            "spec": "claude-cli:claude-sonnet-5",
+            "ready": true,
+            "reason": ""
+          },
+          "judge": {
+            "spec": "claude-cli:claude-sonnet-5",
+            "ready": true,
+            "reason": ""
+          },
+          "generator": {
+            "spec": "claude-cli:claude-sonnet-5",
+            "ready": true,
+            "reason": ""
+          }
+        },
+        "judge_evaluators": 2
+      },
+      "recovery_notes": []
+    },
+    "discover": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.091,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "agent_map": "eval/pipeline/incident-desk/agent-map.json"
+      },
+      "details": {
+        "tools": [
+          "get_service_status",
+          "search_runbooks",
+          "create_ticket",
+          "page_oncall",
+          "post_status_update"
+        ],
+        "nodes": [
+          "triage_agent",
+          "remediation_agent",
+          "comms_agent",
+          "status_agent",
+          "classify",
+          "triage_agent",
+          "remediation_agent",
+          "comms_agent",
+          "status_agent",
+          "decline"
+        ],
+        "live_nodes": [
+          "__start__",
+          "classify",
+          "triage_agent",
+          "remediation_agent",
+          "comms_agent",
+          "status_agent",
+          "decline",
+          "__end__"
+        ],
+        "schemas": {
+          "get_service_status": {
+            "source": "annotations",
+            "models": [
+              "ServiceStatus"
+            ],
+            "output": true,
+            "edge_cases": 2
+          },
+          "search_runbooks": {
+            "source": "args_schema",
+            "models": [],
+            "output": true,
+            "edge_cases": 5
+          },
+          "create_ticket": {
+            "source": "annotations",
+            "models": [
+              "TicketRequest",
+              "TicketReceipt"
+            ],
+            "output": true,
+            "edge_cases": 3
+          },
+          "page_oncall": {
+            "source": "annotations",
+            "models": [],
+            "output": true,
+            "edge_cases": 4
+          },
+          "post_status_update": {
+            "source": "annotations",
+            "models": [
+              "StatusUpdate"
+            ],
+            "output": true,
+            "edge_cases": 2
+          }
+        }
+      },
+      "recovery_notes": []
+    },
+    "map": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 87.722,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "agent_map": "eval/pipeline/incident-desk/agent-map.json"
+      },
+      "details": {
+        "intents": [
+          "intent.report-incident",
+          "intent.check-status",
+          "intent.out-of-scope-request"
+        ],
+        "scenarios": 11,
+        "failure_types": [
+          "state_loss",
+          "prompt_injection",
+          "output_contract_violation",
+          "tool_misuse",
+          "provider_error"
+        ],
+        "topics": [
+          "api",
+          "checkout",
+          "payments",
+          "auth",
+          "search",
+          "database",
+          "gateway",
+          "billing",
+          "web",
+          "notifications",
+          "sev1/sev2/sev3 severities",
+          "incident tickets (INC-xxxx)",
+          "runbooks (RB-xx)"
+        ],
+        "constraints": [
+          "Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with yes.",
+          "Always call get_service_status before proposing remediation or answering a status question.",
+          "Severity must be one of sev1, sev2 or sev3; offer those values instead of guessing.",
+          "If a tool errors or returns an incomplete payload, say so and never invent status or ticket values.",
+          "Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with yes in this conversation.",
+          "Always call get_service_status for the affected/named service before proposing remediation or answering a status question.",
+          "Severity must be one of sev1, sev2 or sev3; if missing or invalid (critical, P0, sev9), offer those three values and stop instead of guessing.",
+          "If a tool errors or returns an incomplete payload, say so plainly and never invent status, ticket, or paging values.",
+          "If the user did not name the service, ask which service is affected/to check instead of guessing.",
+          "post_status_update may only be called after a ticket has been created and on-call paged in this conversation; otherwise restate what is pending and post nothing.",
+          "The final comms message must mention the ticket id.",
+          "If create_ticket errors or returns an incomplete receipt (no ticket id), report that, do not page, and never invent a ticket id.",
+          "If the status update post fails, say the status page could not be reached.",
+          "Requests outside production incidents/service status must be declined (decline node), not engaged with."
+        ]
+      },
+      "recovery_notes": []
+    },
+    "mocks": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 45.386,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "mock_rules": "eval/pipeline/incident-desk/mock-rules.json"
+      },
+      "details": {
+        "tools": {
+          "get_service_status": 4,
+          "search_runbooks": 4,
+          "create_ticket": 3,
+          "page_oncall": 3,
+          "post_status_update": 3
+        }
+      },
+      "recovery_notes": []
+    },
+    "dataset": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 484.851,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "dataset": "eval/pipeline/incident-desk/dataset.json",
+        "coverage_plan": "eval/pipeline/incident-desk/coverage-plan.json",
+        "coverage": "eval/pipeline/incident-desk/coverage.json"
+      },
+      "details": {
+        "cases": 23,
+        "planned": 23,
+        "coverage_pct": 100.0,
+        "by_kind": {
+          "happy": {
+            "planned": 3,
+            "covered": 3
+          },
+          "failure": {
+            "planned": 8,
+            "covered": 8
+          },
+          "category": {
+            "planned": 5,
+            "covered": 5
+          },
+          "out-of-intent": {
+            "planned": 2,
+            "covered": 2
+          },
+          "schema-edge": {
+            "planned": 5,
+            "covered": 5
+          }
+        }
+      },
+      "recovery_notes": []
+    },
+    "review": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 139.33,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "dataset": "eval/pipeline/incident-desk/dataset.json",
+        "coverage": "eval/pipeline/incident-desk/coverage.json"
+      },
+      "details": {
+        "approved": 23,
+        "rejected": {},
+        "approved_by": "vladimir (examples/incident_desk/pipeline.yaml)",
+        "coverage_pct": 100.0
+      },
+      "recovery_notes": []
+    },
+    "verify": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.0,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {
+        "approved": 23,
+        "mocked_tools": [
+          "create_ticket",
+          "get_service_status",
+          "page_oncall",
+          "post_status_update",
+          "search_runbooks"
+        ]
+      },
+      "recovery_notes": []
+    },
+    "run": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 1426.621,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "runs": [
+          {
+            "run_id": "8f1f1a9f",
+            "path": "eval/pipeline/incident-desk/results/run-8f1f1a9f.json"
+          },
+          {
+            "run_id": "aafcc66c",
+            "path": "eval/pipeline/incident-desk/results/run-aafcc66c.json"
+          }
+        ]
+      },
+      "details": {
+        "repeats": 2,
+        "cases": 23,
+        "errors": {
+          "agent": 0,
+          "infrastructure": 0
+        }
+      },
+      "recovery_notes": []
+    },
+    "score": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 2623.184,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "pairs": [
+          {
+            "run": "eval/pipeline/incident-desk/results/run-8f1f1a9f.json",
+            "report": "eval/pipeline/incident-desk/results/score-report-8f1f1a9f.json"
+          },
+          {
+            "run": "eval/pipeline/incident-desk/results/run-aafcc66c.json",
+            "report": "eval/pipeline/incident-desk/results/score-report-aafcc66c.json"
+          }
+        ],
+        "evaluators": "eval/pipeline/incident-desk/evaluators.yaml"
+      },
+      "details": {
+        "metrics": {
+          "expected_tools": 0.6956521739130435,
+          "contains": 0.7142857142857143,
+          "contract": 0.6086956521739131,
+          "correctness": 0.6666666666666666
+        },
+        "evaluator_errors": {
+          "correctness": 2
+        }
+      },
+      "recovery_notes": []
+    },
+    "aggregate": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.003,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "aggregate": "eval/pipeline/incident-desk/aggregate.json"
+      },
+      "details": {
+        "verdict": "fail",
+        "overall_score": 0.6786,
+        "metrics": {
+          "contains": 0.7143,
+          "contract": 0.6304,
+          "correctness": 0.6522,
+          "expected_tools": 0.7174
+        },
+        "unstable_cases": 6
+      },
+      "recovery_notes": []
+    },
+    "simulate": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 278.656,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "scenarios": "eval/pipeline/incident-desk/scenarios.yaml",
+        "simulation": "eval/pipeline/incident-desk/simulation.json"
+      },
+      "details": {
+        "scenarios": 3,
+        "stop_reasons": {
+          "intent.report-incident": "max_turns",
+          "intent.check-status": "success",
+          "intent.out-of-scope-request": "success"
+        },
+        "violations": {
+          "intent.report-incident": [
+            "expected assistant text containing 'Sofia Reyes'",
+            "never reached success condition 'INC-4521' within 5 turns"
+          ],
+          "intent.check-status": [
+            "expected assistant text containing '12.7'",
+            "forbidden assistant text 'INC-' appeared"
+          ]
+        },
+        "mined_pending_cases": 2
+      },
+      "recovery_notes": []
+    },
+    "publish": {
+      "status": "skipped",
+      "attempts": 0,
+      "seconds": 0.0,
+      "error": null,
+      "reason": "skipped by config",
+      "optional": true,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    },
+    "analyze": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 102.561,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "analysis": "eval/pipeline/incident-desk/analysis.json"
+      },
+      "details": {
+        "source": "generator",
+        "patterns": 6
+      },
+      "recovery_notes": []
+    },
+    "report": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.004,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "report": "eval/pipeline/incident-desk/report.json"
+      },
+      "details": {
+        "verdict": "fail",
+        "overall_score": 0.6786
+      },
+      "recovery_notes": []
+    }
+  },
+  "data": {
+    "problems": [
+      {
+        "stage": "analyze",
+        "severity": "warning",
+        "message": "generator analysis failed: ClaudeCLIError: claude exited 1: {\"is_error\":true,\"duration_api_ms\":0,\"num_turns\":1,\"stop_reason\":\"stop_sequence\",\"session_id\":\"08c01cde-ae48-4f7a-81b4-97f78b3c8f4a\",\"total_cost_usd\":0,\"usage\":{\"output_tokens_details\":{\"thinking_tokens\":0},\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterat"
+      }
+    ]
+  }
+}

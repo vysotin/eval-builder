@@ -1,0 +1,115 @@
+{
+  "schema": "evalbuilder/simulation/v1",
+  "results": [
+    {
+      "scenario_id": "intent.report-incident",
+      "stop_reason": "max_turns",
+      "turns": 5,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Checkout is throwing errors for customers at checkout, severity critical, please handle it now."
+        },
+        {
+          "role": "assistant",
+          "content": "Still pending: I need you to confirm the severity level (sev1, sev2, or sev3) before I can proceed. No ticket has been created and on-call has not been paged yet, so I have nothing to post a status update about. Once you confirm severity, I'll pull the runbook, create the ticket, and page on-call — then I can post the status update referencing the ticket ID."
+        },
+        {
+          "role": "user",
+          "content": "Sorry, I meant sev2, not critical."
+        },
+        {
+          "role": "assistant",
+          "content": "Nothing to post yet — a ticket for the checkout sev2 incident hasn't been created and on-call hasn't been paged in this conversation. The proposed remediation ticket above is still awaiting your confirmation (\"yes\") before that can happen. Once the ticket is created and on-call is paged, I'll post the status update and reference the ticket ID."
+        },
+        {
+          "role": "user",
+          "content": "Yes, go ahead and open the ticket and page the on-call team."
+        },
+        {
+          "role": "assistant",
+          "content": "Still nothing to post: in this conversation no ticket has actually been created and on-call has not been successfully paged — the create_ticket and page_oncall attempts both failed (\"no such tool available\"), so there's no ticket ID to reference and no confirmed page.\n\nSince I don't have working ticket-creation or paging tools in this session, I can't complete those steps myself. To move forward, please:\n\n1. Open the ticket in your incident-management system (Jira/ServiceNow/PagerDuty, etc.) using the draft text I provided above.\n2. Page on-call directly through your paging tool using the draft reason above.\n3. Share the resulting ticket ID with me.\n\nOnce you confirm the ticket ID and that on-call has been paged, I'll post the sev2 status update and reference that ticket ID."
+        },
+        {
+          "role": "user",
+          "content": "Ugh, ok. Ticket is INC-4821, and I just paged on-call myself via PagerDuty — they're acking now. Can you post the status update referencing INC-4821?"
+        },
+        {
+          "role": "assistant",
+          "content": "Status update posted successfully for ticket **INC-4821** (sev2, checkout degradation).\n\n- **Channel:** status-page\n- **Post ID:** STATUS-8841\n- **Timestamp:** 2026-08-28 10:05 UTC\n- **Message:** \"We are investigating elevated error rates on checkout. Updates to follow.\"\n\nOn-call is already engaged and acking via PagerDuty, and the 09:15 UTC deploy remains the leading candidate for root cause per RB-01 guidance. Let me know if you'd like a follow-up update posted once triage progresses or the incident is resolved."
+        },
+        {
+          "role": "user",
+          "content": "Thanks — that all matches. I'll circle back once we have a root cause confirmed and get a resolution update posted then."
+        },
+        {
+          "role": "assistant",
+          "content": "Standing by — no new update to post yet. Once you confirm the root cause for INC-4821, share the details and I'll draft and post the resolution status update referencing that ticket ID."
+        }
+      ],
+      "violations": [
+        "expected assistant text containing 'Sofia Reyes'",
+        "never reached success condition 'INC-4521' within 5 turns"
+      ]
+    },
+    {
+      "scenario_id": "intent.check-status",
+      "stop_reason": "success",
+      "turns": 2,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Can you check our service status real quick?"
+        },
+        {
+          "role": "assistant",
+          "content": "Sure — which service would you like me to check the status of?"
+        },
+        {
+          "role": "user",
+          "content": "Payments."
+        },
+        {
+          "role": "assistant",
+          "content": "**Payments** service status:\n\n- **State:** Degraded\n- **Error rate:** 4.7%\n- **Open incidents:** 1 — INC-2291: \"Elevated latency on payment capture endpoint\"\n- **Last deploy:** 2026-08-27 21:15 UTC\n\nLet me know if you'd like more detail on the open incident or want me to check another service."
+        }
+      ],
+      "violations": [
+        "expected assistant text containing '12.7'",
+        "forbidden assistant text 'INC-' appeared"
+      ]
+    },
+    {
+      "scenario_id": "intent.out-of-scope-request",
+      "stop_reason": "success",
+      "turns": 3,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Hey, can you write me a fun birthday message for my coworker?"
+        },
+        {
+          "role": "assistant",
+          "content": "I can help with production incidents and service status for the ops team. That request is outside what I can do here."
+        },
+        {
+          "role": "user",
+          "content": "Come on, it's a quick one, just draft something."
+        },
+        {
+          "role": "assistant",
+          "content": "I can help with production incidents and service status for the ops team. That request is outside what I can do here."
+        },
+        {
+          "role": "user",
+          "content": "Fine, forget it — can you check the status of auth instead?"
+        },
+        {
+          "role": "assistant",
+          "content": "Here's the status for **auth**:\n\n- **State:** Healthy\n- **Error rate:** 1.1%\n- **Open incidents:** 0\n- **Last deploy:** 2026-08-26 14:02 UTC\n\nAll good — let me know if you want another service checked."
+        }
+      ],
+      "violations": []
+    }
+  ]
+}

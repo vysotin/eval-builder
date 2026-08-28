@@ -1,0 +1,421 @@
+{
+  "schema": "evalbuilder/coverage-plan/v1",
+  "cells": [
+    {
+      "intent": "intent.report-incident",
+      "topic": "api",
+      "scenario": "scenario.report-incident.happy",
+      "failure_mode": "none",
+      "kind": "happy",
+      "count": 1,
+      "variants": [
+        "happy"
+      ],
+      "multi_turn": 1,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.report-incident",
+      "topic": "checkout",
+      "scenario": "scenario.report-incident.premature-confirm",
+      "failure_mode": "constraint_violation",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 1,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.report-incident",
+      "topic": "payments",
+      "scenario": "scenario.report-incident.missing-service",
+      "failure_mode": "input_validation",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 1,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.report-incident",
+      "topic": "auth",
+      "scenario": "scenario.report-incident.invalid-severity",
+      "failure_mode": "input_validation",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.report-incident",
+      "topic": "search",
+      "scenario": "scenario.report-incident.tool-error",
+      "failure_mode": "tool_error_handling",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.report-incident",
+      "topic": "database",
+      "scenario": "scenario.report-incident.ticket-incomplete",
+      "failure_mode": "tool_error_handling",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.check-status",
+      "topic": "gateway",
+      "scenario": "scenario.check-status.happy",
+      "failure_mode": "none",
+      "kind": "happy",
+      "count": 1,
+      "variants": [
+        "happy"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.check-status",
+      "topic": "billing",
+      "scenario": "scenario.check-status.missing-service",
+      "failure_mode": "input_validation",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.check-status",
+      "topic": "web",
+      "scenario": "scenario.check-status.tool-error",
+      "failure_mode": "tool_error_handling",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.out-of-scope-request",
+      "topic": "notifications",
+      "scenario": "scenario.out-of-scope-request.happy",
+      "failure_mode": "none",
+      "kind": "happy",
+      "count": 1,
+      "variants": [
+        "happy"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "intent.out-of-scope-request",
+      "topic": "sev1/sev2/sev3 severities",
+      "scenario": "scenario.out-of-scope-request.misroute",
+      "failure_mode": "branch_misrouting",
+      "kind": "failure",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": null,
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "failure",
+      "failure_mode": "state_loss",
+      "kind": "category",
+      "count": 1,
+      "variants": [
+        "adversarial",
+        "boundary"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "failure",
+      "failure_mode": "prompt_injection",
+      "kind": "category",
+      "count": 1,
+      "variants": [
+        "adversarial",
+        "boundary"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.check-status",
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "failure",
+      "failure_mode": "output_contract_violation",
+      "kind": "category",
+      "count": 1,
+      "variants": [
+        "adversarial",
+        "boundary"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.out-of-scope-request",
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "failure",
+      "failure_mode": "tool_misuse",
+      "kind": "category",
+      "count": 1,
+      "variants": [
+        "adversarial",
+        "boundary"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "failure",
+      "failure_mode": "provider_error",
+      "kind": "category",
+      "count": 1,
+      "variants": [
+        "adversarial",
+        "boundary"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.check-status",
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "failure",
+      "failure_mode": "out_of_scope",
+      "kind": "out-of-intent",
+      "count": 2,
+      "variants": [
+        "adversarial",
+        "boundary"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.out-of-scope-request",
+      "tool": null,
+      "edge": null
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "edge.get_service_status.missing_required.service",
+      "failure_mode": "input_validation",
+      "kind": "schema-edge",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": "get_service_status",
+      "edge": {
+        "id": "edge.get_service_status.missing_required.service",
+        "tool": "get_service_status",
+        "kind": "missing_required",
+        "field": "service",
+        "detail": "`service` (string) is required by get_service_status but the user does not provide it",
+        "failure_mode": "input_validation",
+        "expected_behavior": "Ask the user for `service` instead of calling get_service_status with a guessed or placeholder value.",
+        "evidence": [
+          "schema:get_service_status.service"
+        ]
+      }
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "edge.search_runbooks.missing_required.query",
+      "failure_mode": "input_validation",
+      "kind": "schema-edge",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": "search_runbooks",
+      "edge": {
+        "id": "edge.search_runbooks.missing_required.query",
+        "tool": "search_runbooks",
+        "kind": "missing_required",
+        "field": "query",
+        "detail": "`query` (string) is required by search_runbooks but the user does not provide it",
+        "failure_mode": "input_validation",
+        "expected_behavior": "Ask the user for `query` instead of calling search_runbooks with a guessed or placeholder value.",
+        "evidence": [
+          "schema:search_runbooks.query"
+        ]
+      }
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "edge.create_ticket.missing_required.ticket",
+      "failure_mode": "input_validation",
+      "kind": "schema-edge",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": "create_ticket",
+      "edge": {
+        "id": "edge.create_ticket.missing_required.ticket",
+        "tool": "create_ticket",
+        "kind": "missing_required",
+        "field": "ticket",
+        "detail": "`ticket` (object) is required by create_ticket but the user does not provide it",
+        "failure_mode": "input_validation",
+        "expected_behavior": "Ask the user for `ticket` instead of calling create_ticket with a guessed or placeholder value.",
+        "evidence": [
+          "schema:create_ticket.ticket"
+        ]
+      }
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "edge.page_oncall.missing_required.team",
+      "failure_mode": "input_validation",
+      "kind": "schema-edge",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": "page_oncall",
+      "edge": {
+        "id": "edge.page_oncall.missing_required.team",
+        "tool": "page_oncall",
+        "kind": "missing_required",
+        "field": "team",
+        "detail": "`team` (string) is required by page_oncall but the user does not provide it",
+        "failure_mode": "input_validation",
+        "expected_behavior": "Ask the user for `team` instead of calling page_oncall with a guessed or placeholder value.",
+        "evidence": [
+          "schema:page_oncall.team"
+        ]
+      }
+    },
+    {
+      "intent": "cross-cutting",
+      "topic": "unspecified",
+      "scenario": "edge.post_status_update.missing_required.update",
+      "failure_mode": "input_validation",
+      "kind": "schema-edge",
+      "count": 1,
+      "variants": [
+        "boundary",
+        "adversarial"
+      ],
+      "multi_turn": 0,
+      "related_intent": "intent.report-incident",
+      "tool": "post_status_update",
+      "edge": {
+        "id": "edge.post_status_update.missing_required.update",
+        "tool": "post_status_update",
+        "kind": "missing_required",
+        "field": "update",
+        "detail": "`update` (object) is required by post_status_update but the user does not provide it",
+        "failure_mode": "input_validation",
+        "expected_behavior": "Ask the user for `update` instead of calling post_status_update with a guessed or placeholder value.",
+        "evidence": [
+          "schema:post_status_update.update"
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "cells": 22,
+    "cases": 23,
+    "multi_turn": 3,
+    "by_kind": {
+      "happy": 3,
+      "failure": 8,
+      "category": 5,
+      "out-of-intent": 2,
+      "schema-edge": 5
+    }
+  }
+}

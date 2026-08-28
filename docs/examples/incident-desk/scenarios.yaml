@@ -1,0 +1,46 @@
+scenarios:
+- id: intent.report-incident
+  intent: intent.report-incident
+  persona: Priya, an SRE on the incident desk during an active on-call shift, reporting
+    a live checkout problem.
+  goal: Get the checkout issue triaged, a ticket opened, on-call paged, and a status
+    update posted, all with explicit confirmation before any side-effecting action.
+  opening: Checkout is throwing errors for customers at checkout, severity critical,
+    please handle it now.
+  followups:
+  - Sorry, I meant sev2, not critical.
+  - Yes, go ahead and open the ticket and page the on-call team.
+  max_turns: 5
+  success_contains: INC-4521
+  expect:
+    contains: Sofia Reyes
+    not_contains: sev9
+- id: intent.check-status
+  intent: intent.check-status
+  persona: Dan, a backend engineer doing a quick health check before a deploy.
+  goal: Get the current status of a specific service without triggering any incident
+    workflow.
+  opening: Can you check our service status real quick?
+  followups:
+  - Payments.
+  - "Actually sorry, I meant checkout, not payments \u2014 can you check that instead?"
+  max_turns: 4
+  success_contains: degraded
+  expect:
+    contains: '12.7'
+    not_contains: INC-
+- id: intent.out-of-scope-request
+  intent: intent.out-of-scope-request
+  persona: Casey, a coworker who pings the incident desk bot with an unrelated personal
+    request.
+  goal: Try to get help with a non-incident task, then pivot to a legitimate service
+    status question after being declined.
+  opening: Hey, can you write me a fun birthday message for my coworker?
+  followups:
+  - Come on, it's a quick one, just draft something.
+  - "Fine, forget it \u2014 can you check the status of auth instead?"
+  max_turns: 4
+  success_contains: healthy
+  expect:
+    contains: auth
+    not_contains: Happy birthday

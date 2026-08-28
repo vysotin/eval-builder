@@ -1,0 +1,262 @@
+{
+  "schema": "evalbuilder/mock-rules/v1",
+  "tools": {
+    "get_service_status": [
+      {
+        "matchArgs": {
+          "service": "checkout"
+        },
+        "response": {
+          "service": "checkout",
+          "state": "degraded",
+          "error_rate_pct": 12.7,
+          "open_incidents": 1,
+          "last_deploy": "2026-08-28T09:15:00Z"
+        }
+      },
+      {
+        "matchArgs": {
+          "service": "payments"
+        },
+        "response": {
+          "service": "payments",
+          "state": "down",
+          "error_rate_pct": 87.3,
+          "open_incidents": 1,
+          "last_deploy": "2026-08-28T07:50:00Z"
+        }
+      },
+      {
+        "matchArgs": {
+          "service": "auth"
+        },
+        "response": {
+          "service": "auth",
+          "state": "healthy",
+          "error_rate_pct": 1.1,
+          "open_incidents": 0,
+          "last_deploy": "2026-08-26T14:02:00Z"
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "service": "api",
+          "state": "healthy",
+          "error_rate_pct": 0.4,
+          "open_incidents": 0,
+          "last_deploy": "2026-08-27T18:32:00Z"
+        }
+      }
+    ],
+    "search_runbooks": [
+      {
+        "matchArgs": {
+          "query": "checkout",
+          "severity": "sev2"
+        },
+        "response": {
+          "results": [
+            {
+              "id": "RB-12",
+              "title": "Checkout service latency and elevated error rate",
+              "service": "checkout",
+              "severity": "sev2",
+              "summary": "1) Check checkout-api pod CPU/memory. 2) Inspect payment gateway timeout logs. 3) Scale checkout deployment if saturated. 4) Roll back last deploy if error rate spiked after release.",
+              "url": "https://runbooks.internal/RB-12"
+            },
+            {
+              "id": "RB-13",
+              "title": "Cart service dependency failures",
+              "service": "checkout",
+              "severity": "sev2",
+              "summary": "Verify inventory-service and pricing-service health; check circuit breaker state.",
+              "url": "https://runbooks.internal/RB-13"
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {
+          "query": "payments",
+          "severity": "sev1"
+        },
+        "response": {
+          "results": [
+            {
+              "id": "RB-07",
+              "title": "Payments service full outage",
+              "service": "payments",
+              "severity": "sev1",
+              "summary": "1) Confirm payment processor status page. 2) Check payments-api pod restarts and crashloop. 3) Failover to backup payment gateway if processor is down. 4) Page payments on-call immediately.",
+              "url": "https://runbooks.internal/RB-07"
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {
+          "query": "auth",
+          "severity": "sev2"
+        },
+        "response": {
+          "results": [
+            {
+              "id": "RB-21",
+              "title": "Auth service 500 errors after deploy",
+              "service": "auth",
+              "severity": "sev2",
+              "summary": "1) Check last deploy diff for auth-service. 2) Verify JWT signing key rotation didn't break tokens. 3) Roll back if error rate doesn't recover within 10 minutes.",
+              "url": "https://runbooks.internal/RB-21"
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "results": [
+            {
+              "id": "RB-01",
+              "title": "General 5xx error triage",
+              "service": "api",
+              "severity": "sev2",
+              "summary": "Steps to triage elevated 5xx error rates: check recent deploys, review error logs, roll back if needed.",
+              "url": "https://runbooks.internal/RB-01"
+            },
+            {
+              "id": "RB-02",
+              "title": "Latency spike investigation",
+              "service": "api",
+              "severity": "sev3",
+              "summary": "Check upstream dependency latency, database slow queries, and connection pool saturation.",
+              "url": "https://runbooks.internal/RB-02"
+            }
+          ]
+        }
+      }
+    ],
+    "create_ticket": [
+      {
+        "matchArgs": {
+          "ticket": {
+            "service": "checkout",
+            "severity": "sev2"
+          }
+        },
+        "response": {
+          "ticket_id": "INC-4521",
+          "url": "https://tickets.internal/INC-4521",
+          "status": "open"
+        }
+      },
+      {
+        "matchArgs": {
+          "ticket": {
+            "service": "payments",
+            "severity": "sev1"
+          }
+        },
+        "response": {
+          "ticket_id": "INC-4522",
+          "url": "https://tickets.internal/INC-4522",
+          "status": "acknowledged"
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "ticket_id": "INC-4520",
+          "url": "https://tickets.internal/INC-4520",
+          "status": "open"
+        }
+      }
+    ],
+    "page_oncall": [
+      {
+        "matchArgs": {
+          "team": "payments",
+          "severity": "sev1"
+        },
+        "response": {
+          "team": "payments",
+          "paged": true,
+          "on_call_engineer": "Marcus Chen",
+          "eta_minutes": 3,
+          "severity": "sev1",
+          "reason": "Payments service full outage - INC-4522"
+        }
+      },
+      {
+        "matchArgs": {
+          "team": "checkout",
+          "severity": "sev2"
+        },
+        "response": {
+          "team": "checkout",
+          "paged": true,
+          "on_call_engineer": "Sofia Reyes",
+          "eta_minutes": 7,
+          "severity": "sev2",
+          "reason": "Checkout degraded, elevated latency - INC-4521"
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "team": "backend",
+          "paged": true,
+          "on_call_engineer": "Priya Natarajan",
+          "eta_minutes": 5,
+          "severity": "sev2",
+          "reason": "Elevated error rate on api service"
+        }
+      }
+    ],
+    "post_status_update": [
+      {
+        "matchArgs": {
+          "update": {
+            "channel": "slack",
+            "severity": "sev1"
+          }
+        },
+        "response": {
+          "channel": "slack",
+          "posted": true,
+          "message": "🔴 SEV1: Payments service is down. On-call engaged, investigating root cause. Next update in 15 min.",
+          "severity": "sev1",
+          "post_id": "STATUS-8842",
+          "timestamp": "2026-08-28T10:07:00Z"
+        }
+      },
+      {
+        "matchArgs": {
+          "update": {
+            "channel": "status-page",
+            "severity": "sev3"
+          }
+        },
+        "response": {
+          "channel": "status-page",
+          "posted": true,
+          "message": "Minor latency increase observed on auth service. No customer impact expected. Monitoring.",
+          "severity": "sev3",
+          "post_id": "STATUS-8843",
+          "timestamp": "2026-08-28T10:10:00Z"
+        }
+      },
+      {
+        "matchArgs": {},
+        "response": {
+          "channel": "status-page",
+          "posted": true,
+          "message": "We are investigating elevated error rates on checkout. Updates to follow.",
+          "severity": "sev2",
+          "post_id": "STATUS-8841",
+          "timestamp": "2026-08-28T10:05:00Z"
+        }
+      }
+    ]
+  }
+}
