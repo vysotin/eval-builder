@@ -24,7 +24,7 @@ def _config(tmp_path, **overrides):
         "models": {"agent": SCRIPTED, "judge": SCRIPTED, "generator": SCRIPTED},
         "constraints": ["Never call issue_refund before the customer says yes."],
         "coverage": {"total_cases": 4, "per_intent": {"happy": 1, "failure": 1}, "per_failure_category": 1,
-                     "out_of_intent": 1, "multi_turn_share": 0.0},
+                     "out_of_intent": 1, "multi_turn_share": 0.0, "per_tool_edge_cases": 0},
         "evaluators": [{"type": "expected_tools"}, {"type": "contains"}],
         "thresholds": {"default": 0.8, "slice_min": 0.5, "overall_pass": 0.8},
         "runs": {"repeats": 2},

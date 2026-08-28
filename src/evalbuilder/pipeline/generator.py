@@ -15,7 +15,8 @@ from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from evalbuilder.pipeline.planning import CROSS_CUTTING, Cell
+from evalbuilder import tool_schemas
+from evalbuilder.pipeline.planning import CROSS_CUTTING, SCHEMA_EDGE, Cell
 from evalbuilder.pipeline.taxonomy import FAILURE_TYPES
 from evalbuilder.schemas import AgentMap
 
@@ -88,16 +89,30 @@ def agent_brief(agent_map: AgentMap, constraints: list[str], source_text: str = 
         "edges": agent_map.graph.get("edges", []),
         "conditional_edges": agent_map.graph.get("conditional_edges", []),
         "live_graph": agent_map.graph.get("live", {}),
-        "tools": [
-            {k: t.get(k) for k in ("name", "description", "args_schema", "used_by")}
-            for t in agent_map.tools
-        ],
+        "tools": [tool_brief(t) for t in agent_map.tools],
         "constraints": constraints,
     }
     text = "AGENT STRUCTURE (from code introspection):\n" + json.dumps(brief, indent=1, ensure_ascii=False)
     if source_text:
         text += f"\n\nAGENT SOURCE:\n```python\n{source_text[:12000]}\n```"
     return text
+
+
+def tool_brief(t: dict) -> dict:
+    """A tool as the prompts see it: schemas and side effects, without the edge-case list."""
+    out = {k: t.get(k) for k in ("name", "description", "args_schema", "used_by")}
+    if t.get("output_schema"):
+        out["output_schema"] = t["output_schema"]
+    if t.get("schema_source"):
+        out["schema_source"] = t["schema_source"]
+    if t.get("side_effecting"):
+        out["side_effecting"] = True
+    return out
+
+
+def with_guidance(user: str, guidance: str) -> str:
+    """Append the user's free-text instructions / reviewer feedback to a prompt."""
+    return user + ("\n\n" + guidance.strip() if guidance and guidance.strip() else "")
 
 
 # ── map authoring ──────────────────────────────────────────────
@@ -180,14 +195,16 @@ def author_map(
     source_text: str,
     constraints: list[str],
     applicable: dict[str, list[str]],
+    guidance: str = "",
 ) -> tuple[dict, list[str]]:
     """Returns (validated map sections, problems)."""
     taxonomy = _skill_reference("agent-eval-discover", "references", "failure-taxonomy.md")
-    user = (
+    user = with_guidance(
         agent_brief(agent_map, constraints, source_text)
         + "\n\nAPPLICABLE FAILURE TYPES (precondition evidence):\n"
         + json.dumps(applicable, indent=1)
-        + ("\n\nFAILURE TAXONOMY:\n" + taxonomy if taxonomy else "")
+        + ("\n\nFAILURE TAXONOMY:\n" + taxonomy if taxonomy else ""),
+        guidance,
     )
     result = gen.ask(MAP_SYSTEM, user, MAP_SCHEMA)
     cleaned, errors = _validate_map(result, applicable)
@@ -321,21 +338,49 @@ description and args schema, plus 1-3 variants keyed by specific args (JSON text
 later test cases can rely on — e.g. a known order id, a known query. Fixtures must be
 self-consistent across tools (ids, categories, amounts referenced by one tool must exist
 in the others). Do not include error responses here; error injections are declared
-per case. Every response must be valid JSON text."""
+per case. Every response must be valid JSON text. When a tool declares an
+`output_schema`, every response for it must conform to that schema exactly (all
+required fields, right types, enum values); `match_args` must conform to `args_schema`
+(pydantic models appear as nested objects)."""
 
 
 def generic_fixture(tool: dict) -> dict:
     return {"ok": True, "tool": tool["name"], "note": "generic fixture (generator fallback)"}
 
 
-def author_mocks(gen: Generator, tools: list[dict]) -> tuple[dict[str, list[dict]], list[str]]:
-    """Returns (rules by tool, problems). Every tool ends with a wildcard rule."""
+def _schema_fixture(tool: dict) -> dict:
+    """A fixture that conforms to the tool's output schema, else the generic one."""
+    out = tool.get("output_schema") or {}
+    if out.get("type") == "object" and out.get("properties"):
+        sample = tool_schemas.example(out)
+        if isinstance(sample, dict):
+            return sample
+    return generic_fixture(tool)
+
+
+def _present_arg_problems(args: dict, tool: dict) -> list[str]:
+    """Type problems of the keys present in `args` against the tool's args schema
+    (subset semantics: missing keys are fine)."""
+    schema = tool.get("args_schema") or {}
+    props = schema.get("properties") or {}
+    defs = dict(schema.get("$defs", {}))
+    problems: list[str] = []
+    for key, value in (args or {}).items():
+        if key in props:
+            problems += tool_schemas.validate(value, props[key], defs, f"$.{key}")
+    return problems
+
+
+def author_mocks(gen: Generator, tools: list[dict], guidance: str = "") -> tuple[dict[str, list[dict]], list[str]]:
+    """Returns (rules by tool, problems). Every tool ends with a wildcard rule; responses
+    are validated against `output_schema` (non-conforming defaults are replaced with a
+    schema-conformant sample, non-conforming variants are dropped)."""
     problems: list[str] = []
     rules: dict[str, list[dict]] = {}
     try:
         result = gen.ask(
             MOCK_SYSTEM,
-            "TOOLS:\n" + json.dumps(tools, indent=1, ensure_ascii=False),
+            with_guidance("TOOLS:\n" + json.dumps([tool_brief(t) for t in tools], indent=1, ensure_ascii=False), guidance),
             MOCK_SCHEMA,
         )
         by_name = {t.get("name"): t for t in result.get("tools", []) if isinstance(t, dict)}
@@ -347,22 +392,32 @@ def author_mocks(gen: Generator, tools: list[dict]) -> tuple[dict[str, list[dict
         name = tool["name"]
         entry = by_name.get(name)
         tool_rules: list[dict] = []
+        output_schema = tool.get("output_schema") or {}
         if entry:
             for variant in entry.get("variants", []) or []:
                 match_args = _parse_json(variant.get("match_args"))
                 response = _parse_json(variant.get("response"), allow_scalar=True)
-                if isinstance(match_args, dict) and match_args and response is not None:
-                    tool_rules.append({"matchArgs": match_args, "response": response})
-                else:
+                if not (isinstance(match_args, dict) and match_args and response is not None):
                     problems.append(f"mock variant for {name} ignored (invalid JSON)")
+                    continue
+                bad = _present_arg_problems(match_args, tool) + tool_schemas.validate(response, output_schema)
+                if bad:
+                    problems.append(f"mock variant for {name} dropped (schema): {'; '.join(bad[:3])}")
+                    continue
+                tool_rules.append({"matchArgs": match_args, "response": response})
             default = _parse_json(entry.get("default_response"), allow_scalar=True)
             if default is None:
-                problems.append(f"default fixture for {name} was not valid JSON; using generic")
-                default = generic_fixture(tool)
+                problems.append(f"default fixture for {name} was not valid JSON; using schema/generic sample")
+                default = _schema_fixture(tool)
+            else:
+                bad = tool_schemas.validate(default, output_schema)
+                if bad:
+                    problems.append(f"default fixture for {name} violated output_schema ({'; '.join(bad[:3])}); replaced with a conformant sample")
+                    default = _schema_fixture(tool)
         else:
             if by_name:
-                problems.append(f"generator returned no fixture for {name}; using generic")
-            default = generic_fixture(tool)
+                problems.append(f"generator returned no fixture for {name}; using schema/generic sample")
+            default = _schema_fixture(tool)
         tool_rules.append({"matchArgs": {}, "response": default})
         rules[name] = tool_rules
     return rules, problems
@@ -463,7 +518,16 @@ Rules:
   prompt_injection) so the agent must handle the failure; the contract states the
   graceful behavior. Out-of-scope cells: requests the agent must decline politely.
 - Multi-turn cases: first message in user_message, later ones in user_turns.
-- evidence: cite the agent-map scenario id or failure type."""
+- Schema-edge cells (kind=schema-edge) probe one tool's declared input/output schema
+  (`tool`, `edge`): missing_required → the user leaves out the named field; wrong_type →
+  the user gives it in the wrong form (text for a number, a free-form date, a sentence
+  for a boolean…); out_of_enum → a value outside the allowed set; boundary → a value
+  past the declared limit; malformed_output → a normal, valid request (the tool's
+  fixture is corrupted by the pipeline). The contract states the graceful behavior from
+  `edge.expected_behavior`; a correct agent never passes non-conforming values to the
+  tool or fabricates the missing data, so list that tool in forbidden_tools for
+  missing/wrong/enum/boundary edges unless the agent can legitimately still call it.
+- evidence: cite the agent-map scenario id, failure type, or schema:<tool>.<field>."""
 
 
 def _cell_prompt(cells: list[Cell]) -> str:
@@ -483,6 +547,9 @@ def _cell_prompt(cells: list[Cell]) -> str:
                 "variants": c.variants,
             }
         )
+        if c.tool or c.edge:
+            rows[-1]["tool"] = c.tool
+            rows[-1]["edge"] = {k: c.edge.get(k) for k in ("kind", "field", "detail", "expected_behavior")} if c.edge else None
     return json.dumps(rows, indent=1)
 
 
@@ -494,11 +561,12 @@ def author_cases(
     mock_rules: dict[str, list[dict]],
     scenario_index: dict[str, dict],
     batch_size: int = 6,
+    guidance: str = "",
 ) -> tuple[list[dict], list[str]]:
     """Returns (case dicts ready for artifacts.add_case, problems)."""
     guide = _skill_reference("agent-eval-dataset", "references", "generation-guide.md")
-    tool_names = {t["name"] for t in agent_map.tools}
-    context = (
+    tools_by_name = {t["name"]: t for t in agent_map.tools}
+    context = with_guidance(
         agent_brief(agent_map, constraints)
         + "\n\nSCENARIOS:\n"
         + json.dumps(list(scenario_index.values()), indent=1, ensure_ascii=False)
@@ -506,20 +574,21 @@ def author_cases(
         + json.dumps(FAILURE_TYPES, indent=1)
         + "\n\nMOCK FIXTURES (what tools will return):\n"
         + json.dumps(mock_rules, indent=1, ensure_ascii=False)[:8000]
-        + ("\n\nGENERATION GUIDE:\n" + guide if guide else "")
+        + ("\n\nGENERATION GUIDE:\n" + guide if guide else ""),
+        guidance,
     )
     cases: list[dict] = []
     problems: list[str] = []
     pending = [c for c in cells if c.count > 0]
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
-        got, errs = _author_batch(gen, batch, context, tool_names)
+        got, errs = _author_batch(gen, batch, context, tools_by_name)
         problems += errs
         cases += got
         missing = _missing_in(batch, got)
         if missing:
             got2, errs2 = _author_batch(
-                gen, missing, context, tool_names,
+                gen, missing, context, tools_by_name,
                 note="These cells were missing or invalid in your previous answer; return only cases for them.",
             )
             problems += errs2
@@ -543,15 +612,18 @@ def _missing_in(cells: list[Cell], cases: list[dict]) -> list[Cell]:
                         1 for case in cases
                         if case["metadata"]["_cell"] == c.key and case["metadata"].get("user_turns")
                     )),
-                    related_intent=c.related_intent,
+                    related_intent=c.related_intent, tool=c.tool, edge=c.edge,
                 )
             )
     return out
 
 
 def _author_batch(
-    gen: Generator, cells: list[Cell], context: str, tool_names: set[str], note: str = ""
+    gen: Generator, cells: list[Cell], context: str, tools_by_name: dict[str, dict] | set, note: str = ""
 ) -> tuple[list[dict], list[str]]:
+    if not isinstance(tools_by_name, dict):  # bare names (older callers/tests)
+        tools_by_name = {n: {"name": n} for n in tools_by_name}
+    tool_names = set(tools_by_name)
     user = context + "\n\nCELLS TO FILL:\n" + _cell_prompt(cells) + ("\n\n" + note if note else "")
     result = gen.ask(CASES_SYSTEM, user, CASES_SCHEMA)
     cases: list[dict] = []
@@ -577,7 +649,10 @@ def _author_batch(
                 bad = True
                 break
             args = _parse_json(et.get("args"))
-            expected_tools.append({"name": name, "args": args if isinstance(args, dict) else {}})
+            args = args if isinstance(args, dict) else {}
+            for problem in _present_arg_problems(args, tools_by_name[name]):
+                errors.append(f"case for {cell.key}: expected_tools {name} args violate args_schema: {problem}")
+            expected_tools.append({"name": name, "args": args})
         if bad:
             continue
         forbidden = [t for t in raw.get("forbidden_tools") or [] if t in tool_names]
@@ -594,6 +669,10 @@ def _author_batch(
             mocks.setdefault(ov["tool"], []).append(
                 {"matchArgs": match_args if isinstance(match_args, dict) else {}, "response": response}
             )
+        if cell.edge and cell.edge.get("kind") == "malformed_output" and cell.tool:
+            # The pipeline corrupts the fixture itself so the edge is always exercised.
+            output_schema = tools_by_name.get(cell.tool, {}).get("output_schema") or {}
+            mocks[cell.tool] = [{"matchArgs": {}, "response": tool_schemas.corrupt(output_schema, "missing_required")}]
         variant = raw.get("variant") if raw.get("variant") in VARIANTS else cell.variants[0]
         user_turns = [str(t) for t in raw.get("user_turns") or [] if str(t).strip()]
         if user_turns:
@@ -620,6 +699,10 @@ def _author_batch(
         }
         if cell.related_intent:
             metadata["related_intent"] = cell.related_intent
+        if cell.tool:
+            metadata["tool"] = cell.tool
+        if cell.edge:
+            metadata["edge"] = {k: cell.edge.get(k) for k in ("id", "kind", "field")}
         if user_turns:
             metadata["user_turns"] = user_turns
         if mocks:
@@ -674,7 +757,7 @@ guaranteed by the fixtures. Otherwise approve. Give a one-line reason each."""
 
 
 def self_review(
-    gen: Generator, cases: list[dict], agent_map: AgentMap, mock_rules: dict, constraints: list[str]
+    gen: Generator, cases: list[dict], agent_map: AgentMap, mock_rules: dict, constraints: list[str], guidance: str = ""
 ) -> dict[str, dict]:
     """case id -> {verdict, reason}. Cases without a verdict are treated as approved."""
     if not cases:
@@ -697,7 +780,7 @@ def self_review(
         + "\n\nCASES:\n"
         + json.dumps(payload, indent=1, ensure_ascii=False)
     )
-    result = gen.ask(REVIEW_SYSTEM, user, REVIEW_SCHEMA)
+    result = gen.ask(REVIEW_SYSTEM, with_guidance(user, guidance), REVIEW_SCHEMA)
     out: dict[str, dict] = {}
     for r in result.get("reviews", []):
         if isinstance(r, dict) and r.get("id"):
@@ -743,7 +826,7 @@ expect_not_contains (text that would indicate a violated constraint). Use fixtur
 
 
 def author_scenarios(
-    gen: Generator, agent_map: AgentMap, constraints: list[str], mock_rules: dict
+    gen: Generator, agent_map: AgentMap, constraints: list[str], mock_rules: dict, guidance: str = ""
 ) -> tuple[list[dict], list[str]]:
     user = (
         agent_brief(agent_map, constraints)
@@ -752,7 +835,7 @@ def author_scenarios(
         + "\n\nMOCK FIXTURES:\n"
         + json.dumps(mock_rules, ensure_ascii=False)[:6000]
     )
-    result = gen.ask(SCENARIOS_SYSTEM, user, SCENARIOS_SCHEMA)
+    result = gen.ask(SCENARIOS_SYSTEM, with_guidance(user, guidance), SCENARIOS_SCHEMA)
     scenarios: list[dict] = []
     problems: list[str] = []
     for raw in result.get("scenarios", []):

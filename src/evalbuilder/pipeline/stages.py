@@ -296,7 +296,7 @@ def author_map(ctx: PipelineContext) -> dict:
     )
     ctx.save_artifact("applicable_failures", applicable)
     ctx.set("applicable", applicable)
-    cleaned, errors = gen_mod.author_map(ctx.generator(), amap, ctx.source_text(), cfg.constraints, applicable)
+    cleaned, errors = gen_mod.author_map(ctx.generator(), amap, ctx.source_text(), cfg.constraints, applicable, guidance=cfg.guidance())
     if not cleaned["intents"] or not cleaned["scenarios"]:
         raise ValueError("generator produced no valid intents/scenarios: " + "; ".join(errors[:5]))
     for err in errors:
@@ -324,7 +324,7 @@ def author_map(ctx: PipelineContext) -> dict:
 
 def author_mocks(ctx: PipelineContext) -> dict:
     amap = ctx.agent_map()
-    rules, problems = gen_mod.author_mocks(ctx.generator(), amap.tools)
+    rules, problems = gen_mod.author_mocks(ctx.generator(), amap.tools, guidance=ctx.config.guidance())
     for p in problems:
         ctx.problem("mocks", p)
     if ctx.config.mocking.required:
@@ -356,7 +356,7 @@ def build_dataset(ctx: PipelineContext) -> dict:
     )
     scenario_index = {s["id"]: s for s in amap.scenarios}
     cases, problems = gen_mod.author_cases(
-        ctx.generator(), cells, amap, amap.constraints, rules, scenario_index
+        ctx.generator(), cells, amap, amap.constraints, rules, scenario_index, guidance=cfg.guidance()
     )
     for p in problems:
         ctx.problem("dataset", p)
@@ -403,7 +403,8 @@ def review(ctx: PipelineContext) -> dict:
     rejected: dict[str, str] = {}
     try:
         reviews = gen_mod.self_review(
-            ctx.generator(), [c.model_dump(by_alias=True) for c in pending], ctx.agent_map(), ctx.mock_rules(), ctx.agent_map().constraints
+            ctx.generator(), [c.model_dump(by_alias=True) for c in pending], ctx.agent_map(), ctx.mock_rules(),
+            ctx.agent_map().constraints, guidance=cfg.guidance(),
         )
     except Exception as e:  # noqa: BLE001 - self-review is advisory
         ctx.problem("review", f"self-review unavailable: {type(e).__name__}: {e}")
@@ -532,7 +533,7 @@ def simulate(ctx: PipelineContext) -> dict:
     cfg = ctx.config
     ds = ctx.dataset()
     amap = ctx.agent_map()
-    scenarios, problems = gen_mod.author_scenarios(ctx.generator(), amap, amap.constraints, ctx.mock_rules())
+    scenarios, problems = gen_mod.author_scenarios(ctx.generator(), amap, amap.constraints, ctx.mock_rules(), guidance=cfg.guidance())
     for p in problems:
         ctx.problem("simulate", p)
     if not scenarios:

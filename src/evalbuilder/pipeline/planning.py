@@ -9,6 +9,19 @@ from evalbuilder.schemas import AgentMap
 
 OUT_OF_SCOPE = "out_of_scope"
 CROSS_CUTTING = "cross-cutting"
+SCHEMA_EDGE = "schema-edge"
+
+
+def _intent_for_tool(agent_map: AgentMap, tool: dict, intents: list[str], index: int) -> str | None:
+    """The intent whose scenarios cite the tool (evidence `tool:<name>`), else rotate."""
+    token = f"tool:{tool.get('name')}"
+    for s in agent_map.scenarios:
+        if token in (s.get("evidence") or []) and s.get("intent") in intents:
+            return s["intent"]
+    for i in agent_map.intents:
+        if token in (i.get("evidence") or []):
+            return i["id"]
+    return intents[index % len(intents)] if intents else None
 
 
 @dataclass
@@ -22,6 +35,8 @@ class Cell:
     variants: list[str] = field(default_factory=list)
     multi_turn: int = 0
     related_intent: str | None = None
+    tool: str | None = None  # schema-edge cells: the tool whose schema is probed
+    edge: dict | None = None  # schema-edge cells: {kind, field, detail, expected_behavior, …}
 
     @property
     def key(self) -> str:
@@ -38,6 +53,8 @@ class Cell:
             "variants": list(self.variants),
             "multi_turn": self.multi_turn,
             "related_intent": self.related_intent,
+            "tool": self.tool,
+            "edge": dict(self.edge) if self.edge else None,
         }
 
 
@@ -99,6 +116,26 @@ def plan_cells(
                 related_intent=intents[i % len(intents)] if intents else None,
             )
         )
+
+    # Schema edge cells: per tool, the first N deterministic edge cases (missing / wrong /
+    # out-of-range input, malformed output) derived from its args/output schemas.
+    per_tool = int(getattr(cfg, "per_tool_edge_cases", 0) or 0)
+    if per_tool > 0:
+        for j, tool in enumerate(agent_map.tools):
+            for edge in (tool.get("edge_cases") or [])[:per_tool]:
+                cells.append(
+                    Cell(
+                        intent=CROSS_CUTTING,
+                        scenario=edge["id"],
+                        failure_mode=edge.get("failure_mode", "input_validation"),
+                        kind=SCHEMA_EDGE,
+                        count=1,
+                        variants=["boundary", "adversarial"],
+                        related_intent=_intent_for_tool(agent_map, tool, intents, j),
+                        tool=tool["name"],
+                        edge=edge,
+                    )
+                )
 
     # Floor on total size: extra happy cases spread over intent happy cells.
     planned = sum(c.count for c in cells)
