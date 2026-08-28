@@ -123,7 +123,10 @@ def _fill_area(page, label: str, text: str) -> None:
 
 def _select(page, label: str, option: str) -> None:
     widget = page.get_by_test_id("stSelectbox").filter(has_text=label).first
-    widget.locator("input").click()
+    box = widget.locator("input")
+    if option in (box.input_value() or ""):
+        return  # already selected; re-clicking a selected react-aria option keeps re-rendering it
+    box.click()
     page.locator("[role='option']").filter(has_text=option).first.click()
     _settle(page)
 
@@ -151,17 +154,21 @@ def _open_setup(page, app_url: str) -> None:
     _settle(page)
 
 
-def _configure(page, work: Path, name: str, *, auto_approve: bool, instructions: str) -> Path:
-    """Fill the setup form for the support bot with offline models; returns the config path."""
-    _select(page, "Example agent", "support-bot")
-    expect(page.get_by_test_id("stTextInput").filter(has_text="Importable module").locator("input")).to_have_value("examples.support_bot.agent")
+def _configure(page, work: Path, name: str, *, auto_approve: bool, instructions: str, target: str = "support-bot",
+               module: str = "examples.support_bot.agent", agent_model: str = SCRIPTED_AGENT,
+               generator_model: str = OFFLINE_GENERATOR,
+               constraints: str = "Never call issue_refund before the customer explicitly confirms.\nAlways mention the order id.",
+               edge_cases_per_tool: int | None = None) -> Path:
+    """Fill the setup form for an example agent with offline models; returns the config path."""
+    _select(page, "Example agent", target)
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Importable module").locator("input")).to_have_value(module)
     _fill(page, "Pipeline name", name)
     cfg_path = work / f"{name}.yaml"
     _fill(page, "Config file path", str(cfg_path))
-    _fill(page, "Agent model", SCRIPTED_AGENT)
-    _fill(page, "Judge model", SCRIPTED_AGENT)
-    _fill(page, "Generator model", OFFLINE_GENERATOR)
-    _fill_area(page, "Constraints", "Never call issue_refund before the customer explicitly confirms.\nAlways mention the order id.")
+    _fill(page, "Agent model", agent_model)
+    _fill(page, "Judge model", agent_model)
+    _fill(page, "Generator model", generator_model)
+    _fill_area(page, "Constraints", constraints)
     _fill_area(page, "General rules", instructions)
     _fill(page, "Output directory", str(work / name))
     if auto_approve:
@@ -173,6 +180,8 @@ def _configure(page, work: Path, name: str, *, auto_approve: bool, instructions:
     # drop the judge evaluators (the scripted judge cannot score) by editing the YAML directly
     text = _yaml_area(page).input_value()
     text = text.replace("- type: contract\n", "").replace("- type: correctness\n", "")
+    if edge_cases_per_tool is not None:
+        text = re.sub(r"per_tool_edge_cases: \d+", f"per_tool_edge_cases: {edge_cases_per_tool}", text)
     _set_yaml(page, text)
     return cfg_path
 
@@ -349,3 +358,67 @@ def test_full_autonomous_run_from_setup(page, app_url, work):
     page.locator("h2#coverage").wait_for(timeout=60_000)
     _settle(page)
     expect(page.get_by_text("schema-edge").first).to_be_visible()
+
+
+def test_pydantic_agent_dataset_run_shows_schema_edge_cases(page, app_url, work):
+    """incident_desk: pydantic in/out models + args_schema → discovery preview, richer edge kinds,
+    pipeline-injected malformed-output fixtures, then approval and evaluation."""
+    _open_setup(page, app_url)
+    _select(page, "Example agent", "incident-desk")
+    _click(page, "Discover structure")
+    metrics = page.locator("[data-testid='stMetric']")
+    assert int(metrics.filter(has_text="Pydantic models").first.locator("[data-testid='stMetricValue']").inner_text()) >= 4
+    assert int(metrics.filter(has_text="Schema edge cases").first.locator("[data-testid='stMetricValue']").inner_text()) >= 10
+    runbooks = page.get_by_test_id("stExpander").filter(has_text="search_runbooks — schemas & edge cases")
+    runbooks.locator("summary").click()
+    expect(runbooks.get_by_text("out_of_enum").first).to_be_visible()
+    expect(runbooks.get_by_text('"sev1"').first).to_be_visible()
+    ticket = page.get_by_test_id("stExpander").filter(has_text="create_ticket — schemas & edge cases")
+    ticket.locator("summary").click()
+    expect(ticket.get_by_text("malformed_output").first).to_be_visible()
+    expect(ticket.get_by_text('"TicketRequest"').first).to_be_visible()
+    _shot(page, "setup-incident-discover")
+
+    cfg_path = _configure(
+        page, work, "ui-incident", auto_approve=False, instructions="Ops on-call copilot; sev1 means outage.",
+        target="incident-desk", module="examples.incident_desk.agent",
+        agent_model="scripted:examples.incident_desk.agent:default_scripted_model",
+        generator_model="scripted:examples.incident_desk.offline:generator_model",
+        constraints="Never page on-call before the user explicitly confirms.", edge_cases_per_tool=3,
+    )
+    out_dir = work / "ui-incident"
+    _click(page, "Generate dataset & mocks only")
+    _wait_job_finished(page, out_dir, "dataset")
+    _shot(page, "run-incident-dataset")
+    dataset = json.loads((out_dir / "dataset.json").read_text())
+    edges = [c for c in dataset["cases"] if c["metadata"].get("edge")]
+    kinds = {c["metadata"]["edge"]["kind"] for c in edges}
+    assert {"missing_required", "wrong_type", "out_of_enum", "malformed_output"} <= kinds, kinds
+    malformed = [c for c in edges if c["metadata"]["edge"]["kind"] == "malformed_output"]
+    assert malformed and all((c["metadata"].get("mocks") or {}).get("tools") for c in malformed)
+    override = next(iter(malformed[0]["metadata"]["mocks"]["tools"].values()))[0]["response"]
+    amap = json.loads((out_dir / "agent-map.json").read_text())
+    tool = next(t for t in amap["tools"] if t["name"] == malformed[0]["metadata"]["tool"])
+    assert set(tool["output_schema"]["required"]) - set(override)  # a required field was dropped
+    mocks = json.loads((out_dir / "mock-rules.json").read_text())["tools"]
+    assert set(mocks) == {t["name"] for t in amap["tools"]}
+    review_metrics = page.locator("[data-testid='stMetric']")
+    assert review_metrics.filter(has_text="Schema-edge cases").first.locator("[data-testid='stMetricValue']").inner_text() == str(len(edges))
+
+    _fill(page, "Approved by", "playwright ops")
+    _click(page, "Approve remaining cases & run evaluation")
+    _wait_job_finished(page, out_dir, "resume")
+    _expect_results_verdict(page, "pass")
+    report = json.loads((out_dir / "report.json").read_text())
+    assert report["verdict"] == "pass" and report["coverage"]["by_kind"]["schema-edge"]["covered"] == len(edges)
+    _click(page, "Open results in the report pages")
+    page.locator("h2#overview").wait_for(timeout=60_000)
+    _settle(page)
+    page.get_by_test_id("stSidebarNav").get_by_role("link", name="Agent graph & tools").click()
+    page.locator("h2#agent").wait_for(timeout=60_000)
+    _settle(page)
+    expander = page.get_by_test_id("stExpander").filter(has_text="create_ticket — argument schema")
+    expander.locator("summary").click()
+    expect(expander.get_by_text("Output schema").first).to_be_visible()
+    expect(expander.get_by_text('"TicketReceipt"').first).to_be_visible()
+    _shot(page, "results-incident-agent")
