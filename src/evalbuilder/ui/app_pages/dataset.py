@@ -25,6 +25,7 @@ def _case_rows(cases: list[dict]) -> list[dict]:
                 "topic": md.get("topic"),
                 "source": md.get("source"),
                 "turns": 1 + len(md.get("user_turns") or []),
+                "edge": (md.get("edge") or {}).get("kind"),
                 "expected tools": ", ".join(t.get("name", "?") for t in ref.get("expected_tools") or []),
                 "input": case_input(c),
             }
@@ -94,6 +95,12 @@ def render() -> None:
             )
             if review.get("note"):
                 st.caption(f"review note: {review['note']}")
+            if md.get("edge"):
+                edge = md["edge"]
+                st.markdown(
+                    f":violet-badge[schema edge] tool `{md.get('tool')}` · kind `{edge.get('kind')}`"
+                    + (f" · field `{edge.get('field')}`" if edge.get("field") else "")
+                )
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Inputs**")

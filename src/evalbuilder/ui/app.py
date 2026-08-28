@@ -23,6 +23,8 @@ from evalbuilder.ui.app_pages import (
     intents,
     overview,
     results,
+    run,
+    setup,
     simulation,
     stability,
     stages,
@@ -66,6 +68,11 @@ def sidebar() -> None:
         st.markdown("### Artifact source")
         discovered = loader.discover_dirs()
         initial = _initial_dir()
+        opened = st.session_state.pop("open_dir", None)  # hand-off from the Run & review page
+        if opened:
+            st.session_state["source_mode"] = "directory"
+            st.session_state["source_custom"] = opened
+            initial = opened
         if initial and initial not in discovered:
             discovered.insert(0, initial)
         mode = st.radio("Load from", ["directory", "uploaded files"], key="source_mode", horizontal=True)
@@ -74,7 +81,7 @@ def sidebar() -> None:
             default_index = options.index(initial) if initial in options else 0
             chosen = st.selectbox("Pipeline output directory", options, index=default_index if options else None,
                                   key="source_dir", placeholder="no pipeline outputs found")
-            custom = st.text_input("…or any path", value="", key="source_custom", placeholder="path/to/eval/pipeline/<name>")
+            custom = st.text_input("…or any path", key="source_custom", placeholder="path/to/eval/pipeline/<name>")
             path = custom.strip() or chosen
             if path:
                 bundle = load_bundle_from_dir(path)
@@ -106,9 +113,14 @@ def sidebar() -> None:
 
 def main() -> None:
     st.session_state.setdefault("bundle", None)
+    overview_page = st.Page(overview.render, title="Overview", icon=":material/dashboard:", default=True, url_path="overview")
+    setup_page = st.Page(setup.render, title="Pipeline setup", icon=":material/tune:", url_path="setup")
+    run_page = st.Page(run.render, title="Run & review", icon=":material/play_circle:", url_path="run")
+    st.session_state["pages"] = {"overview": overview_page, "setup": setup_page, "run": run_page}
     pages = st.navigation(
         {
-            "": [st.Page(overview.render, title="Overview", icon=":material/dashboard:", default=True, url_path="overview")],
+            "": [overview_page],
+            "Pipeline": [setup_page, run_page],
             "Agent": [
                 st.Page(agent.render, title="Agent graph & tools", icon=":material/account_tree:", url_path="agent"),
                 st.Page(intents.render, title="Intents & scenarios", icon=":material/psychology:", url_path="intents"),

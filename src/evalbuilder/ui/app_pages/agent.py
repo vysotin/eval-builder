@@ -131,14 +131,31 @@ def render() -> None:
         table(
             [
                 {"tool": t["name"], "description": t.get("description", ""), "used by": ", ".join(t.get("used_by") or []),
-                 "live": bool(t.get("live")), "args": ", ".join((t.get("args_schema") or {}).get("properties", {}).keys())}
+                 "live": bool(t.get("live")), "args": ", ".join((t.get("args_schema") or {}).get("properties", {}).keys()),
+                 "schema source": t.get("schema_source") or "—", "models": ", ".join(t.get("models") or []),
+                 "output schema": bool(t.get("output_schema")), "side-effecting": bool(t.get("side_effecting")),
+                 "edge cases": len(t.get("edge_cases") or [])}
                 for t in tools
             ],
-            column_config={"live": st.column_config.CheckboxColumn(help="introspected from the imported module")},
+            column_config={
+                "live": st.column_config.CheckboxColumn(help="introspected from the imported module"),
+                "output schema": st.column_config.CheckboxColumn(help="return annotation captured as JSON schema"),
+                "side-effecting": st.column_config.CheckboxColumn(help="docstring declares a side effect / confirmation gate"),
+            },
         )
         for t in tools:
             with st.expander(f"{t['name']} — argument schema"):
                 st.code(json.dumps(t.get("args_schema") or {}, indent=2), language="json")
+                if t.get("output_schema"):
+                    st.markdown("**Output schema**" + (f" · models: {', '.join(f'`{m}`' for m in t.get('models') or [])}" if t.get("models") else ""))
+                    st.code(json.dumps(t["output_schema"], indent=2), language="json")
+                if t.get("edge_cases"):
+                    st.markdown("**Schema edge cases** (deterministic, from the schemas above)")
+                    table([
+                        {"kind": e.get("kind"), "field": e.get("field") or "—", "failure mode": e.get("failure_mode"),
+                         "detail": e.get("detail"), "expected behavior": e.get("expected_behavior")}
+                        for e in t["edge_cases"]
+                    ])
 
     with st.container(border=True):
         st.subheader("Constraints", anchor="agent-constraints")
