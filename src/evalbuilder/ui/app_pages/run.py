@@ -10,7 +10,6 @@ import streamlit as st
 
 from evalbuilder.pipeline import jobs
 from evalbuilder.pipeline import setup as setup_mod
-from evalbuilder.pipeline.config import STAGE_NAMES
 from evalbuilder.ui import loader
 from evalbuilder.ui.common import status_md, table, verdict_badge
 

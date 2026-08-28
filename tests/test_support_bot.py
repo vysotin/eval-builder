@@ -1,6 +1,5 @@
 """The support_bot example: router graph, external tools, scripted offline model."""
 
-import json
 
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool

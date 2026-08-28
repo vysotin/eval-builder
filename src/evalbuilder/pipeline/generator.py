@@ -16,7 +16,7 @@ from typing import Any, Callable
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from evalbuilder import tool_schemas
-from evalbuilder.pipeline.planning import CROSS_CUTTING, SCHEMA_EDGE, Cell
+from evalbuilder.pipeline.planning import Cell
 from evalbuilder.pipeline.taxonomy import FAILURE_TYPES
 from evalbuilder.schemas import AgentMap
 

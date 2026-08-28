@@ -379,7 +379,7 @@ def test_pydantic_agent_dataset_run_shows_schema_edge_cases(page, app_url, work)
     expect(ticket.get_by_text('"TicketRequest"').first).to_be_visible()
     _shot(page, "setup-incident-discover")
 
-    cfg_path = _configure(
+    _configure(
         page, work, "ui-incident", auto_approve=False, instructions="Ops on-call copilot; sev1 means outage.",
         target="incident-desk", module="examples.incident_desk.agent",
         agent_model="scripted:examples.incident_desk.agent:default_scripted_model",

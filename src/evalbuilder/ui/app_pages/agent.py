@@ -6,7 +6,7 @@ import json
 
 import streamlit as st
 
-from evalbuilder.ui.common import BLUE, evidence_md, get_bundle, require, table
+from evalbuilder.ui.common import evidence_md, get_bundle, require, table
 
 NODE_STYLE = {
     "llm": 'shape=box, style="rounded,filled", fillcolor="#cde2fb", color="#2a78d6"',
