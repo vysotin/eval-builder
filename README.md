@@ -60,7 +60,7 @@ your LangGraph agent ─►│ agent-eval-discover │ agent-eval-dataset │ ag
 12. [LangSmith](#langsmith-optional)
 13. [Testing](#testing)
 14. [Troubleshooting](#troubleshooting)
-15. [Extending](#extending-to-other-frameworks)
+15. [Extending](#extending-to-other-frameworks) · [Architecture guide](docs/architecture/README.md)
 
 ## Install
 
@@ -159,6 +159,7 @@ examples/             weather_bot, travel_planner, support_bot, incident_desk, l
                       scripted default model; support_bot/incident_desk/loan_desk also ship pipeline.yaml
                       and offline.py (a SchemaScriptedModel generator for LLM-free pipeline runs)
 docs/examples/support-bot/, incident-desk/   artifacts of real pipeline runs (UI demo + test fixtures)
+docs/architecture/    how every skill, CLI command, module, the pipeline and the UI work; decisions; limitations
 docs/superpowers/     design specs and implementation plans
 tests/                offline pytest suite; tests/ui/ = Playwright browser tests (report pages + interactive flows)
 ```
@@ -533,5 +534,7 @@ a browser via `streamlit.testing.v1.AppTest` (`tests/test_ui_pages.py`,
 The dataset schema is framework-neutral; LangGraph specifics live in
 `src/evalbuilder/{discover,target,mocking}.py`. A Google ADK adapter maps 1:1
 (AgentMetadata → agent-map, `before_tool_callback` mocking, `.evalset.json` import);
-Dify follows via DSL rewrite. Design docs: `docs/superpowers/specs/` (skills design,
-autonomous pipeline, UI/providers/naming), plans: `docs/superpowers/plans/`.
+Dify follows via DSL rewrite. The architecture guide in `docs/architecture/` describes
+every skill, command, module, the pipeline and the UI, with the decision record
+(`06-decisions.md`) and the limitations register (`07-limitations.md`); the dated design
+specs are in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
