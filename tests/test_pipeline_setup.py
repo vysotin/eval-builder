@@ -78,3 +78,83 @@ def test_feedback_approval_and_rejection_round_trip(tmp_path):
     assert summary["cases"] == len(ds["cases"]) and summary["by_status"]["rejected"] == 2 + already
     assert summary["mocked_tools"] == ["check_refund_policy", "issue_refund", "lookup_order", "search_kb"]
     assert s.dataset_summary(tmp_path / "empty") is None
+
+
+# ── projects (folder = output directory; the UI's single source of truth) ──
+
+
+def test_default_form_without_target_selects_nothing():
+    form = s.default_form()
+    assert form["source"] == "" and form["module"] == "" and form["output_dir"] == "" and form["config_path"] == ""
+    with_target = s.default_form({"name": "weather-bot", "source": "examples/weather_bot/agent.py", "module": "examples.weather_bot.agent"})
+    assert with_target["output_dir"] == "eval/pipeline/weather-bot" and with_target["config_path"] == "eval/pipeline/weather-bot.yaml"
+
+
+def test_form_from_config_round_trips_build_config():
+    form = s.default_form({"name": "demo", "source": "examples/support_bot/agent.py", "module": "examples.support_bot.agent"})
+    form.update(constraints="Never guess.\nAlways cite.", instructions="Be terse.", agent_model="", evaluators=["expected_tools", "contains"],
+                auto_approve=True, approved_by="me", per_tool_edge_cases=3, repeats=1, simulate=False, on_miss="fallback",
+                total_cases=5, multi_turn_share=0.25, threshold_default=0.6)
+    cfg = s.build_config(form)
+    back = s.form_from_config(cfg, config_path="eval/pipeline/demo.yaml")
+    assert back == {**form, "output_dir": "eval/pipeline/demo"}
+    assert s.build_config(back) == cfg
+    # a folder overrides the config's output dir (the project is the folder)
+    assert s.form_from_config(cfg, output_dir="docs/examples/demo")["output_dir"] == "docs/examples/demo"
+    # unknown evaluators (with options) are kept out of the multiselect but survive in the YAML round trip only
+    cfg.evaluators.append({"type": "openevals", "rubric": "x"})
+    assert s.form_from_config(cfg)["evaluators"] == ["expected_tools", "contains"]
+
+
+def test_project_config_prefers_job_then_report_then_sibling(tmp_path):
+    out = tmp_path / "eval" / "pipeline" / "demo"
+    out.mkdir(parents=True)
+    assert s.project_config(out) == (None, None)
+    form = s.default_form({"name": "demo", "source": "examples/support_bot/agent.py", "module": "examples.support_bot.agent"})
+    cfg = s.build_config(form)
+    # 3. a sibling <dir>.yaml
+    sibling = tmp_path / "eval" / "pipeline" / "demo.yaml"
+    cfg.save(sibling)
+    found, path = s.project_config(out)
+    assert found == cfg and path == str(sibling)
+    # 2. report.json: config_path when it exists, else the embedded config
+    other = tmp_path / "other.yaml"
+    (out / "report.json").write_text(json.dumps({"schema": "evalbuilder/pipeline-report/v1", "name": "demo",
+                                                 "config_path": str(other), "config": {**cfg.model_dump(by_alias=True), "instructions": "embedded"}}))
+    found, path = s.project_config(out)
+    assert found.instructions == "embedded" and path is None
+    cfg.model_copy(update={"instructions": "from other"}).save(other)
+    found, path = s.project_config(out)
+    assert found.instructions == "from other" and path == str(other)
+    # 1. job.json wins
+    job_cfg = tmp_path / "job.yaml"
+    cfg.model_copy(update={"instructions": "from job"}).save(job_cfg)
+    (out / "job.json").write_text(json.dumps({"schema": "evalbuilder/pipeline-job/v1", "config_path": str(job_cfg)}))
+    found, path = s.project_config(out)
+    assert found.instructions == "from job" and path == str(job_cfg)
+    # a broken config file is reported as None rather than raising
+    job_cfg.write_text("name: only\n")
+    assert s.project_config(out) == (None, None) or s.project_config(out)[0].instructions == "from other"
+
+
+def test_discover_projects_lists_output_dirs_and_unrun_configs(tmp_path):
+    root = tmp_path / "eval" / "pipeline"
+    root.mkdir(parents=True)
+    form = s.default_form({"name": "ran", "source": "examples/support_bot/agent.py", "module": "examples.support_bot.agent"})
+    ran = s.build_config({**form, "output_dir": str(root / "ran")})
+    ran.save(root / "ran.yaml")
+    (root / "ran").mkdir()
+    (root / "ran" / "state.json").write_text(json.dumps({"schema": "evalbuilder/pipeline-state/v1", "name": "ran", "stages": {}}))
+    unrun = s.build_config({**form, "name": "unrun", "output_dir": str(root / "unrun")})
+    unrun.save(root / "unrun.yaml")
+    (root / "noise").mkdir()  # no artifacts, no config → not a project
+    (root / "broken.yaml").write_text("nope: 1\n")
+    projects = s.discover_projects(("eval/pipeline",), cwd=tmp_path)
+    by_name = {p["name"]: p for p in projects}
+    assert set(by_name) == {"ran", "unrun"}
+    assert by_name["ran"]["dir"] == str(root / "ran") and by_name["ran"]["has_artifacts"] and by_name["ran"]["config_path"] == str(root / "ran.yaml")
+    assert by_name["unrun"]["dir"] == str(root / "unrun") and not by_name["unrun"]["has_artifacts"] and by_name["unrun"]["config_path"] == str(root / "unrun.yaml")
+    # committed examples are projects too
+    real = {p["dir"]: p for p in s.discover_projects()}
+    assert "docs/examples/support-bot" in real and real["docs/examples/support-bot"]["has_artifacts"]
+    assert real["docs/examples/support-bot"]["name"] == "support-bot"

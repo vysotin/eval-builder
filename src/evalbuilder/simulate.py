@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -97,6 +98,25 @@ def simulate_scenario(graph, scenario: dict, user_model=None) -> dict:
         "transcript": transcript,
         "violations": violations,
     }
+
+
+def simulate_scenarios(
+    graph_factory, scenarios: list[dict], user_model=None, max_workers: int = 1
+) -> list[dict]:
+    """Run every scenario, each against its own graph from `graph_factory()`.
+
+    With `max_workers > 1` the scenarios run concurrently in a thread pool — each
+    worker builds a fresh graph (mirroring the per-case graphs of `run_dataset`),
+    so no graph or tool wrapper is shared between threads. Results keep scenario
+    order and are identical to a sequential pass."""
+
+    def _one(scenario: dict) -> dict:
+        return simulate_scenario(graph_factory(), scenario, user_model=user_model)
+
+    if max_workers > 1 and len(scenarios) > 1:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(scenarios))) as pool:
+            return list(pool.map(_one, scenarios))
+    return [_one(scenario) for scenario in scenarios]
 
 
 def mine_failures(ds: Dataset, results: list[dict]) -> int:

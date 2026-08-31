@@ -11,7 +11,7 @@ to the repository root.
 | [02-cli.md](02-cli.md) | every `evalbuilder` command, its inputs/outputs, exit codes, and the module it delegates to |
 | [03-core-modules.md](03-core-modules.md) | the deterministic core: artifacts and schemas, discovery, tool schemas and edge cases, target contract and runner, mocking, evaluators, simulation, coverage, providers and the Claude CLI adapter, LangSmith I/O, offline testing helpers |
 | [04-pipeline.md](04-pipeline.md) | the autonomous pipeline: config, stage engine, the 14 stages, the LLM generator and its validation loop, coverage planning, failure taxonomy gating, aggregation and stability, the report, the artifact naming convention, background jobs and the interactive setup helpers |
-| [05-ui.md](05-ui.md) | the Streamlit app: sidebar/loader, the *Pipeline setup* and *Run & review* pages, the report pages, and how it is tested |
+| [05-ui.md](05-ui.md) | the Streamlit app: the project every page follows, the persistent *Pipeline setup* and *Run & review* pages, the report pages (Summary last), and how it is tested |
 | [06-decisions.md](06-decisions.md) | the architectural decision record: each important choice, the alternatives considered, and the reasoning |
 | [07-limitations.md](07-limitations.md) | expected limitations, by area, with the workaround where one exists |
 

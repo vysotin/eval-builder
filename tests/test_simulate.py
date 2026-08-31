@@ -105,3 +105,54 @@ def test_cli_simulate(tmp_path):
     summary = json.loads(r.stdout)
     assert summary["scenarios"] == 1 and summary["mined"] == 0
     assert list(tmp_path.glob("simulation-*.json"))
+
+
+# ── parallel scenario execution ────────────────────────────────
+
+
+class _FakeGraph:
+    """graph.invoke stand-in: replies with a fixed text, optionally after a barrier."""
+
+    def __init__(self, reply, barrier=None):
+        self.reply = reply
+        self.barrier = barrier
+
+    def invoke(self, state):
+        from types import SimpleNamespace
+
+        if self.barrier is not None:
+            self.barrier.wait()  # raises BrokenBarrierError when scenarios run sequentially
+        return {"messages": [SimpleNamespace(content=self.reply)]}
+
+
+def _scen(i):
+    return {"id": f"s{i}", "opening": "hi", "max_turns": 2, "success_contains": "confirm"}
+
+
+def test_simulate_scenarios_run_concurrently_with_a_graph_per_scenario():
+    import threading
+
+    from evalbuilder.simulate import simulate_scenarios
+
+    barrier = threading.Barrier(2, timeout=10)
+    built = []
+
+    def factory():
+        graph = _FakeGraph("done, please confirm", barrier)
+        built.append(graph)
+        return graph
+
+    results = simulate_scenarios(factory, [_scen(1), _scen(2)], max_workers=2)
+    assert [r["scenario_id"] for r in results] == ["s1", "s2"]  # scenario order kept
+    assert all(r["stop_reason"] == "success" for r in results)
+    assert len(built) == 2  # each worker built its own graph
+
+
+def test_simulate_scenarios_sequential_matches_parallel():
+    from evalbuilder.simulate import simulate_scenarios
+
+    scens = [_scen(1), _scen(2), _scen(3)]
+    parallel = simulate_scenarios(lambda: _FakeGraph("ok, confirm"), scens, max_workers=3)
+    sequential = simulate_scenarios(lambda: _FakeGraph("ok, confirm"), scens, max_workers=1)
+    assert parallel == sequential
+    assert [r["scenario_id"] for r in parallel] == ["s1", "s2", "s3"]

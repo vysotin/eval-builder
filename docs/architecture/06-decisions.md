@@ -180,3 +180,27 @@ the browser flows never need a model.
 pipeline and UI possible in CI, and they double as demos. **Consequence:** the
 scripted models must be kept consistent with fixtures and edge-case messages when an
 example changes.
+
+## 18. One project per UI session, chosen only on Pipeline setup (2026-08-30)
+
+**Decision.** `ui/project.py` holds the single choice every page depends on — an
+output folder or uploaded artifacts — in `session_state["project"]`. Only the setup
+page (and the `--dir` start-up argument) sets it; the sidebar shows it and can clear
+it; *Run & review* and every report page derive what they show from it, and without
+a project they are empty and link back to setup. In folder mode the project *is* the
+setup form's output directory: picking a target proposes `eval/pipeline/<name>`,
+opening an existing folder loads its config (job → report → sibling YAML) back into
+the form, and saving/running follows the YAML.
+
+**Alternatives.** Independent pickers per page (the previous sidebar source picker +
+a run-page directory selectbox + the setup form's output directory) — rejected: three
+selectors could disagree, and "which folder am I looking at" had no single answer.
+
+**Consequence.** The setup form must survive navigation, which Streamlit does not do
+for keyed widgets (their values are dropped when the widget is not rendered): the
+form is a plain dict, widgets are seeded from it before creation and captured back at
+the start of every run, buttons act through callbacks, and the config file's mtime is
+tracked so changes made by the review page or a job are reloaded instead of being
+overwritten on the next save. The *Overview* page became *Summary* and moved after
+*Analysis*: it summarises a finished evaluation rather than introducing the app, whose
+entry point is now the setup page.

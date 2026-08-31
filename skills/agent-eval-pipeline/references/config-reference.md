@@ -40,7 +40,7 @@ review:
 | `google_genai` (`gemini`, `google`) | `GOOGLE_API_KEY` | `langchain-google-genai` / `--extra gemini` | ignored |
 | `scripted` | – | – | – |
 
-`uv sync --extra llm` installs all three. The same spec works for `models.agent`,
+`uv sync --extra llm` (or `pip install -e '.[llm]'`) installs all three. The same spec works for `models.agent`,
 `models.judge`, `models.generator` and `EVALBUILDER_*_MODEL` in `.env`.
 
 ## Artifacts

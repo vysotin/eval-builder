@@ -20,12 +20,14 @@ SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#
 VERDICT_COLORS = {"pass": "green", "fail": "red", "incomplete": "orange"}
 STATUS_COLORS = {
     "ok": "green", "recovered": "blue", "failed": "red", "skipped": "grey",
-    "awaiting_review": "orange", "pending": "grey",
+    "awaiting_review": "orange", "pending": "grey", "running": "blue",
 }
 STATUS_ICONS = {
     "ok": ":material/check_circle:", "recovered": ":material/autorenew:", "failed": ":material/error:",
     "skipped": ":material/skip_next:", "awaiting_review": ":material/pending:", "pending": ":material/schedule:",
+    "running": ":material/play_circle:",
 }
+JOB_COLORS = {"running": "blue", "finished": "green", "stopped": "red", "lost": "orange", "none": "grey"}
 
 
 def get_bundle() -> Bundle | None:
@@ -33,9 +35,16 @@ def get_bundle() -> Bundle | None:
 
 
 def require(bundle: Bundle | None, *kinds: str) -> bool:
-    """Show a hint and return False when any required artifact is missing."""
+    """Show a hint and return False when there is no project, the project has no
+    artifacts yet, or any required artifact is missing."""
+    from evalbuilder.ui import project
+
     if bundle is None:
-        st.info("Load a pipeline output directory or upload artifacts from the sidebar.")
+        project.no_project_hint()
+        return False
+    if not any(bundle.has(k) for k in bundle.artifacts):
+        st.info(f"No artifacts yet in `{bundle.source}` — run the pipeline from **Pipeline setup** (or wait for the running job).", icon=":material/hourglass_empty:")
+        project.setup_link()
         return False
     missing = [k for k in kinds if not bundle.has(k)]
     if missing:
@@ -55,6 +64,48 @@ def verdict_badge(verdict: str | None) -> None:
         return
     icon = {"pass": ":material/check_circle:", "fail": ":material/cancel:", "incomplete": ":material/pending:"}
     st.badge(verdict, icon=icon.get(verdict), color=VERDICT_COLORS.get(verdict, "grey"))
+
+
+def job_badge_line(status: dict) -> str:
+    """`:color-badge[job <status>]` plus the running / interrupted stage."""
+    color = JOB_COLORS.get(status.get("status"), "grey")
+    line = f":{color}-badge[job {status.get('status')}]"
+    if status.get("running_stage"):
+        line += f" · running **{status['running_stage']}**"
+    elif status.get("interrupted_stage"):
+        line += f" · interrupted during **{status['interrupted_stage']}**"
+    return line
+
+
+def _run_stage_active(status: dict) -> bool:
+    prog = status.get("progress") or {}
+    return prog.get("stage") == "run" or status.get("interrupted_stage") == "run"
+
+
+def job_progress(status: dict, compact: bool = False) -> None:
+    """Visual job progress from `jobs.job_status`: stage-level progress bar and, while
+    the run stage executes, a case-level bar. `compact=True` (sidebar) also renders the
+    badge line and skips the per-intent breakdown; the Run & review page renders its own
+    richer badge line instead."""
+    if compact:
+        st.markdown(job_badge_line(status))
+    prog = status.get("progress") or {}
+    if prog.get("total"):
+        text = f"stages {prog['done']}/{prog['total']}" + (f" · {prog['stage']}" if prog.get("stage") else "")
+        st.progress(min(1.0, prog["done"] / prog["total"]), text=text)
+    rp = status.get("run_progress")
+    if rp and _run_stage_active(status):
+        total = rp.get("overall_total") or 0
+        if total:
+            st.progress(min(1.0, (rp.get("overall_done") or 0) / total),
+                        text=f"cases {rp.get('overall_done', 0)}/{total} · repeat {rp.get('repeat')}/{rp.get('repeats')}")
+        if not compact and rp.get("by_intent"):
+            parts = [
+                f"`{intent or '(no intent)'}` {v.get('done', 0)}/{v.get('total', 0)}"
+                + (f" · {v['errors']} error(s)" if v.get("errors") else "")
+                for intent, v in rp["by_intent"].items()
+            ]
+            st.caption("by intent: " + " · ".join(parts))
 
 
 def status_md(status: str | None) -> str:

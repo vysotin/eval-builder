@@ -1,51 +1,80 @@
 schema: evalbuilder/pipeline-config/v1
 name: incident-desk
+# agent source file (AST discovery) + importable module exposing TOOLS and build_agent
 target:
   source: examples/incident_desk/agent.py
   module: examples.incident_desk.agent
   factory: build_agent
+  root_node: null
+# provider:model[@effort] — claude-cli (Claude Code subscription), anthropic|claude, openai, gemini|google, scripted
 models:
   agent: claude-cli:claude-sonnet-5
   judge: claude-cli:claude-sonnet-5
   generator: claude-cli:claude-sonnet-5
+# rules the agent must honor; every generation prompt sees them and judges check them
 constraints:
-  - "Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with yes."
-  - "Always call get_service_status before proposing remediation or answering a status question."
-  - "Severity must be one of sev1, sev2 or sev3; offer those values instead of guessing."
-  - "If a tool errors or returns an incomplete payload, say so and never invent status or ticket values."
-instructions: |
-  Ops domain: services are named like api, checkout, payments or auth; severities are sev1 (outage), sev2 (degraded), sev3 (minor).
-  Use realistic on-call phrasing (500s, latency, failed deploys) and keep fixture ids stable (INC-xxxx tickets, RB-xx runbooks).
-  Every side-effecting action needs an explicit yes: cover both the ask and the confirmed follow-through.
+- Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with
+  yes.
+- Always call get_service_status before proposing remediation or answering a status question.
+- Severity must be one of sev1, sev2 or sev3; offer those values instead of guessing.
+- If a tool errors or returns an incomplete payload, say so and never invent status or ticket values.
+# free-text general rules for the generator (domain notes, what to emphasise, what to avoid)
+instructions: 'Ops domain: services are named like api, checkout, payments or auth; severities are sev1
+  (outage), sev2 (degraded), sev3 (minor).
+
+  Use realistic on-call phrasing (500s, latency, failed deploys) and keep fixture ids stable (INC-xxxx
+  tickets, RB-xx runbooks).
+
+  Every side-effecting action needs an explicit yes: cover both the ask and the confirmed follow-through.'
+# reviewer comments appended after partial runs; the generation stages read them on rerun
+feedback: []
+# case counts: per intent, per failure category, out-of-intent, multi-turn share, schema edge cases per tool
 coverage:
-  total_cases: 12
-  per_intent: {happy: 1, failure: 1}
+  total_cases: 10
+  per_intent:
+    happy: 1
+    failure: 1
   per_failure_category: 1
   out_of_intent: 2
   multi_turn_share: 0.15
   per_tool_edge_cases: 1
+# deterministic first (expected_tools, contains), then judges (contract, correctness, openevals, trajectory_llm)
 evaluators:
-  - type: expected_tools
-  - type: contains
-  - type: contract
-  - type: correctness
+- type: expected_tools
+- type: contains
+- type: contract
+- type: correctness
+- type: trajectory_match
+# pass rate per metric / per slice / overall
 thresholds:
+  metrics: {}
   default: 0.7
-  metrics: {expected_tools: 0.8}
   slice_min: 0.5
   overall_pass: 0.75
+# repeats detect unstable cases and evaluators; parallel_intents / parallel_scoring / parallel_simulations size the run, scoring and simulation thread pools (1 = sequential)
 runs:
   repeats: 2
+  parallel_intents: 4
+  parallel_scoring: 4
+  parallel_simulations: 4
+# every tool gets a fixture; on_miss strict = unmatched call is an error, never a real call
 mocking:
   required: true
   on_miss: strict
+# skip list, retries, optional simulate/publish
 stages:
+  skip: []
+  max_retries: 1
   simulate: true
   publish: auto
-  max_retries: 1
+# auto_approve + approved_by is the explicit human authorization to approve generated cases
 review:
   auto_approve: true
-  approved_by: "vladimir (examples/incident_desk/pipeline.yaml)"
-  note: "autonomous end-to-end demo run"
+  approved_by: vladimir (examples/incident_desk/pipeline.yaml)
+  note: ''
+# artifact directory (default eval/pipeline/<name>)
 output:
   dir: eval/pipeline/incident-desk
+# dataset name for publish (defaults to name)
+langsmith:
+  dataset_name: null

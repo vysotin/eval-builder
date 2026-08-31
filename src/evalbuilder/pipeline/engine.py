@@ -109,6 +109,10 @@ class PipelineRunner:
         stopped: str | None = None
         stop_reason: str | None = None
 
+        for stage in self.stages:  # pre-register every stage so the saved state shows total progress
+            state.record(stage.name).optional = stage.optional
+        state.save(self.state_path)
+
         for stage in self.stages:
             rec = state.record(stage.name)
             rec.optional = stage.optional
@@ -158,6 +162,8 @@ class PipelineRunner:
         rec.attempts = 0
         rec.error = None
         rec.reason = None
+        rec.status = "running"
+        state.save(self.state_path)  # the UI reads the running stage from disk
         started = time.time()
         while True:
             rec.attempts += 1

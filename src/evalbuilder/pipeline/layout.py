@@ -97,6 +97,10 @@ ARTIFACTS: dict[str, ArtifactKind] = {
             "One execution of every approved case: outputs, trajectory, tool calls, node path, errors.",
         ),
         ArtifactKind(
+            "run_progress", "run-progress.json", "evalbuilder/run-progress/v1", "run",
+            "Live progress of the run stage: current repeat, per-case completions, per-intent tallies.",
+        ),
+        ArtifactKind(
             "score_report", "results/score-report-{run_id}.json", "evalbuilder/score-report/v1", "score",
             "Evaluator scores for one run: per-metric stats, slices, per-case scores and comments.",
             legacy_files=("results/report-{run_id}.json",), legacy_schemas=("evalbuilder/report/v1",),

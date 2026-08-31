@@ -61,6 +61,8 @@ def default_scripted_model() -> ScriptedChatModel:
                 lambda m, _msgs: tool_call("get_alerts", {"city": m.group(1)}),
             ),
             (r"TOOL:.*alerts", lambda m, msgs: ai(f"Alerts: {msgs[-1].content}")),
+            (r"TOOL:", lambda m, _msgs: ai("Sorry, the weather service could not answer right now.")),
+            (r".", lambda m, _msgs: ai("I can only help with weather conditions and alerts — which city?")),
         ]
     )
 

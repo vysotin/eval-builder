@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from evalbuilder.pipeline.config import STAGE_NAMES
 from evalbuilder.pipeline.layout import path_for
 
 JOB_SCHEMA = "evalbuilder/pipeline-job/v1"
+TERMINAL_STAGE_STATUSES = ("ok", "recovered", "failed", "skipped", "awaiting_review")
 MODES = ("full", "dataset", "resume", "regenerate")
 GENERATION_STAGES = ("map", "mocks", "dataset")
 
@@ -79,6 +82,10 @@ def _write_job(out_dir: Path, job: dict) -> None:
 def _alive(pid: int | None) -> bool:
     if not pid:
         return False
+    try:  # reap the wrapper when it is our zombie child (kill(0) succeeds on zombies)
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, PermissionError, OSError):
+        pass
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -169,29 +176,104 @@ def stage_statuses(out_dir: Path) -> dict[str, dict]:
     return out
 
 
+def stage_progress(stages: dict[str, dict]) -> dict:
+    """Overall stage progress for a progress bar: done/total/fraction + the running stage."""
+    total = len(stages)
+    done = sum(1 for r in stages.values() if r.get("status") in TERMINAL_STAGE_STATUSES)
+    running = next((n for n, r in stages.items() if r.get("status") == "running"), None)
+    return {"done": done, "total": total, "fraction": (done / total) if total else 0.0, "stage": running}
+
+
+def run_progress(out_dir: Path) -> dict | None:
+    """The run stage's live progress (run-progress.json), or None."""
+    path = path_for(Path(out_dir), "run_progress")
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except ValueError:
+        return None
+
+
 def job_status(out_dir: Path) -> dict:
-    """One dict the UI can render: status ∈ none | running | finished | lost, plus the
-    job record, stage statuses and the stage the pipeline stopped after (if any)."""
+    """One dict the UI can render: status ∈ none | running | finished | stopped | lost,
+    plus the job record, stage statuses, progress and the stage the pipeline stopped
+    after (if any). `interrupted_stage` is a stage left 'running' by a dead job."""
     out_dir = Path(out_dir)
     job = read_job(out_dir)
     stages = stage_statuses(out_dir)
+    progress = stage_progress(stages)
     if job is None:
-        return {"status": "none", "job": None, "stages": stages, "stopped_after": _stopped_after(out_dir)}
+        return {"status": "none", "job": None, "stages": stages, "progress": progress,
+                "run_progress": run_progress(out_dir), "stopped_after": _stopped_after(out_dir)}
     if job.get("finished_at") is not None:
-        status = "finished"
+        status = "stopped" if job.get("stopped") else "finished"
     elif _alive(job.get("pid")):
         status = "running"
     else:
         status = "lost"  # started but the wrapper died without finalising
-    running_stage = next((n for n, r in stages.items() if r.get("status") == "pending"), None)
+    running_stage = progress["stage"] or next((n for n, r in stages.items() if r.get("status") == "pending"), None)
     return {
         "status": status,
         "job": job,
         "stages": stages,
+        "progress": progress,
+        "run_progress": run_progress(out_dir),
         "running_stage": running_stage if status == "running" else None,
+        "interrupted_stage": progress["stage"] if status != "running" else None,
         "stopped_after": _stopped_after(out_dir),
         "exit_code": job.get("exit_code"),
     }
+
+
+def _terminate(pid: int, timeout: float = 5.0) -> None:
+    """SIGTERM the job's process group (wrapper + pipeline + model subprocesses),
+    escalating to SIGKILL when it does not die within `timeout`."""
+
+    def _signal(sig: int) -> None:
+        try:
+            os.killpg(os.getpgid(pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    _signal(signal.SIGTERM)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _alive(pid):
+            return
+        time.sleep(0.1)
+    _signal(signal.SIGKILL)
+    deadline = time.time() + timeout
+    while time.time() < deadline and _alive(pid):
+        time.sleep(0.1)
+
+
+def stop_job(out_dir: Path) -> dict:
+    """Stop the running job (kill its process group) and finalise job.json with
+    `stopped: true`. No-op when there is no job or it already finished."""
+    out_dir = Path(out_dir)
+    job = read_job(out_dir)
+    if job is None:
+        return {"status": "none", "job": None}
+    if job.get("finished_at") is not None:
+        return {"status": "stopped" if job.get("stopped") else "finished", "job": job}
+    pid = job.get("pid")
+    if pid and _alive(pid):
+        _terminate(pid)
+    job = read_job(out_dir) or job  # the wrapper may have finalised in the meantime
+    job["stopped"] = True
+    job["stopped_at"] = _now()
+    if job.get("finished_at") is None:
+        job["finished_at"] = _now()
+    if job.get("exit_code") is None:
+        job["exit_code"] = -signal.SIGTERM
+    _write_job(out_dir, job)
+    with open(log_path(out_dir), "a") as log:
+        log.write(f"\n=== {job['stopped_at']} stopped by user (pid {pid})\n")
+    return {"status": "stopped", "job": job}
 
 
 def _stopped_after(out_dir: Path) -> str | None:

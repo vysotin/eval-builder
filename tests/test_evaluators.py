@@ -99,7 +99,7 @@ def test_judge_uses_factory(monkeypatch):
         return judge
 
     monkeypatch.setattr(ev, "_make_judge", fake_make)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(ev, "provider_ready", lambda model: (True, ""))  # no provider package needed for this test
     fns = dict(ev.build_evaluators([{"type": "correctness"}], "anthropic:claude-x"))
     out = fns["correctness"](_case(), _run([]))
     assert out["score"] == 1.0 and "outputs" in calls
@@ -285,3 +285,67 @@ def test_judge_retries_once_on_placeholder_reasoning(monkeypatch):
     fns = dict(ev.build_evaluators([{"type": "correctness"}], "openai:x"))
     out = fns["correctness"](_case(), _run([]))
     assert calls["n"] == 2 and out["score"] is True and out["comment"] == "Real reasoning."
+
+
+def test_score_run_parallel_cases_execute_concurrently(monkeypatch):
+    """With max_workers=2 both case runs are scored at once: a 2-party barrier inside a
+    custom evaluator only passes when the cases are scored concurrently."""
+    import sys
+    import threading
+    import types
+
+    ds = Dataset(name="d", dataset_type="final_response", target=Target(module="m"))
+    a = add_case(ds, {"inputs": {"q": 1}, "metadata": {"intent": "i.a"}})
+    b = add_case(ds, {"inputs": {"q": 2}, "metadata": {"intent": "i.b"}})
+    set_review(ds, [a.id, b.id], "approved", "t")
+    barrier = threading.Barrier(2, timeout=10)
+
+    def check(case, case_run):
+        barrier.wait()  # raises BrokenBarrierError when cases are scored sequentially
+        return {"key": "custom", "score": True, "comment": ""}
+
+    mod = types.ModuleType("barrier_evaluator_mod")
+    mod.check = check
+    monkeypatch.setitem(sys.modules, "barrier_evaluator_mod", mod)
+    run = RunArtifact(
+        run_id="r1", dataset_path="p", dataset_name="d", mocked=False,
+        case_runs=[CaseRun(case_id=a.id, outputs={"response": "yes"}),
+                   CaseRun(case_id=b.id, outputs={"response": "yes"})],
+    )
+    report = ev.score_run(
+        run, ds, [{"type": "custom", "ref": "barrier_evaluator_mod:check"}], "m", max_workers=2
+    )
+    assert [row["case_id"] for row in report.cases] == [a.id, b.id]  # run order kept
+    assert report.metrics["custom"]["n"] == 2 and report.metrics["custom"]["avg"] == 1.0
+
+
+def test_score_run_parallel_matches_sequential(monkeypatch):
+    """Scores, skips, evaluator errors, slices and metric order are identical however
+    many workers score the run."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    ds = Dataset(name="d", dataset_type="final_response", target=Target(module="m"))
+    a = add_case(ds, {"inputs": {"q": 1}, "reference_outputs": {"contains": "yes"},
+                      "metadata": {"intent": "i.a", "variant": "happy"}})
+    b = add_case(ds, {"inputs": {"q": 2}, "reference_outputs": {"contains": "yes"},
+                      "metadata": {"intent": "i.b", "variant": "adversarial"}})
+    c = add_case(ds, {"inputs": {"q": 3}, "metadata": {"intent": "i.a"}})  # no reference -> skipped
+    d = add_case(ds, {"inputs": {"q": 4}, "reference_outputs": {"contains": "yes"},
+                      "metadata": {"intent": "i.b"}})
+    set_review(ds, [x.id for x in (a, b, c, d)], "approved", "t")
+    run = RunArtifact(
+        run_id="r1", dataset_path="p", dataset_name="d", mocked=False,
+        case_runs=[
+            CaseRun(case_id=a.id, outputs={"response": "yes!"}),
+            CaseRun(case_id=b.id, outputs={"response": "no"}),
+            CaseRun(case_id=c.id, outputs={"response": "hi"}),
+            CaseRun(case_id=d.id, error="boom", error_class="agent"),
+        ],
+    )
+    specs = [{"type": "contains"}, {"type": "correctness"}]  # correctness -> judge unavailable
+    sequential = ev.score_run(run, ds, specs, "openai:x")
+    parallel = ev.score_run(run, ds, specs, "openai:x", max_workers=4)
+    assert parallel.model_dump() == sequential.model_dump()
+    assert [row["case_id"] for row in parallel.cases] == [a.id, b.id, c.id, d.id]
+    assert parallel.metrics["contains"]["n"] == 3  # a, b and the agent-error zero
+    assert parallel.metrics["contains"]["skipped"] == 1
+    assert parallel.metrics["correctness"]["errors"] == 3  # judge unavailable on a, b, c; d is an agent error

@@ -90,7 +90,7 @@ class Bundle:
         return (self.report or {}).get("config") or {}
 
     def summary(self) -> dict:
-        """Counts for the sidebar / overview."""
+        """Counts for the sidebar / summary page."""
         ds = self.dataset or {}
         amap = self.agent_map or {}
         return {

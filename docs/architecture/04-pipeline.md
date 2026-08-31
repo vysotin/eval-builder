@@ -28,7 +28,7 @@ judge, generator}` (default `claude-cli:claude-sonnet-5`), `constraints[]`,
 per_intent{happy=2, failure=1}, per_failure_category=1, out_of_intent=2,
 multi_turn_share=0.15, per_tool_edge_cases=2}`, `evaluators` (default expected_tools,
 contains, contract, correctness), `thresholds{default=0.8, metrics{}, slice_min=0.5,
-overall_pass=0.8}`, `runs{repeats=3}`, `mocking{required=true, on_miss=strict}`,
+overall_pass=0.8}`, `runs{repeats=3, parallel_intents=4, parallel_scoring=4, parallel_simulations=4}`, `mocking{required=true, on_miss=strict}`,
 `stages{skip[], max_retries=1, simulate=true, publish=auto}`, `review{auto_approve=false,
 approved_by, note}`, `output{dir}`, `langsmith{dataset_name}`.
 
@@ -74,10 +74,10 @@ reported as a failure.
 | dataset | map, mocks | `planning.plan_cells` → `coverage-plan.json`; generator fills cells in batches of 6 with one re-request for missing cells; each case normalised via `artifacts.add_case` (duplicates dropped, reported); per-case mock overrides get dataset fallbacks; `malformed_output` cases get a corrupted fixture injected by code → `dataset.json`, `coverage.json` | retry once |
 | review | dataset | generator self-review rejects unanswerable / mismatched cases; `verify_dataset` rejects cases whose expected calls no rule answers; approves the rest **only with** `review.auto_approve` (note records `approved_by`); no pending cases + approved cases present → `already_reviewed` | without auto_approve → `awaiting_review` (pipeline stops, report still written) |
 | verify | review | approved cases' expected calls all mocked; every `TOOLS` entry mocked when required; at least one approved case | none (blocking) |
-| run | verify | `runs.repeats` × `run_dataset(mocked=True, on_miss, model=agent)`; a run where every case is an infrastructure error fails the stage | retry once |
-| score | run | `evaluators.yaml` written; `score_run` per run → `results/score-report-<id>.json`; dead evaluators (all errors) reported; no scores at all → failure | retry once |
+| run | verify | `runs.repeats` × `run_dataset(mocked=True, on_miss, model=agent, max_workers=runs.parallel_intents)` — intent groups run concurrently within each repeat (cases inside one intent stay sequential, results keep dataset order); live progress (current repeat, per-case completions, per-intent tallies) is written to `run-progress.json` after every case; a run where every case is an infrastructure error fails the stage | retry once |
+| score | run | `evaluators.yaml` written; `score_run(max_workers=runs.parallel_scoring)` per run — case runs scored concurrently in a thread pool, rows/metrics/slices aggregated in run order so the report is identical to a sequential pass → `results/score-report-<id>.json`; dead evaluators (all errors) reported; no scores at all → failure | retry once |
 | aggregate | score | `aggregate.aggregate` → `aggregate.json` | none |
-| simulate | review (optional) | generator writes scenarios → `scenarios.yaml`; runs them with mocked tools and the generator model as the simulated user → `simulation.json`; violations mined into pending cases | never blocks the verdict |
+| simulate | review (optional) | generator writes scenarios → `scenarios.yaml`; runs them with mocked tools and the generator model as the simulated user — scenarios run concurrently (`runs.parallel_simulations`, a fresh graph per scenario, results keep scenario order) → `simulation.json`; violations mined into pending cases | never blocks the verdict |
 | publish | review (optional) | LangSmith publish (`auto` = only with a key) | skipped |
 | analyze | aggregate (optional) | generator writes the analysis from a compact summary; falls back to a deterministic facts-only analysis → `analysis.json` | deterministic fallback |
 | report | always | `report.json` (`evalbuilder/pipeline-report/v1`) | – |
@@ -224,7 +224,13 @@ edge cases, no LLM), `default_form`/`build_config`/`validate_text` (form ↔ con
 YAML), and the review loop: `add_feedback` (append to `feedback` and save),
 `approve_in_config` (record `auto_approve` + `approved_by`), `reject_cases`
 (`artifacts.set_review` on the dataset), `dataset_summary` (statuses, failure modes,
-schema-edge cases, mocked tools).
+schema-edge cases, mocked tools). Projects: `discover_projects` (every directory under
+`eval/pipeline/*` and `docs/examples/*` holding an artifact or a job record, plus
+`<root>/*.yaml` configs whose output directory has not run yet), `project_config`
+(the config behind a folder: the path recorded by the last job, then by the report —
+falling back to the config embedded in `report.json` — then a sibling `<dir>.yaml`),
+`form_from_config` (the inverse of `build_config`, so a saved project can be edited
+in the setup page). `build_config` rejects an empty name / source / module.
 
 ## Limitations of the pipeline
 

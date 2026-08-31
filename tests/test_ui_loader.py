@@ -22,7 +22,8 @@ def test_load_dir_reads_every_artifact_kind(example_bundle):
     assert b.problems == []
     assert b.name == "support-bot" and b.verdict == "fail"
     present = {k for k in ARTIFACTS if b.has(k)}
-    assert present == set(ARTIFACTS) - {"pipeline_job"}, f"missing kinds: {set(ARTIFACTS) - present}"
+    transient = {"pipeline_job", "run_progress"}  # written live during a job; not part of a committed example
+    assert present == set(ARTIFACTS) - transient, f"missing kinds: {set(ARTIFACTS) - present}"
     assert set(b.run_ids) == set(b.runs) == set(b.score_reports) and len(b.run_ids) == 2
     assert b.run_ids == [e["run_id"] for e in b.state["stages"]["run"]["artifacts"]["runs"]]
     # dict-shaped artifacts come back unwrapped
@@ -73,7 +74,7 @@ def test_load_files_identifies_by_schema_then_name():
     b = loader.load_files(files)
     assert b.problems == []
     assert b.name == "support-bot"
-    assert {k for k in ARTIFACTS if b.has(k)} == set(ARTIFACTS) - {"pipeline_job"}
+    assert {k for k in ARTIFACTS if b.has(k)} == set(ARTIFACTS) - {"pipeline_job", "run_progress"}
     assert set(b.run_ids) == {"093d879e", "8a6166d8"}  # run ids recovered from the payloads
     assert set(b.get("mock_rules")) == {"lookup_order", "check_refund_policy", "issue_refund", "search_kb"}
 
@@ -92,3 +93,14 @@ def test_discover_dirs_finds_example_outputs(tmp_path):
     (root / "b").mkdir()
     (root / "a" / "report.json").write_text("{}")
     assert loader.discover_dirs(cwd=tmp_path) == [str(root / "a")]
+
+
+def test_load_dir_reads_run_progress(tmp_path):
+    (tmp_path / "run-progress.json").write_text(json.dumps({
+        "schema": "evalbuilder/run-progress/v1", "repeat": 1, "repeats": 3,
+        "cases_total": 4, "cases_done": 2, "overall_total": 12, "overall_done": 2,
+        "by_intent": {"intent.a": {"done": 2, "total": 4, "errors": 0}}, "runs": [], "current": [],
+    }))
+    b = loader.load_dir(tmp_path)
+    assert b.has("run_progress")
+    assert b.get("run_progress")["cases_done"] == 2

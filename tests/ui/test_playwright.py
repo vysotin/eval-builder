@@ -77,12 +77,24 @@ def app_url():
     proc.wait(timeout=10)
 
 
+def _settle(page) -> None:
+    """Wait for a rerun that may still be starting (the status widget appears with a delay), then for it to finish."""
+    status = page.locator("[data-testid='stStatusWidget']")
+    try:
+        status.wait_for(state="visible", timeout=1_500)
+    except playwright.TimeoutError:
+        pass
+    status.wait_for(state="hidden", timeout=60_000)
+
+
 @pytest.fixture
 def report_page(page, app_url):
+    """The app opened on the Summary page of the pre-selected project (EVALBUILDER_UI_DIR)."""
     page.set_viewport_size({"width": 1400, "height": 1000})
-    page.goto(app_url)
-    page.locator("h2#overview").wait_for(timeout=60_000)
-    page.locator("[data-testid='stStatusWidget']").wait_for(state="hidden", timeout=60_000)
+    page.goto(app_url + "/summary")
+    page.locator("h2#summary").wait_for(timeout=60_000)
+    _settle(page)
+    expect(page.locator("[data-testid='stMetric']").first).to_be_visible()
     return page
 
 
@@ -94,19 +106,37 @@ def _expand(page, text: str) -> None:
 def _open(page, title: str, anchor: str) -> None:
     page.get_by_test_id("stSidebarNav").get_by_role("link", name=title).click()
     page.locator(f"h2#{anchor}").wait_for(timeout=60_000)
-    page.locator("[data-testid='stStatusWidget']").wait_for(state="hidden", timeout=60_000)
+    _settle(page)
     if SHOTS:
         SHOTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(SHOTS / f"{anchor}.png"), full_page=True)
 
 
-def test_overview_shows_verdict_headline_and_charts(report_page):
+def test_landing_page_is_setup_with_the_startup_folder_as_project(page, app_url):
+    page.set_viewport_size({"width": 1400, "height": 1000})
+    page.goto(app_url)  # the default page (Pipeline setup) is served at the root URL
+    page.locator("h2#setup").wait_for(timeout=60_000)
+    _settle(page)
+    sidebar = page.get_by_test_id("stSidebar")
+    expect(sidebar.get_by_text("support-bot").first).to_be_visible()
+    expect(sidebar.get_by_text("artifact kinds").first).to_be_visible()
+    expect(page.locator("h3#project")).to_be_visible()
+    expect(page.get_by_text("Opened **support-bot**").or_(page.get_by_text("Opened support-bot")).first).to_be_visible()
+    # the project's config was loaded back into the form
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Pipeline name").locator("input")).to_have_value("support-bot")
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Output directory").locator("input")).to_have_value(str(EXAMPLE))
+    # Summary sits in the Evaluation group after Analysis
+    links = [t.strip().splitlines()[-1].strip() for t in page.get_by_test_id("stSidebarNav").get_by_role("link").all_inner_texts()]
+    assert links.index("Summary") == links.index("Analysis") + 1 and links[0] == "Pipeline setup", links
+
+
+def test_summary_shows_verdict_headline_and_charts(report_page):
     page = report_page
     if SHOTS:
         SHOTS.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(SHOTS / "overview.png"), full_page=True)
+        page.screenshot(path=str(SHOTS / "summary.png"), full_page=True)
     expect(page.get_by_test_id("stSidebar").get_by_text("support-bot").first).to_be_visible()
-    expect(page.locator("h2#overview")).to_be_visible()
+    expect(page.locator("h2#summary")).to_be_visible()
     assert page.locator("[data-testid='stMetric']").count() >= 6
     expect(page.get_by_text("Overall score")).to_be_visible()
     _expand(page, "verdict reasons")
@@ -132,7 +162,7 @@ def test_intents_page_lists_intents_and_scenarios(report_page):
     page = report_page
     _open(page, "Intents & scenarios", "intents")
     expect(page.locator("h3#scenarios")).to_be_visible()
-    expect(page.get_by_text("intent.order-status").first).to_be_visible()
+    expect(page.get_by_test_id("stMarkdown").filter(has_text="intent.order-status").first).to_be_visible()
     assert page.locator("[data-testid='stExpander']").count() >= 8
 
 
@@ -191,14 +221,30 @@ def test_stages_page_timeline_and_artifact_table(report_page):
     expect(page.get_by_text("score-report-093d879e.json").first).to_be_visible()
 
 
-def test_upload_mode_identifies_artifacts_by_schema(report_page):
-    page = report_page
-    page.get_by_test_id("stSidebar").get_by_text("uploaded files").click()
+def test_upload_mode_identifies_artifacts_by_schema(page, app_url):
+    """Uploads are a read-only project chosen on the setup page; clearing it empties every page."""
+    page.set_viewport_size({"width": 1400, "height": 1000})
+    page.goto(app_url)
+    page.locator("h2#setup").wait_for(timeout=60_000)
+    _settle(page)
+    _expand(page, "Upload artifacts instead")
     files = [str(p) for p in sorted(EXAMPLE.glob("*.json"))] + [str(p) for p in sorted((EXAMPLE / "results").glob("*.json"))]
     page.locator("input[type='file']").set_input_files(files)
-    page.locator("[data-testid='stStatusWidget']").wait_for(state="hidden", timeout=60_000)
-    page.locator("h2#overview").wait_for(timeout=60_000)
+    _settle(page)
     sidebar = page.get_by_test_id("stSidebar")
+    sidebar.get_by_text("uploaded artifacts").first.wait_for(timeout=60_000)
     sidebar.get_by_text("artifact kinds").wait_for(timeout=60_000)
     assert "support-bot" in sidebar.inner_text()
+    _open(page, "Summary", "summary")
     expect(page.get_by_text("Overall score")).to_be_visible()
+    _open(page, "Run & review", "run")
+    expect(page.get_by_text("read-only").first).to_be_visible()
+    # clear → every page is empty and points back to the setup page
+    sidebar.get_by_role("button", name="Clear project").click()
+    _settle(page)
+    expect(sidebar.get_by_text("No project selected")).to_be_visible()
+    expect(page.get_by_text("No project selected").first).to_be_visible()
+    page.get_by_test_id("stSidebarNav").get_by_role("link", name="Summary").click()
+    _settle(page)
+    expect(page.locator("h2#summary")).to_have_count(0)
+    expect(page.get_by_text("No project selected").first).to_be_visible()

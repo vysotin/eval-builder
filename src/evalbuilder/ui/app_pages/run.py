@@ -1,5 +1,6 @@
-"""Run & review — live status of a background pipeline job, the generation review loop
-(feedback → regenerate) and the hand-off to evaluation and results."""
+"""Run & review — live status of the project's background pipeline job, the generation
+review loop (feedback → regenerate) and the hand-off to evaluation and the report pages.
+The page follows the project chosen on Pipeline setup; it has no selector of its own."""
 
 from __future__ import annotations
 
@@ -10,39 +11,40 @@ import streamlit as st
 
 from evalbuilder.pipeline import jobs
 from evalbuilder.pipeline import setup as setup_mod
-from evalbuilder.ui import loader
-from evalbuilder.ui.common import status_md, table, verdict_badge
-
-JOB_COLORS = {"running": "blue", "finished": "green", "lost": "orange", "none": "grey"}
-
-
-def _dirs() -> list[str]:
-    found = loader.discover_dirs()
-    for extra in (st.session_state.get("job_dir"), st.session_state.get("run_dir_pending")):
-        if extra and extra not in found:
-            found.insert(0, extra)
-    return found
+from evalbuilder.ui import loader, project
+from evalbuilder.ui.common import job_badge_line, job_progress, status_md, table, verdict_badge
 
 
 def _status_block(out_dir: Path, live: bool) -> dict:
-    """Job status + stage table; re-polls every 2 s while the job is running."""
+    """Job status + progress bars + stop button + stage table; re-polls every 2 s
+    while the job is running."""
 
     @st.fragment(run_every="2s" if live else None)
     def block() -> None:
         status = jobs.job_status(out_dir)
         job = status.get("job") or {}
-        color = JOB_COLORS.get(status["status"], "grey")
-        line = f":{color}-badge[job {status['status']}]"
+        line = job_badge_line(status)
         if job:
             line += f" · mode `{job.get('mode')}`" + (f" from `{job.get('from_stage')}`" if job.get("from_stage") else "")
             line += f" · started {str(job.get('started_at', ''))[:19].replace('T', ' ')}"
-            if status["status"] == "finished":
+            if status["status"] in ("finished", "stopped"):
                 line += f" · exit code `{status.get('exit_code')}`"
-            if status.get("running_stage"):
-                line += f" · running **{status['running_stage']}**"
         if status.get("stopped_after"):
             line += f" · stopped after **{status['stopped_after']}**"
         st.markdown(line)
+        if status["status"] == "running":
+            if st.button("Stop job", key="run_stop", icon=":material/stop_circle:",
+                         help="Terminate the background pipeline process. Completed stages keep "
+                              "their artifacts; resume later from Pipeline setup or the review loop."):
+                jobs.stop_job(out_dir)
+                st.rerun(scope="app")
+        job_progress(status)
+        rp = status.get("run_progress")
+        if rp and (rp.get("current") or []) and (
+            (status.get("progress") or {}).get("stage") == "run" or status.get("interrupted_stage") == "run"
+        ):
+            st.markdown("**Partial results** — cases completed in the current repeat")
+            table(rp["current"], columns=["case_id", "intent", "error_class", "error"])
         if job.get("config_path"):
             st.caption(f"config `{job['config_path']}` · log `{job.get('log')}`")
         rows = [
@@ -85,10 +87,11 @@ def _review_section(out_dir: Path, status: dict, config_path: str | None) -> Non
     if summary["schema_edge_cases"]:
         st.markdown("**Schema edge cases** (from tool input/output schemas)")
         table(summary["schema_edge_cases"], column_config={"mock_override": st.column_config.CheckboxColumn("mock override")})
-    st.caption("Open **Dataset & mocks** in the sidebar for every case and fixture after *Open results* below.")
+    st.caption("Open **Dataset & mocks** in the sidebar for every case and fixture.")
 
     if not config_path:
-        st.warning("No config path known for this directory; regenerate from the Setup page.")
+        st.warning("No config file is known for this folder; save one from the Setup page first.")
+        project.setup_link()
         return
 
     st.markdown("**Feedback for the generator** — appended to the config (`feedback`) and read by every generation prompt on rerun.")
@@ -155,46 +158,54 @@ def _results_section(out_dir: Path) -> None:
     for reason in (report.get("verdict_reasons") or [])[:5]:
         st.markdown(f"- {reason}")
     if st.button("Open results in the report pages", key="run_open_results", icon=":material/analytics:", type="primary"):
-        st.session_state["open_dir"] = str(out_dir)
         pages = st.session_state.get("pages") or {}
-        if "overview" in pages:
-            st.switch_page(pages["overview"])
+        if "summary" in pages:
+            st.switch_page(pages["summary"])
         st.rerun()
 
 
 def render() -> None:
     st.header("Run & review", anchor="run")
-    pending = st.session_state.pop("run_dir_pending", None)
-    if pending:
-        st.session_state["run_dir"] = pending
-    dirs = _dirs()
-    if not dirs:
-        st.info("No pipeline output directories yet — start a run from **Pipeline setup**.")
+    proj = project.current()
+    if proj is None:
+        project.no_project_hint()
         return
-    if st.session_state.get("run_dir") not in dirs:
-        st.session_state["run_dir"] = dirs[0]
-    st.selectbox("Pipeline output directory", dirs, key="run_dir")
-    out_dir = Path(st.session_state["run_dir"])
+    if proj["mode"] == "uploads":
+        st.info("Uploaded artifacts are read-only — jobs need a project folder. Choose or create one on **Pipeline setup**.", icon=":material/folder_off:")
+        project.setup_link()
+        return
+    out_dir = Path(proj["dir"])
+    config_path = project.config_path()
+    st.caption(f"project **{project.name()}** · folder `{out_dir}`" + (f" · config `{config_path}`" if config_path else ""))
     if st.session_state.get("proceed_notice"):
         st.success(st.session_state.pop("proceed_notice"))
 
+    initial = jobs.job_status(out_dir)
+    if initial["status"] == "none" and not initial["stages"]:
+        st.info(f"Nothing has run in `{out_dir}` yet — start a job from **Pipeline setup** (*Generate dataset & mocks only* or *Run full pipeline*).",
+                icon=":material/hourglass_empty:")
+        project.setup_link()
+        return
     with st.container(border=True):
         st.subheader("Job status", anchor="status")
-        initial = jobs.job_status(out_dir)
         status = _status_block(out_dir, live=initial["status"] == "running")
     if status["status"] == "running":
         st.caption("The page refreshes every 2 seconds while the job runs.")
         return
 
     job = status.get("job") or {}
-    config_path = job.get("config_path")
-    if not config_path:
+    recorded = job.get("config_path")
+    if not recorded:
         report_path = out_dir / "report.json"
         if report_path.exists():
             try:
-                config_path = json.loads(report_path.read_text()).get("config_path")
+                recorded = json.loads(report_path.read_text()).get("config_path")
             except ValueError:
-                config_path = None
+                recorded = None
+    if recorded and Path(recorded).exists():
+        config_path = recorded
+    elif config_path and not Path(config_path).exists():
+        config_path = None
     if _generation_done(status):
         with st.container(border=True):
             _review_section(out_dir, status, config_path)

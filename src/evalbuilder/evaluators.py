@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 from evalbuilder.config import provider_ready
@@ -268,10 +269,50 @@ def is_judge_spec(spec: dict) -> bool:
 
 
 def score_run(
-    run: RunArtifact, ds: Dataset, specs: list[dict], judge_model: str
+    run: RunArtifact, ds: Dataset, specs: list[dict], judge_model: str,
+    max_workers: int = 1,
 ) -> Report:
+    """Score one run. With `max_workers > 1` the case runs are scored concurrently
+    (each case still runs its evaluators in order); rows, metrics and slices are
+    aggregated in run order afterwards, so the report is identical to a sequential
+    scoring pass."""
     evaluators = build_evaluators(specs, judge_model)
     cases_by_id = {c.id: c for c in ds.cases}
+    scored = [
+        (case_run, cases_by_id[case_run.case_id])
+        for case_run in run.case_runs
+        if case_run.case_id in cases_by_id
+    ]
+
+    def _score_case(pair) -> dict:
+        case_run, case = pair
+        row = {"case_id": case_run.case_id, "scores": {}, "errors": {}, "skipped": {}}
+        for key, fn in evaluators:
+            if case_run.error:
+                row["scores"][key] = {
+                    "score": 0.0,
+                    "comment": f"agent error: {case_run.error}",
+                }
+                continue
+            try:
+                result = fn(case, case_run)
+                row["scores"][key] = {
+                    "score": float(result["score"]),
+                    "comment": result.get("comment", ""),
+                }
+            except EvaluatorNotApplicable as e:
+                row["skipped"][key] = str(e)
+            except EvaluatorUnavailable as e:
+                row["errors"][key] = str(e)
+            except Exception as e:  # noqa: BLE001 - evaluator bug, not agent fault
+                row["errors"][key] = f"{type(e).__name__}: {e}"
+        return row
+
+    if max_workers > 1 and len(scored) > 1:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(scored))) as pool:
+            rows = list(pool.map(_score_case, scored))
+    else:
+        rows = [_score_case(pair) for pair in scored]
 
     report = Report(run_id=run.run_id, dataset_name=ds.name)
     per_metric: dict[str, list[float]] = {}
@@ -280,45 +321,20 @@ def score_run(
     slice_scores: dict[str, dict[str, dict[str, list[float]]]] = {
         dim: {} for dim in SLICE_DIMS
     }
-
-    for case_run in run.case_runs:
-        case = cases_by_id.get(case_run.case_id)
-        if case is None:
-            continue
-        row = {"case_id": case_run.case_id, "scores": {}, "errors": {}, "skipped": {}}
-        for key, fn in evaluators:
-            if case_run.error:
-                row["scores"][key] = {
-                    "score": 0.0,
-                    "comment": f"agent error: {case_run.error}",
-                }
-            else:
-                try:
-                    result = fn(case, case_run)
-                    row["scores"][key] = {
-                        "score": float(result["score"]),
-                        "comment": result.get("comment", ""),
-                    }
-                except EvaluatorNotApplicable as e:
-                    row["skipped"][key] = str(e)
-                    metric_skipped[key] = metric_skipped.get(key, 0) + 1
-                    continue
-                except EvaluatorUnavailable as e:
-                    row["errors"][key] = str(e)
-                    metric_errors[key] = metric_errors.get(key, 0) + 1
-                    continue
-                except Exception as e:  # noqa: BLE001 - evaluator bug, not agent fault
-                    row["errors"][key] = f"{type(e).__name__}: {e}"
-                    metric_errors[key] = metric_errors.get(key, 0) + 1
-                    continue
-            score = row["scores"][key]["score"]
+    for row, (case_run, case) in zip(rows, scored):
+        report.cases.append(row)
+        for key in row["errors"]:
+            metric_errors[key] = metric_errors.get(key, 0) + 1
+        for key in row["skipped"]:
+            metric_skipped[key] = metric_skipped.get(key, 0) + 1
+        for key, cell in row["scores"].items():
+            score = cell["score"]
             per_metric.setdefault(key, []).append(score)
             for dim in SLICE_DIMS:
                 value = str(case.metadata.get(dim, "unspecified"))
                 slice_scores[dim].setdefault(value, {}).setdefault(key, []).append(
                     score
                 )
-        report.cases.append(row)
 
     for key, scores in per_metric.items():
         report.metrics[key] = {

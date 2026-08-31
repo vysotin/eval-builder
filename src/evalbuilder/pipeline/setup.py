@@ -5,17 +5,19 @@ review-loop helpers (feedback, approval, rejections) the UI calls between runs.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
 
 from evalbuilder import artifacts, discover as discovery, tool_schemas
 from evalbuilder.pipeline.config import DEFAULT_EVALUATORS, DEFAULT_MODEL, PipelineConfig, load_config
-from evalbuilder.pipeline.layout import path_for
+from evalbuilder.pipeline.layout import artifact_index, path_for
 from evalbuilder.schemas import Target
 
 EVALUATOR_CHOICES = ("expected_tools", "contains", "contract", "correctness", "trajectory_llm", "json_valid", "trajectory_match")
 DEFAULT_TARGET_ROOTS = ("examples",)
+DEFAULT_PROJECT_ROOTS = ("eval/pipeline", "docs/examples")
 SCRIPTED_SUFFIX = ":default_scripted_model"
 
 
@@ -102,7 +104,11 @@ def preview_target(source: str | Path, module: str, factory: str = "build_agent"
 
 
 def default_form(target: dict | None = None) -> dict:
-    """Form defaults for the setup page (a flat dict the page binds to widgets)."""
+    """Form defaults for the setup page (a flat dict the page binds to widgets).
+
+    Without a target nothing is selected: source/module/output/config path are empty, so
+    the UI has no project until the user picks a target or a folder.
+    """
     target = target or {}
     name = target.get("name") or "my-agent"
     return {
@@ -131,9 +137,121 @@ def default_form(target: dict | None = None) -> dict:
         "simulate": True,
         "auto_approve": False,
         "approved_by": "",
-        "output_dir": f"eval/pipeline/{name}",
-        "config_path": f"eval/pipeline/{name}.yaml",
+        "output_dir": f"eval/pipeline/{name}" if target else "",
+        "config_path": f"eval/pipeline/{name}.yaml" if target else "",
     }
+
+
+def form_from_config(cfg: PipelineConfig, output_dir: str | None = None, config_path: str | None = None) -> dict:
+    """The inverse of `build_config`: form values for an existing config (so a saved
+    project can be edited in the setup page). `output_dir` overrides the config's
+    directory when the project was opened from a folder."""
+    return {
+        "name": cfg.name,
+        "source": cfg.target.source,
+        "module": cfg.target.module,
+        "factory": cfg.target.factory,
+        "agent_model": cfg.models.agent or "",
+        "judge_model": cfg.models.judge,
+        "generator_model": cfg.models.generator,
+        "constraints": "\n".join(cfg.constraints),
+        "instructions": cfg.instructions,
+        "total_cases": cfg.coverage.total_cases,
+        "happy": cfg.coverage.per_intent.happy,
+        "failure": cfg.coverage.per_intent.failure,
+        "per_failure_category": cfg.coverage.per_failure_category,
+        "out_of_intent": cfg.coverage.out_of_intent,
+        "multi_turn_share": cfg.coverage.multi_turn_share,
+        "per_tool_edge_cases": cfg.coverage.per_tool_edge_cases,
+        "evaluators": [e.get("type") for e in cfg.evaluators if isinstance(e, dict) and e.get("type") in EVALUATOR_CHOICES],
+        "threshold_default": cfg.thresholds.default,
+        "slice_min": cfg.thresholds.slice_min,
+        "overall_pass": cfg.thresholds.overall_pass,
+        "repeats": cfg.runs.repeats,
+        "on_miss": cfg.mocking.on_miss,
+        "simulate": cfg.stages.simulate,
+        "auto_approve": cfg.review.auto_approve,
+        "approved_by": cfg.review.approved_by,
+        "output_dir": output_dir or str(cfg.output_dir),
+        "config_path": config_path or f"eval/pipeline/{cfg.name}.yaml",
+    }
+
+
+# ── projects (an output directory + the config that produced / will produce it) ──
+
+
+def _try_load(path: str | Path | None) -> PipelineConfig | None:
+    if not path or not Path(path).exists():
+        return None
+    try:
+        return load_config(Path(path))
+    except Exception:  # noqa: BLE001 - an unreadable config just does not count
+        return None
+
+
+def project_config(out_dir: Path) -> tuple[PipelineConfig | None, str | None]:
+    """(config, config_path) for a project folder: the path recorded by the last job,
+    then by the report (falling back to the config embedded in it), then a sibling
+    `<dir>.yaml`. `config_path` is None when the config only exists inside report.json."""
+    out_dir = Path(out_dir)
+    job_path = path_for(out_dir, "pipeline_job")
+    if job_path.exists():
+        try:
+            recorded = (json.loads(job_path.read_text()) or {}).get("config_path")
+        except ValueError:
+            recorded = None
+        cfg = _try_load(recorded)
+        if cfg is not None:
+            return cfg, str(recorded)
+    report_path = path_for(out_dir, "pipeline_report")
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text()) or {}
+        except ValueError:
+            report = {}
+        cfg = _try_load(report.get("config_path"))
+        if cfg is not None:
+            return cfg, str(report["config_path"])
+        embedded = report.get("config")
+        if isinstance(embedded, dict):
+            try:
+                return PipelineConfig.model_validate(embedded), None
+            except Exception:  # noqa: BLE001
+                pass
+    sibling = out_dir.parent / f"{out_dir.name}.yaml"
+    cfg = _try_load(sibling)
+    if cfg is not None:
+        return cfg, str(sibling)
+    return None, None
+
+
+def discover_projects(roots: tuple[str, ...] | list[str] = DEFAULT_PROJECT_ROOTS, cwd: Path | None = None) -> list[dict]:
+    """Projects under the roots: every directory holding a known artifact or a job
+    record, plus every `<root>/*.yaml` config whose output directory has not run yet.
+    Each entry: {name, dir, config_path, has_artifacts}; paths relative to `cwd` when
+    the roots are."""
+    base = Path(cwd or ".")
+    found: dict[str, dict] = {}
+    for root in roots:
+        root_path = base / root
+        if not root_path.is_dir():
+            continue
+        for child in sorted(root_path.iterdir()):
+            if child.is_dir() and (artifact_index(child) or path_for(child, "pipeline_job").exists()):
+                key = str(child if cwd else child.relative_to(base))
+                cfg, cfg_path = project_config(child)
+                found[key] = {"name": cfg.name if cfg else child.name, "dir": key, "config_path": cfg_path, "has_artifacts": True}
+        for yaml_path in sorted(root_path.glob("*.yaml")):
+            cfg = _try_load(yaml_path)
+            if cfg is None:
+                continue
+            out_dir = Path(cfg.output.dir) if cfg.output.dir else base / "eval" / "pipeline" / cfg.name
+            key = str(out_dir)
+            if key in found:
+                found[key]["config_path"] = found[key]["config_path"] or str(yaml_path)
+                continue
+            found[key] = {"name": cfg.name, "dir": key, "config_path": str(yaml_path), "has_artifacts": False}
+    return list(found.values())
 
 
 def _lines(text: str) -> list[str]:
@@ -142,6 +260,9 @@ def _lines(text: str) -> list[str]:
 
 def build_config(form: dict) -> PipelineConfig:
     """A validated `PipelineConfig` from the flat form dict (raises on schema errors)."""
+    for key in ("name", "source", "module"):
+        if not (form.get(key) or "").strip():
+            raise ValueError(f"{key} is required" + (" (pick a target agent)" if key != "name" else ""))
     evaluators = [{"type": t} for t in form.get("evaluators") or []] or [dict(e) for e in DEFAULT_EVALUATORS]
     agent_model = (form.get("agent_model") or "").strip() or None
     data: dict[str, Any] = {

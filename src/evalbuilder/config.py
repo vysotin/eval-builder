@@ -56,7 +56,7 @@ def capability_check(settings: Settings, target_module: str | None = None) -> di
     caps["langgraph"] = importlib.util.find_spec("langgraph") is not None
     if not caps["langgraph"]:
         blocking.append(
-            {"issue": "langgraph is not installed", "fix": "uv pip install langgraph"}
+            {"issue": "langgraph is not installed", "fix": "pip install langgraph (or uv sync)"}
         )
 
     from evalbuilder.claude_cli import claude_available

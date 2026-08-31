@@ -155,7 +155,7 @@ def provider_ready(spec: str) -> tuple[bool, str]:
     if not status["key"]:
         missing.append(f"set {status['env_var']}")
     if not status["package"]:
-        missing.append(f"install {PROVIDERS[provider].package} (uv sync --extra {status['extra']})")
+        missing.append(f"install {PROVIDERS[provider].package} (uv sync --extra {status['extra']} or pip install -e '.[{status['extra']}]')")
     if missing:
         return False, f"provider {provider!r} not ready: " + "; ".join(missing)
     return True, ""

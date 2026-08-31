@@ -15,7 +15,7 @@ Translate each requirement into the **cheapest reliable evaluator**, in this ord
    trajectory judge over the captured trajectory). Judge models are `provider:model`
    specs: `claude-cli:sonnet` runs through the Claude Code CLI on the user's
    subscription (no key); `anthropic:…`/`openai:…`/`gemini:…` need keys plus their
-   package (`uv sync --extra llm`). A missing key/binary
+   package (`uv sync --extra llm` or `pip install -e '.[llm]'`). A missing key/binary
    is reported as an evaluator error, never as an agent failure; a case without the
    needed reference (`contains`, `contract`, `trajectory`) is `skipped`.
 

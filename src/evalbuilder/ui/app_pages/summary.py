@@ -1,4 +1,4 @@
-"""Overview — verdict, headline stats, metric pass rates, coverage, stability, problems."""
+"""Summary — verdict, headline stats, metric pass rates, coverage, stability, problems of the project."""
 
 from __future__ import annotations
 
@@ -22,12 +22,11 @@ def render() -> None:
     if not require(bundle):
         return
     report = bundle.report or {}
-    agg = bundle.aggregate or (report.get("metrics") and report) or {}
     coverage = bundle.get("coverage") or report.get("coverage") or {}
     stability = (bundle.aggregate or {}).get("stability") or report.get("stability") or {}
     thresholds = (bundle.config.get("thresholds") or {})
 
-    st.header("Overview", anchor="overview")
+    st.header("Summary", anchor="summary")
     left, right = st.columns([1, 3], vertical_alignment="center")
     with left:
         verdict_badge(bundle.verdict)

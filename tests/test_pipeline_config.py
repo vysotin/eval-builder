@@ -95,3 +95,33 @@ def test_new_fields_defaults_and_yaml_round_trip(tmp_path):
         parse_config(yaml_text.replace("default: 0.8", "default: nope"))
     cfg.coverage.per_tool_edge_cases = -1
     assert "coverage.per_tool_edge_cases must be >= 0" in cfg.problems()
+
+
+def test_runs_parallel_intents_default_and_validation():
+    from evalbuilder.pipeline.config import PipelineConfig
+
+    cfg = PipelineConfig(name="x", target={"source": "examples/weather_bot/agent.py",
+                                           "module": "examples.weather_bot.agent"})
+    assert cfg.runs.parallel_intents == 4
+    cfg.runs.parallel_intents = 0
+    assert any("parallel_intents" in p for p in cfg.problems())
+
+
+def test_runs_parallel_scoring_and_simulations_default_and_validation():
+    from evalbuilder.pipeline.config import PipelineConfig
+
+    cfg = PipelineConfig(name="x", target={"source": "examples/weather_bot/agent.py",
+                                           "module": "examples.weather_bot.agent"})
+    assert cfg.runs.parallel_scoring == 4
+    assert cfg.runs.parallel_simulations == 4
+    cfg.runs.parallel_scoring = 0
+    cfg.runs.parallel_simulations = 0
+    problems = cfg.problems()
+    assert any("parallel_scoring must be >= 1" in p for p in problems)
+    assert any("parallel_simulations must be >= 1" in p for p in problems)
+
+
+def test_template_spells_out_parallel_scoring_and_simulations():
+    text = template("demo", "examples/weather_bot/agent.py", "examples.weather_bot.agent")
+    assert "parallel_scoring: 4" in text
+    assert "parallel_simulations: 4" in text

@@ -149,8 +149,20 @@ def _set_yaml(page, text: str) -> None:
 
 def _open_setup(page, app_url: str) -> None:
     page.set_viewport_size({"width": 1500, "height": 1100})
-    page.goto(app_url + "/setup")
+    page.goto(app_url)  # Pipeline setup is the default page: it lives at the root URL
     page.locator("h2#setup").wait_for(timeout=60_000)
+    _settle(page)
+    # every flow starts from a clean project
+    sidebar = page.get_by_test_id("stSidebar")
+    if sidebar.get_by_role("button", name="Clear project").count():
+        sidebar.get_by_role("button", name="Clear project").click()
+        _settle(page)
+    expect(sidebar.get_by_text("No project selected")).to_be_visible()
+
+
+def _nav(page, title: str, anchor: str) -> None:
+    page.get_by_test_id("stSidebarNav").get_by_role("link", name=title).click()
+    page.locator(f"h2#{anchor}").wait_for(timeout=60_000)
     _settle(page)
 
 
@@ -323,9 +335,10 @@ def test_dataset_only_run_review_feedback_regenerate_and_evaluate(page, app_url,
     assert statuses == {"approved", "rejected"} and sum(c["review"]["status"] == "rejected" for c in final["cases"]) == 1
     assert yaml.safe_load(cfg_path.read_text())["review"] == {"auto_approve": True, "approved_by": "playwright reviewer", "note": "approved in the UI"}
 
-    # open the results in the report pages
+    # open the results in the report pages: the project never changed, so they simply show it
+    expect(page.get_by_test_id("stSidebar").get_by_text("ui-review").first).to_be_visible()
     _click(page, "Open results in the report pages")
-    page.locator("h2#overview").wait_for(timeout=60_000)
+    page.locator("h2#summary").wait_for(timeout=60_000)
     _settle(page)
     expect(page.get_by_test_id("stSidebar").get_by_text("ui-review").first).to_be_visible()
     expect(page.get_by_text("Overall score")).to_be_visible()
@@ -351,7 +364,7 @@ def test_full_autonomous_run_from_setup(page, app_url, work):
     assert "schema-edge" in report["coverage"]["by_kind"]
     assert json.loads((out_dir / "job.json").read_text())["exit_code"] == 0
     _click(page, "Open results in the report pages")
-    page.locator("h2#overview").wait_for(timeout=60_000)
+    page.locator("h2#summary").wait_for(timeout=60_000)
     _settle(page)
     expect(page.get_by_text("Overall score")).to_be_visible()
     page.get_by_test_id("stSidebarNav").get_by_role("link", name="Coverage").click()
@@ -412,7 +425,7 @@ def test_pydantic_agent_dataset_run_shows_schema_edge_cases(page, app_url, work)
     report = json.loads((out_dir / "report.json").read_text())
     assert report["verdict"] == "pass" and report["coverage"]["by_kind"]["schema-edge"]["covered"] == len(edges)
     _click(page, "Open results in the report pages")
-    page.locator("h2#overview").wait_for(timeout=60_000)
+    page.locator("h2#summary").wait_for(timeout=60_000)
     _settle(page)
     page.get_by_test_id("stSidebarNav").get_by_role("link", name="Agent graph & tools").click()
     page.locator("h2#agent").wait_for(timeout=60_000)
@@ -422,3 +435,132 @@ def test_pydantic_agent_dataset_run_shows_schema_edge_cases(page, app_url, work)
     expect(expander.get_by_text("Output schema").first).to_be_visible()
     expect(expander.get_by_text('"TicketReceipt"').first).to_be_visible()
     _shot(page, "results-incident-agent")
+
+
+# ── project selection, persistence, consistency ────────────────
+
+
+def test_setup_state_persists_across_pages_and_clear_empties_everything(page, app_url, work):
+    _open_setup(page, app_url)
+    sidebar = page.get_by_test_id("stSidebar")
+    # no project: every page is empty and points back to the setup page
+    for title in ("Run & review", "Summary", "Dataset & mocks"):
+        page.get_by_test_id("stSidebarNav").get_by_role("link", name=title).click()
+        _settle(page)
+        expect(page.get_by_text("No project selected").first).to_be_visible()
+    _nav(page, "Pipeline setup", "setup")
+    # pick a target: its output folder becomes the project everywhere
+    _select(page, "Example agent", "weather-bot")
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Output directory").locator("input")).to_have_value("eval/pipeline/weather-bot")
+    expect(sidebar.get_by_text("weather-bot").first).to_be_visible()
+    out = work / "ui-persist"
+    _fill(page, "Output directory", str(out))
+    expect(sidebar.get_by_text(str(out)).first).to_be_visible()
+    _click(page, "Discover structure")
+    expect(page.get_by_text("Tools and schemas")).to_be_visible()
+    _fill_area(page, "Constraints", "Always name the city.")
+    _fill_area(page, "General rules", "Travellers ask short questions.")
+    _fill(page, "Agent model", "scripted:examples.weather_bot.agent:default_scripted_model")
+    _click(page, "Generate YAML")
+    expect(_yaml_area(page)).to_have_value(re.compile("instructions: Travellers ask short questions."))
+    edited = _yaml_area(page).input_value() + "# edited in the browser\n"
+    _set_yaml(page, edited)
+    _shot(page, "setup-before-leaving")
+    # leave: the run page follows the same folder, the summary explains there is nothing yet
+    _nav(page, "Run & review", "run")
+    expect(page.get_by_text("Nothing has run in").first).to_be_visible()
+    expect(page.get_by_text(str(out)).first).to_be_visible()
+    page.get_by_test_id("stSidebarNav").get_by_role("link", name="Summary").click()
+    _settle(page)
+    expect(page.get_by_text("No artifacts yet").first).to_be_visible()
+    # come back: every field, the preview and the edited YAML survived
+    _nav(page, "Pipeline setup", "setup")
+    expect(page.get_by_test_id("stSelectbox").filter(has_text="Example agent").locator("input")).to_have_value(re.compile("weather-bot"))
+    expect(page.get_by_test_id("stTextArea").filter(has_text="Constraints").first.locator("textarea")).to_have_value("Always name the city.")
+    expect(page.get_by_test_id("stTextArea").filter(has_text="General rules").first.locator("textarea")).to_have_value("Travellers ask short questions.")
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Agent model").locator("input")).to_have_value("scripted:examples.weather_bot.agent:default_scripted_model")
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Output directory").locator("input")).to_have_value(str(out))
+    expect(_yaml_area(page)).to_have_value(edited)
+    expect(page.get_by_text("Tools and schemas")).to_be_visible()
+    _shot(page, "setup-after-returning")
+    # clear from the sidebar: the form is empty and every page is empty again
+    sidebar.get_by_role("button", name="Clear project").click()
+    _settle(page)
+    expect(sidebar.get_by_text("No project selected")).to_be_visible()
+    expect(page.get_by_test_id("stTextArea").filter(has_text="Constraints").first.locator("textarea")).to_have_value("")
+    expect(_yaml_area(page)).to_have_value("")
+    expect(page.get_by_text("Tools and schemas")).to_have_count(0)
+    _nav(page, "Run & review", "run")
+    expect(page.get_by_text("No project selected").first).to_be_visible()
+
+
+def test_opening_an_existing_project_loads_config_and_results(page, app_url):
+    _open_setup(page, app_url)
+    _select(page, "Project folder", "support-bot (docs/examples/support-bot)")
+    expect(page.get_by_text("Opened").first).to_be_visible()
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Pipeline name").locator("input")).to_have_value("support-bot")
+    expect(page.get_by_test_id("stTextInput").filter(has_text="Config file path").locator("input")).to_have_value("examples/support_bot/pipeline.yaml")
+    expect(_yaml_area(page)).to_have_value(re.compile("name: support-bot"))
+    expect(page.get_by_test_id("stSidebar").get_by_text("artifact kinds")).to_be_visible()
+    _nav(page, "Summary", "summary")
+    expect(page.get_by_text("Overall score")).to_be_visible()
+    _nav(page, "Run & review", "run")
+    expect(page.locator("h3#results")).to_be_visible()
+    _nav(page, "Coverage", "coverage")
+    expect(page.locator("h3#coverage-by-kind")).to_be_visible()
+    # new project… resets everything
+    _nav(page, "Pipeline setup", "setup")
+    _select(page, "Project folder", "new project…")
+    expect(page.get_by_test_id("stSidebar").get_by_text("No project selected")).to_be_visible()
+    expect(_yaml_area(page)).to_have_value("")
+
+
+# ── the smallest agent, end to end in the browser ──────────────
+
+
+def test_weather_bot_small_dataset_review_and_evaluate(page, app_url, work):
+    """weather_bot (one node, two tools): dataset-only run → review → approve → evaluation →
+    every report page, with a 4-case dataset, all through the browser."""
+    _open_setup(page, app_url)
+    _select(page, "Example agent", "weather-bot")
+    _click(page, "Discover structure")
+    metrics = page.locator("[data-testid='stMetric']")
+    assert metrics.filter(has_text="Tools").first.inner_text().strip().endswith("2")
+    _configure(
+        page, work, "ui-weather", auto_approve=False, instructions="Travellers ask short questions.",
+        target="weather-bot", module="examples.weather_bot.agent",
+        agent_model="scripted:examples.weather_bot.agent:default_scripted_model",
+        generator_model="scripted:examples.weather_bot.offline:generator_model",
+        constraints="Always name the city in the answer.", edge_cases_per_tool=1,
+    )
+    text = re.sub(r"total_cases: \d+", "total_cases: 4", _yaml_area(page).input_value())
+    text = re.sub(r"repeats: \d+", "repeats: 1", text)
+    _set_yaml(page, text)
+    out_dir = work / "ui-weather"
+    _click(page, "Generate dataset & mocks only")
+    _wait_job_finished(page, out_dir, "dataset")
+    expect(page.get_by_test_id("stSidebar").get_by_text("ui-weather").first).to_be_visible()
+    dataset = json.loads((out_dir / "dataset.json").read_text())
+    assert 4 <= len(dataset["cases"]) <= 9 and all(c["review"]["status"] == "pending" for c in dataset["cases"])
+    edges = [c for c in dataset["cases"] if c["metadata"].get("edge")]
+    assert {c["metadata"]["tool"] for c in edges} == {"get_weather", "get_alerts"}
+    review_metrics = page.locator("[data-testid='stMetric']")
+    assert review_metrics.filter(has_text="Mocked tools").first.locator("[data-testid='stMetricValue']").inner_text() == "2"
+    _shot(page, "run-weather-dataset")
+    _fill(page, "Approved by", "playwright weather")
+    _click(page, "Approve remaining cases & run evaluation")
+    _wait_job_finished(page, out_dir, "resume")
+    _expect_results_verdict(page, "pass")
+    report = json.loads((out_dir / "report.json").read_text())
+    assert report["verdict"] == "pass" and report["agent"]["tools"] == ["get_weather", "get_alerts"]
+    assert report["stages"]["review"]["details"]["approved_by"] == "playwright weather"
+    _click(page, "Open results in the report pages")
+    page.locator("h2#summary").wait_for(timeout=60_000)
+    _settle(page)
+    expect(page.get_by_text("Overall score")).to_be_visible()
+    for title, anchor in (("Agent graph & tools", "agent"), ("Intents & scenarios", "intents"), ("Dataset & mocks", "dataset"),
+                          ("Coverage", "coverage"), ("Eval results", "results"), ("Stability", "stability"),
+                          ("Simulation", "simulation"), ("Analysis", "analysis"), ("Stages & problems", "stages")):
+        _nav(page, title, anchor)
+        expect(page.get_by_test_id("stSidebar").get_by_text("ui-weather").first).to_be_visible()
+    _shot(page, "results-weather-stages")

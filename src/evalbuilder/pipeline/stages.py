@@ -468,11 +468,37 @@ def run(ctx: PipelineContext) -> dict:
     ds = ctx.dataset()
     runs = []
     errors = {"agent": 0, "infrastructure": 0}
+    approved = [c for c in ds.cases if c.review.status == "approved"]
+    by_intent: dict[str, dict] = {}
+    for c in approved:
+        by_intent.setdefault(c.metadata.get("intent") or "", {"done": 0, "total": 0, "errors": 0})["total"] += 1
+    prog = {
+        "repeats": cfg.runs.repeats, "repeat": 0, "parallel_intents": cfg.runs.parallel_intents,
+        "cases_total": len(approved), "cases_done": 0,
+        "overall_total": len(approved) * cfg.runs.repeats, "overall_done": 0,
+        "by_intent": by_intent, "runs": [], "current": [],
+    }
+
+    def on_case(evt: dict) -> None:  # serialized by the runner; keeps run-progress.json live
+        prog["cases_done"] = evt["completed"]
+        prog["overall_done"] += 1
+        rec = prog["by_intent"].setdefault(evt["intent"], {"done": 0, "total": 0, "errors": 0})
+        rec["done"] += 1
+        if evt["error_class"] != "none":
+            rec["errors"] += 1
+        prog["current"].append({k: evt[k] for k in ("case_id", "intent", "error_class", "error")})
+        ctx.save_artifact("run_progress", prog)
+
     for i in range(cfg.runs.repeats):
+        prog.update(repeat=i + 1, cases_done=0, current=[])
+        for rec in prog["by_intent"].values():
+            rec.update(done=0, errors=0)
+        ctx.save_artifact("run_progress", prog)
         ctx.log(f"run: repeat {i + 1}/{cfg.runs.repeats}")
         art = run_dataset(
             ds, ctx.dataset_path, mocked=True, out_dir=ctx.results_dir,
             model=ctx.agent_model(), model_spec=cfg.models.agent, on_miss=cfg.mocking.on_miss,
+            max_workers=cfg.runs.parallel_intents, progress=on_case,
         )
         infra = [cr for cr in art.case_runs if cr.error_class == "infrastructure"]
         if infra and len(infra) == len(art.case_runs):
@@ -480,7 +506,11 @@ def run(ctx: PipelineContext) -> dict:
         errors["agent"] += sum(1 for cr in art.case_runs if cr.error_class == "agent")
         errors["infrastructure"] += len(infra)
         runs.append({"run_id": art.run_id, "path": str(ctx.artifact("run", art.run_id))})
-    return {"artifacts": {"runs": runs}, "repeats": cfg.runs.repeats, "cases": len(ds.cases), "errors": errors}
+        prog["runs"] = list(runs)
+        ctx.save_artifact("run_progress", prog)
+    return {"artifacts": {"runs": runs, "run_progress": str(ctx.artifact("run_progress"))},
+            "repeats": cfg.runs.repeats, "parallel_intents": cfg.runs.parallel_intents,
+            "cases": len(ds.cases), "errors": errors}
 
 
 def score(ctx: PipelineContext) -> dict:
@@ -492,7 +522,8 @@ def score(ctx: PipelineContext) -> dict:
     reports = []
     for entry in runs:
         run_art = RunArtifact.model_validate(json.loads(Path(entry["path"]).read_text()))
-        report = score_run(run_art, ds, cfg.evaluators, cfg.models.judge)
+        report = score_run(run_art, ds, cfg.evaluators, cfg.models.judge,
+                           max_workers=cfg.runs.parallel_scoring)
         report_path = ctx.artifact("score_report", run_art.run_id)
         artifacts.save_json(report_path, report)
         pairs.append({"run": entry["path"], "report": str(report_path)})
@@ -507,6 +538,7 @@ def score(ctx: PipelineContext) -> dict:
         raise RuntimeError("no evaluator produced a single score")
     return {
         "artifacts": {"pairs": pairs, "evaluators": str(ctx.artifact("evaluators"))},
+        "parallel_scoring": cfg.runs.parallel_scoring,
         "metrics": {m: v["avg"] for m, v in reports[0][1].metrics.items()} if reports else {},
         "evaluator_errors": {m: v["errors"] for m, v in reports[0][1].metrics.items() if v["errors"]} if reports else {},
     }
@@ -542,16 +574,22 @@ def simulate(ctx: PipelineContext) -> dict:
     scen_path.write_text(yaml.safe_dump({"scenarios": scenarios}, sort_keys=False))
     scenario_list = sim.load_scenarios(scen_path)
     module = target_mod.load_target(ds.target)
-    tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules(ds.mocks.get("tools", {}), {}), on_miss=cfg.mocking.on_miss)
-    graph = target_mod.build_graph(module, ds.target, tools=tools, model=ctx.agent_model())
+    agent_model = ctx.agent_model()
+
+    def graph_factory():  # a fresh graph (and tool wrappers) per scenario, so scenarios can run concurrently
+        tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules(ds.mocks.get("tools", {}), {}), on_miss=cfg.mocking.on_miss)
+        return target_mod.build_graph(module, ds.target, tools=tools, model=agent_model)
+
     user_model = getattr(ctx.generator(), "model", None)
-    results = [sim.simulate_scenario(graph, s, user_model=user_model) for s in scenario_list]
+    results = sim.simulate_scenarios(graph_factory, scenario_list, user_model=user_model,
+                                     max_workers=cfg.runs.parallel_simulations)
     mined = sim.mine_failures(ds, results)
     if mined:
         ctx.save_dataset(ds)
     sim_path = ctx.save_artifact("simulation", {"results": results})
     return {
         "artifacts": {"scenarios": str(scen_path), "simulation": str(sim_path)},
+        "parallel_simulations": cfg.runs.parallel_simulations,
         "scenarios": len(results),
         "stop_reasons": {r["scenario_id"]: r["stop_reason"] for r in results},
         "violations": {r["scenario_id"]: r["violations"] for r in results if r["violations"]},

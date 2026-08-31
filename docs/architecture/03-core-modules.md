@@ -149,8 +149,10 @@ apart from "the harness could not run".
 **Limitations.** Multi-turn replay re-invokes the graph with the accumulated message
 list — graphs relying on a checkpointer thread id for state get a fresh state each
 turn; `outputs.response` is the last message's text (structured/state outputs beyond
-`messages` are not captured); there is no per-case timeout or parallelism; the graph
-must accept `{"messages": [...]}` as input.
+`messages` are not captured); there is no per-case timeout; parallelism is per intent
+group only (`max_workers` > 1 runs intent groups in threads, cases within one intent
+stay sequential, and an optional `progress` callback reports each completed case);
+the graph must accept `{"messages": [...]}` as input.
 
 ## Mocking (`mocking.py`)
 
@@ -178,7 +180,10 @@ raises `EvaluatorNotApplicable` (case has no reference → `skipped`) /
 case of a run, records per-case `scores`/`errors`/`skipped`, per-metric
 `{n, avg, min, max, errors, skipped}`, and per-slice means for `intent`,
 `failure_mode`, `variant`. A case that errored during the run scores 0 on every
-metric with the error as comment.
+metric with the error as comment. With `max_workers > 1` the case runs are scored
+concurrently in a thread pool (each case still runs its evaluators in order); rows,
+metrics and slices are aggregated in run order afterwards, so the report is identical
+to a sequential pass.
 
 Types: deterministic `expected_tools` (ordered subsequence of calls with recursive
 args subset, plus `forbidden_tools`), `contains` (case-insensitive substring(s)),
@@ -209,7 +214,10 @@ and stop conditions (`success_contains`, `expect.contains`, `expect.not_contains
 when a `user_model` is given — a simulated user prompted with persona, goal and the
 last six transcript entries. Stop reasons: `success` (needle seen), `exhausted` (no
 more user messages), `max_turns` (a truncation, reported as a violation when a
-success needle was expected). `mine_failures` turns violating runs into **pending**
+success needle was expected). `simulate_scenarios(graph_factory, scenarios,
+user_model=, max_workers=)` runs a scenario list — concurrently when
+`max_workers > 1`, each worker building its own graph via the factory so nothing is
+shared between threads; results keep scenario order. `mine_failures` turns violating runs into **pending**
 cases (`source=simulation`, `failure_mode=simulation-violation`, later turns in
 `user_turns`, transcript tail kept for the reviewer).
 

@@ -80,3 +80,74 @@ def test_real_job_argv_runs_the_cli_module(tmp_path):
     st = _wait(out, "finished", timeout=60)
     assert st["exit_code"] == 2, jobs.tail_log(out)
     assert "invalid pipeline config" in jobs.tail_log(out)
+
+
+def _state(out, stages, data=None):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "state.json").write_text(json.dumps({
+        "schema": "evalbuilder/pipeline-state/v1", "name": "x",
+        "stages": {k: {"status": v} for k, v in stages.items()},
+        "data": data or {},
+    }))
+
+
+def test_job_status_reports_running_stage_and_progress(tmp_path):
+    import os
+
+    out = tmp_path / "out"
+    _state(out, {"discover": "ok", "map": "running", "mocks": "pending", "dataset": "pending"})
+    st = jobs.job_status(out)
+    assert st["progress"] == {"done": 1, "total": 4, "fraction": 0.25, "stage": "map"}
+    (out / "job.json").write_text(json.dumps(
+        {"schema": jobs.JOB_SCHEMA, "pid": os.getpid(), "finished_at": None}))
+    st = jobs.job_status(out)
+    assert st["status"] == "running" and st["running_stage"] == "map"
+    assert st["progress"]["stage"] == "map" and st["progress"]["total"] == 4
+
+
+def test_job_status_flags_interrupted_stage_when_job_is_gone(tmp_path):
+    out = tmp_path / "out"
+    _state(out, {"discover": "ok", "run": "running"})
+    (out / "job.json").write_text(json.dumps(
+        {"schema": jobs.JOB_SCHEMA, "pid": 99999999, "finished_at": None}))
+    st = jobs.job_status(out)
+    assert st["status"] == "lost" and st["running_stage"] is None
+    assert st["interrupted_stage"] == "run"
+
+
+def test_stop_job_kills_the_process_and_finalises(tmp_path):
+    out = tmp_path / "out"
+    assert jobs.stop_job(out)["status"] == "none"  # nothing to stop
+    jobs.start_job(tmp_path / "cfg.yaml", out, mode="full",
+                   argv=[sys.executable, "-c", "import time; time.sleep(60)"])
+    st = _wait(out, "running")
+    pid = st["job"]["pid"]
+    res = jobs.stop_job(out)
+    assert res["status"] == "stopped"
+    st = jobs.job_status(out)
+    assert st["status"] == "stopped" and st["job"]["stopped"] and st["job"]["finished_at"]
+    assert not jobs._alive(pid)
+    assert jobs.stop_job(out)["status"] == "stopped"  # idempotent
+    assert "stopped by user" in jobs.tail_log(out)
+
+
+def test_stop_job_after_finish_is_a_noop(tmp_path):
+    out = tmp_path / "out"
+    jobs.start_job(tmp_path / "cfg.yaml", out, mode="full", argv=[sys.executable, "-c", "pass"])
+    _wait(out, "finished")
+    assert jobs.stop_job(out)["status"] == "finished"
+    assert not jobs.read_job(out).get("stopped")
+
+
+def test_job_status_includes_run_progress(tmp_path):
+    out = tmp_path / "out"
+    _state(out, {"verify": "ok", "run": "running"})
+    (out / "run-progress.json").write_text(json.dumps({
+        "schema": "evalbuilder/run-progress/v1", "repeat": 1, "repeats": 3,
+        "cases_total": 4, "cases_done": 2, "overall_total": 12, "overall_done": 2,
+        "by_intent": {"intent.a": {"done": 2, "total": 4, "errors": 1}}, "runs": [], "current": [],
+    }))
+    st = jobs.job_status(out)
+    assert st["run_progress"]["cases_done"] == 2 and st["run_progress"]["overall_total"] == 12
+    (out / "run-progress.json").write_text("{broken")
+    assert jobs.job_status(out)["run_progress"] is None

@@ -141,3 +141,43 @@ def test_stop_after_skips_later_stages_but_report_runs(tmp_path):
 
     with pytest.raises(ValueError, match="unknown stage"):
         PipelineRunner(stages, tmp_path / "s2.json", stop_after="zzz").run(_ctx())
+
+
+def test_all_stages_are_registered_pending_before_any_runs(tmp_path):
+    """The saved state lists every stage up front so a UI can show total progress."""
+    import json
+
+    path = tmp_path / "s.json"
+    seen = {}
+
+    def probe(ctx):
+        state = json.loads(path.read_text())
+        seen["statuses"] = {k: v["status"] for k, v in state["stages"].items()}
+        return {}
+
+    stages = [Stage("a", _ok("a")), Stage("b", probe), Stage("c", _ok("c"))]
+    state = PipelineRunner(stages, path).run(_ctx())
+    # while b executed, the on-disk state showed: a done, b running, c pending
+    assert seen["statuses"] == {"a": "ok", "b": "running", "c": "pending"}
+    assert state.stages["b"].status == "ok"
+    assert state.stages["c"].status == "ok"
+
+
+def test_running_status_survives_a_crash_and_is_rerun_on_resume(tmp_path):
+    """A killed pipeline leaves its stage 'running' on disk; resume re-executes it."""
+    path = tmp_path / "s.json"
+
+    def die(ctx):
+        raise KeyboardInterrupt  # simulates a kill: escapes the engine's except Exception
+
+    stages = [Stage("a", _ok("a")), Stage("b", die)]
+    import pytest
+
+    with pytest.raises(KeyboardInterrupt):
+        PipelineRunner(stages, path).run(_ctx())
+    assert PipelineState.load(path).stages["b"].status == "running"
+
+    ctx = _ctx()
+    stages2 = [Stage("a", _ok("a")), Stage("b", _ok("b"))]
+    state = PipelineRunner(stages2, path, resume=True).run(ctx)
+    assert ctx.calls == ["b"] and state.stages["b"].status == "ok"

@@ -64,7 +64,9 @@ your LangGraph agent ─►│ agent-eval-discover │ agent-eval-dataset │ ag
 
 ## Install
 
-Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
+Requires Python ≥ 3.11.7 (the suite runs on 3.11 with plain pip and on 3.12 with uv). Two equivalent set-ups:
+
+**With [uv](https://docs.astral.sh/uv/)**
 
 ```bash
 uv venv --python 3.12
@@ -77,9 +79,24 @@ cp .env.example .env                 # model defaults and API keys (all optional
 uv run evalbuilder check             # capability matrix: langgraph, claude CLI, providers, judge, langsmith
 ```
 
-Extras: `anthropic`, `openai`, `gemini` (one provider each), `llm` (all three), `ui`.
-The Claude Code CLI adapter needs the `claude` binary on `PATH` and a logged-in
-subscription; nothing else needs a key.
+**With a plain Python and pip** (no uv available)
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate   # any Python ≥ 3.11.7; Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e .                     # core
+pip install -e ".[ui]"               # + report UI
+pip install -e ".[ui,llm,dev]"       # + API providers + pytest / playwright (the `dev` extra mirrors uv's dev group)
+playwright install chromium          # only for the browser tests
+cp .env.example .env
+evalbuilder check                    # the console script; `python -m evalbuilder.cli check` is equivalent
+```
+
+Every `uv run <cmd>` in this README is `<cmd>` inside the activated virtualenv (the
+pipeline's background jobs and the UI always spawn the interpreter they run in, never
+`uv`). Extras: `anthropic`, `openai`, `gemini` (one provider each), `llm` (all three),
+`ui`, `dev`. The Claude Code CLI adapter needs the `claude` binary on `PATH` and a
+logged-in subscription; nothing else needs a key.
 
 ## Quickstart
 
@@ -103,9 +120,10 @@ uv run evalbuilder ui eval/pipeline/support-bot                  # Streamlit rep
 ```
 
 Prefer clicking? `uv run evalbuilder ui` → **Pipeline setup** does steps 1–3 interactively
-(pick an example agent, discover its tools and schemas, fill the form including free-text
-rules, edit the YAML, run everything or stop after the dataset), **Run & review** shows the
-job live and hosts the comment → regenerate → approve → evaluate loop.
+(choose the project — an existing output folder or a new one from an example agent —
+discover its tools and schemas, fill the form including free-text rules, edit the YAML,
+run everything or stop after the dataset), **Run & review** shows the job live and hosts
+the comment → regenerate → approve → evaluate loop; every other page shows that project.
 
 No key, no `claude` binary? Look at a finished run right away — the repository ships
 the artifacts of real runs: `uv run evalbuilder ui docs/examples/support-bot`.
@@ -149,15 +167,18 @@ src/evalbuilder/
     jobs.py           background pipeline jobs for the UI (job.json + pipeline.log, wrapper entry point)
     setup.py          interactive setup helpers: target discovery/preview, config from form, feedback/approval
   ui/
-    app.py            Streamlit entry point (sidebar source picker, st.navigation)
+    app.py            Streamlit entry point (st.navigation, sidebar showing the project)
+    project.py        THE project: the folder / uploads chosen on Pipeline setup that every page follows;
+                      persistent setup form (survives navigation), bundle loading
     loader.py         Bundle: load a directory by file name or uploads by schema id
     common.py         palette, charts (Altair), tables, transcript widgets
-    app_pages/        setup (pipeline setup), run (run & review), overview, agent, intents, dataset,
-                      coverage, results, stability, simulation, analysis, stages
+    app_pages/        setup (pipeline setup), run (run & review), agent, intents, dataset, coverage,
+                      results, stability, simulation, analysis, summary, stages
 skills/               five Claude Code skills (symlinked into .claude/skills/)
 examples/             weather_bot, travel_planner, support_bot, incident_desk, loan_desk — each with a
-                      scripted default model; support_bot/incident_desk/loan_desk also ship pipeline.yaml
-                      and offline.py (a SchemaScriptedModel generator for LLM-free pipeline runs)
+                      scripted default model; support_bot/incident_desk/loan_desk ship pipeline.yaml, and
+                      weather_bot/support_bot/incident_desk/loan_desk ship offline.py (a SchemaScriptedModel
+                      generator for LLM-free pipeline runs)
 docs/examples/support-bot/, incident-desk/   artifacts of real pipeline runs (UI demo + test fixtures)
 docs/architecture/    how every skill, CLI command, module, the pipeline and the UI work; decisions; limitations
 docs/superpowers/     design specs and implementation plans
@@ -359,35 +380,44 @@ The standalone commands write with the same names (`evalbuilder score` →
 
 ```bash
 uv sync --extra ui
-uv run evalbuilder ui                              # pick a directory in the sidebar (scans eval/pipeline/*, docs/examples/*)
-uv run evalbuilder ui eval/pipeline/support-bot    # open one directly
+uv run evalbuilder ui                              # choose the project on Pipeline setup (scans eval/pipeline/*, docs/examples/*)
+uv run evalbuilder ui eval/pipeline/support-bot    # open one directly (it becomes the project)
 uv run evalbuilder ui DIR --port 8600 --headless   # server only
 uv run streamlit run src/evalbuilder/ui/app.py -- --dir DIR     # equivalent
 ```
 
-**Pipeline setup** initialises a run interactively: pick an example agent (any module
-under `examples/` exposing `TOOLS` + `build_agent`) or type source/module, *Discover
-structure* (AST + live introspection, no LLM) shows nodes, tools, schema sources,
-pydantic models, side effects and the derived edge cases; the form covers models
-(Claude Sonnet 5 via claude-cli by default), constraints, **free-text general rules and
-instructions**, coverage (incl. edge cases per tool), evaluators, thresholds, repeats,
+The app is organised around one **project** — chosen only on *Pipeline setup* — and every
+other page follows it: an output folder (existing results, or where a new run will write)
+or uploaded artifacts (read-only). The sidebar shows the current project (name, folder,
+config, job status, artifact counts) and a *Clear project* button; without a project every
+page is empty and points back to the setup page.
+
+**Pipeline setup** initialises a run interactively and keeps its state while you visit
+other pages: **Project** (open an existing folder — its config is loaded back into the
+form and YAML — or start a new one), **Target agent** (an example under `examples/`
+exposing `TOOLS` + `build_agent`, or a typed source/module; its output folder becomes the
+project), *Discover structure* (AST + live introspection, no LLM) shows nodes, tools,
+schema sources, pydantic models, side effects and the derived edge cases; the form covers
+models (Claude Sonnet 5 via claude-cli by default), constraints, **free-text general rules
+and instructions**, coverage (incl. edge cases per tool), evaluators, thresholds, repeats,
 mock policy, review approval and paths; *Generate YAML* fills an editable YAML editor;
-*Validate* / *Save config* / *Generate dataset & mocks only* / *Run full pipeline*.
+*Validate* / *Save config* / *Generate dataset & mocks only* / *Run full pipeline*. When
+the config file changes on disk (review feedback, approval, a job) the form reloads it.
 
-**Run & review** follows the background job (`job.json` + `pipeline.log`, stage table
-refreshed every 2 s), and after a dataset-only run shows the review loop: dataset
-summary (statuses, failure modes, schema-edge cases, mocked tools), a comment box whose
-text is appended to the config's `feedback`, *Save feedback & regenerate* (`--resume
---from map|mocks|dataset --until dataset`), and *Approve remaining cases & run
+**Run & review** follows the project's background job (`job.json` + `pipeline.log`,
+stage table refreshed every 2 s), and after a dataset-only run shows the review loop:
+dataset summary (statuses, failure modes, schema-edge cases, mocked tools), a comment box
+whose text is appended to the config's `feedback`, *Save feedback & regenerate*
+(`--resume --from map|mocks|dataset --until dataset`), and *Approve remaining cases & run
 evaluation* (records the approver, rejects selected cases, `--resume`). *Open results*
-loads the output directory into the report pages.
+jumps to the Summary page.
 
-The sidebar loads a pipeline output directory (by file name) or **uploaded files**
-(identified by their embedded `schema` id, falling back to the file name). Report pages:
+Report pages (all read the project's artifacts; uploaded files are identified by their
+embedded `schema` id, falling back to the file name):
 
 | page | shows |
 |---|---|
-| Overview | verdict + reasons, overall score, metric pass rates vs thresholds, coverage, stability, stage timeline, analysis summary, problems |
+| Summary (after Analysis) | verdict + reasons, overall score, metric pass rates vs thresholds, coverage, stability, stage timeline, analysis summary, problems |
 | Agent graph & tools | the graph as Graphviz (AST edges or compiled/live edges, tool links), node prompts, tools with argument/output schemas, pydantic models, side effects and schema edge cases, constraints, topics |
 | Intents & scenarios | intents with evidence and case counts, scenarios by intent (happy/failure), failure scenarios, structurally applicable failure types |
 | Dataset & mocks | filterable case table (incl. schema-edge kind), case detail (inputs, references, metadata, edge, per-case mocks, review note), review counts, tool fixtures |
@@ -498,23 +528,31 @@ configured; a missing key is degraded, never blocking.
 ## Testing
 
 ```bash
-uv run pytest                     # offline suite (~230 tests): CLI, pipeline e2e with scripted models and
-                                  # offline generators, tool schemas / edge cases, jobs, providers, naming
-                                  # convention, UI loader, headless page tests (AppTest) incl. setup / run pages
+uv run pytest                     # offline suite (~280 tests): CLI, pipeline e2e with scripted models and
+                                  # offline generators (support_bot; weather_bot with a 4-case dataset through
+                                  # run_pipeline, the review loop and real background jobs), tool schemas /
+                                  # edge cases, jobs, providers, naming convention, UI loader, headless page
+                                  # tests (AppTest): every page with/without a project, setup persistence
 uv run pytest -m ui               # Playwright browser tests: report pages (tests/ui/test_playwright.py) and the
-                                  # interactive flows (tests/ui/test_playwright_flows.py): setup → discover →
-                                  # generate/validate/save YAML; dataset-only run → review → feedback →
-                                  # regenerate → approve → evaluate → results; full autonomous run
+                                  # interactive flows (tests/ui/test_playwright_flows.py): project selection,
+                                  # setup state across pages + Clear project; setup → discover → generate/
+                                  # validate/save YAML; dataset-only run → review → feedback → regenerate →
+                                  # approve → evaluate → results; full autonomous run; weather-bot small run
 EVALBUILDER_UI_SHOTS=shots uv run pytest -m ui    # also saves screenshots
 ```
 
+`bash scripts/cli-smoke.sh` exercises every CLI tool and the pipeline end to end, offline,
+with whatever `python`/`evalbuilder` is on `PATH` (≈2 minutes, no model or key) — the
+check to run in an environment without uv after `pip install -e ".[ui,dev]"`.
+
 Browser tests skip themselves when playwright/chromium is missing
 (`uv run playwright install chromium`). The flow tests run the real pipeline as a
-background job with offline models (`scripted:examples.support_bot.agent:default_scripted_model`
-+ `scripted:examples.support_bot.offline:generator_model`) and assert on the artifacts
+background job with offline models (`scripted:examples.<name>.agent:default_scripted_model`
++ `scripted:examples.<name>.offline:generator_model`) and assert on the artifacts
 written to disk, so they finish in seconds. The Streamlit pages are also exercised without
 a browser via `streamlit.testing.v1.AppTest` (`tests/test_ui_pages.py`,
-`tests/test_ui_pipeline_pages.py`).
+`tests/test_ui_pipeline_pages.py`); `tests/test_e2e_small_agents.py` runs the smallest
+agent end to end (`-m "not slow"` skips the subprocess job test).
 
 ## Troubleshooting
 

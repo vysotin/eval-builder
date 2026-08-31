@@ -2,7 +2,7 @@
 name = "evalbuilder"
 version = "0.1.0"
 description = "Agentic eval/dataset builder for LangGraph agents"
-requires-python = ">=3.12"
+requires-python = ">=3.11.7"
 dependencies = [
   "langgraph>=0.2",
   "langchain-core>=0.3",
@@ -25,6 +25,8 @@ gemini = ["langchain-google-genai>=2.0"]
 llm = ["langchain-anthropic>=0.3", "langchain-openai>=0.3", "langchain-google-genai>=2.0"]
 # Streamlit report UI (`evalbuilder ui`)
 ui = ["streamlit>=1.40", "pandas>=2.0"]
+# test tools, for plain pip installs: `pip install -e ".[ui,dev]"` (uv users get the `dev` dependency group)
+dev = ["pytest>=8", "pytest-playwright>=0.5"]
 
 [project.scripts]
 evalbuilder = "evalbuilder.cli:app"
@@ -42,4 +44,7 @@ packages = ["src/evalbuilder"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-markers = ["ui: browser tests driving the Streamlit app with Playwright"]
+markers = [
+    "ui: browser tests driving the Streamlit app with Playwright",
+    "slow: end-to-end tests that spawn real pipeline subprocesses",
+]

@@ -27,7 +27,7 @@ def _config(tmp_path, **overrides):
                      "out_of_intent": 1, "multi_turn_share": 0.0, "per_tool_edge_cases": 0},
         "evaluators": [{"type": "expected_tools"}, {"type": "contains"}],
         "thresholds": {"default": 0.8, "slice_min": 0.5, "overall_pass": 0.8},
-        "runs": {"repeats": 2},
+        "runs": {"repeats": 2, "parallel_scoring": 2, "parallel_simulations": 2},
         "stages": {"simulate": True, "publish": "never", "max_retries": 1},
         "review": {"auto_approve": True, "approved_by": "tester", "note": "offline e2e"},
         "output": {"dir": str(tmp_path / "out")},
@@ -147,11 +147,19 @@ def test_full_offline_pipeline_passes(tmp_path):
     assert "Always mention the order id in the answer." in report["agent"]["constraints"]
     assert report["simulation"]["details"]["stop_reasons"] == {"refund-flow": "success"}
     assert report["stages"]["review"]["details"]["approved_by"] == "tester"
+    assert report["stages"]["score"]["details"]["parallel_scoring"] == 2
+    assert report["stages"]["simulate"]["details"]["parallel_simulations"] == 2
     # artifacts on disk
     out = tmp_path / "out"
     for name in ("agent-map.json", "mock-rules.json", "applicable-failures.json", "dataset.json", "coverage-plan.json", "coverage.json", "aggregate.json",
                  "analysis.json", "scenarios.yaml", "simulation.json", "state.json", "report.json", "evaluators.yaml"):
         assert (out / name).exists(), name
+    prog = json.loads((out / "run-progress.json").read_text())
+    assert prog["schema"] == "evalbuilder/run-progress/v1"
+    assert prog["repeat"] == 2 and prog["repeats"] == 2
+    assert prog["overall_done"] == prog["overall_total"] == 10  # 5 cases x 2 repeats
+    assert sum(v["total"] for v in prog["by_intent"].values()) == 5
+    assert len(prog["runs"]) == 2
     ds = json.loads((out / "dataset.json").read_text())
     assert all(c["review"]["status"] == "approved" for c in ds["cases"])
     assert set(ds["mocks"]["tools"]) == set(report["agent"]["tools"]) and ds["mocks"]["on_miss"] == "strict"

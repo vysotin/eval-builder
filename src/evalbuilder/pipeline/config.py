@@ -65,6 +65,9 @@ class ThresholdsConfig(BaseModel):
 
 class RunsConfig(BaseModel):
     repeats: int = 3
+    parallel_intents: int = 4  # intent groups executed concurrently within each repeat (1 = sequential)
+    parallel_scoring: int = 4  # case runs scored concurrently within each run report (1 = sequential)
+    parallel_simulations: int = 4  # simulation scenarios executed concurrently (1 = sequential)
 
 
 class MockingConfig(BaseModel):
@@ -104,7 +107,7 @@ SECTION_COMMENTS = {
     "coverage": "case counts: per intent, per failure category, out-of-intent, multi-turn share, schema edge cases per tool",
     "evaluators": "deterministic first (expected_tools, contains), then judges (contract, correctness, openevals, trajectory_llm)",
     "thresholds": "pass rate per metric / per slice / overall",
-    "runs": "repeats detect unstable cases and evaluators",
+    "runs": "repeats detect unstable cases and evaluators; parallel_intents / parallel_scoring / parallel_simulations size the run, scoring and simulation thread pools (1 = sequential)",
     "mocking": "every tool gets a fixture; on_miss strict = unmatched call is an error, never a real call",
     "stages": "skip list, retries, optional simulate/publish",
     "review": "auto_approve + approved_by is the explicit human authorization to approve generated cases",
@@ -179,6 +182,12 @@ class PipelineConfig(BaseModel):
             errors.append(f"target.source not found: {self.target.source}")
         if self.runs.repeats < 1:
             errors.append("runs.repeats must be >= 1")
+        if self.runs.parallel_intents < 1:
+            errors.append("runs.parallel_intents must be >= 1")
+        if self.runs.parallel_scoring < 1:
+            errors.append("runs.parallel_scoring must be >= 1")
+        if self.runs.parallel_simulations < 1:
+            errors.append("runs.parallel_simulations must be >= 1")
         if self.coverage.total_cases < 1:
             errors.append("coverage.total_cases must be >= 1")
         if not 0 <= self.coverage.multi_turn_share <= 1:
@@ -279,6 +288,9 @@ thresholds:
   overall_pass: 0.8           # mean of metric pass rates
 runs:
   repeats: 3                  # repeated runs to detect unstable cases/evaluators
+  parallel_intents: 4         # intent groups run concurrently within each repeat (1 = sequential)
+  parallel_scoring: 4         # case runs scored concurrently within each run report (1 = sequential)
+  parallel_simulations: 4     # simulation scenarios run concurrently (1 = sequential)
 mocking:
   required: true              # every introspected tool gets a mock rule
   on_miss: strict             # unmatched tool call -> error, never a real call

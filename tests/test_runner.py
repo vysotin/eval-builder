@@ -175,3 +175,79 @@ def test_cli_run_accepts_model_spec(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["errors"] == 0
+
+
+def _two_intent_ds(tmp_path):
+    """Two approved cases in different intents against the weather bot."""
+    ds = Dataset(name="w2", dataset_type="final_response",
+                 target=Target(module="examples.weather_bot.agent"))
+    for city, intent in (("Paris", "intent.weather"), ("Oslo", "intent.travel")):
+        add_case(ds, {
+            "inputs": {"messages": [{"role": "user", "content": f"What is the weather in {city}?"}]},
+            "metadata": {"intent": intent, "mocks": {"tools": {"get_weather": [
+                {"matchArgs": {}, "response": {"temp": 5, "condition": "mocked", "city": city}}]}}},
+        })
+    set_review(ds, [c.id for c in ds.cases], "approved", "test")
+    p = tmp_path / "ds.json"
+    save_json(p, ds)
+    return ds, p
+
+
+def test_run_parallel_intent_groups_execute_concurrently(tmp_path):
+    """With max_workers=2 both intent groups run at once: a 2-party barrier inside the
+    model only passes when the two cases execute concurrently."""
+    import threading
+
+    from evalbuilder.testing import ScriptedChatModel, ai, tool_call
+
+    ds, p = _two_intent_ds(tmp_path)
+    barrier = threading.Barrier(2, timeout=10)
+
+    def first(city):
+        def rule(m, _msgs):
+            barrier.wait()  # raises BrokenBarrierError when cases run sequentially
+            return tool_call("get_weather", {"city": city})
+        return rule
+
+    model = ScriptedChatModel(script=[
+        (r"TOOL:", lambda m, _msgs: ai("done")),
+        (r"Paris", first("Paris")),
+        (r"Oslo", first("Oslo")),
+    ])
+    art = run_dataset(ds, p, mocked=True, out_dir=tmp_path, model=model, max_workers=2)
+    assert [cr.error for cr in art.case_runs] == [None, None]
+    assert [cr.case_id for cr in art.case_runs] == [c.id for c in ds.cases]  # dataset order kept
+
+
+def test_run_progress_callback_reports_each_case(tmp_path):
+    from evalbuilder.testing import ScriptedChatModel, ai, tool_call
+
+    ds, p = _two_intent_ds(tmp_path)
+    model = ScriptedChatModel(script=[
+        (r"TOOL:", lambda m, _msgs: ai("done")),
+        (r"Paris", lambda m, _msgs: tool_call("get_weather", {"city": "Paris"})),
+        (r"Oslo", lambda m, _msgs: tool_call("get_weather", {"city": "Oslo"})),
+    ])
+    events = []
+    art = run_dataset(ds, p, mocked=True, out_dir=tmp_path, model=model,
+                      max_workers=2, progress=events.append)
+    assert len(events) == 2
+    assert {e["case_id"] for e in events} == {c.id for c in ds.cases}
+    assert sorted(e["completed"] for e in events) == [1, 2]
+    assert all(e["total"] == 2 and e["intent"] and e["error_class"] == "none" for e in events)
+    assert len(art.case_runs) == 2
+
+
+def test_run_parallel_keeps_per_case_errors_isolated(tmp_path):
+    from evalbuilder.testing import ScriptedChatModel, ai, tool_call
+
+    ds, p = _two_intent_ds(tmp_path)
+    model = ScriptedChatModel(script=[  # no rule for Oslo → that case errors, Paris passes
+        (r"TOOL:", lambda m, _msgs: ai("done")),
+        (r"Paris", lambda m, _msgs: tool_call("get_weather", {"city": "Paris"})),
+    ])
+    art = run_dataset(ds, p, mocked=True, out_dir=tmp_path, model=model, max_workers=2)
+    by_id = {cr.case_id: cr for cr in art.case_runs}
+    paris, oslo = ds.cases[0].id, ds.cases[1].id
+    assert by_id[paris].error is None
+    assert by_id[oslo].error and by_id[oslo].error_class == "agent"

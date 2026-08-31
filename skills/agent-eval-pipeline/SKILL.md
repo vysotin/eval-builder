@@ -28,7 +28,8 @@ when they want a verdict.
      Claude Code subscription via the `claude` binary; no API key). API-key providers are interchangeable:
      `anthropic:claude-sonnet-5` (`ANTHROPIC_API_KEY`), `openai:gpt-5`
      (`OPENAI_API_KEY`), `gemini:gemini-2.5-pro` (`GOOGLE_API_KEY`); each needs its
-     package (`uv sync --extra anthropic|openai|gemini|llm`). `evalbuilder check`
+     package (`uv sync --extra anthropic|openai|gemini|llm`, or `pip install -e '.[llm]'`
+     without uv). `evalbuilder check`
      prints per-provider readiness (`providers`), and preflight fails early with the
      exact missing key/package.
    - `review.auto_approve: true` + `approved_by` is the user's explicit authorization

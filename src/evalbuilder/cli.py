@@ -510,17 +510,17 @@ def pipeline_run(
 
 @app.command()
 def ui(
-    path: Optional[Path] = typer.Argument(None, help="pipeline output directory to open (default: pick in the sidebar)"),
+    path: Optional[Path] = typer.Argument(None, help="pipeline output directory to open as the project (default: choose on the Pipeline setup page)"),
     port: int = typer.Option(8501, "--port"),
     headless: bool = typer.Option(False, "--headless", help="do not open a browser"),
 ) -> None:
-    """Open the Streamlit report UI over pipeline artifacts (needs `uv sync --extra ui`)."""
+    """Open the Streamlit report UI over pipeline artifacts (needs the `ui` extra: `uv sync --extra ui` or `pip install -e '.\\[ui]'`)."""
     import importlib.util
     import subprocess
     import sys
 
     if importlib.util.find_spec("streamlit") is None:
-        typer.echo("streamlit is not installed: run `uv sync --extra ui`", err=True)
+        typer.echo("streamlit is not installed: run `uv sync --extra ui` (or `pip install -e '.[ui]'`)", err=True)
         raise typer.Exit(1)
     if path is not None and not path.is_dir():
         typer.echo(f"not a directory: {path}", err=True)
