@@ -64,10 +64,18 @@ def resolve_output_schema(tool) -> dict:
         return {}
 
 
+def tool_kind(tool) -> str:
+    """`skill_loader` for Agent-Skill loaders (local, deterministic, never mocked), else `tool`."""
+    from evalbuilder.skills import SKILL_LOADER_KIND, is_skill_loader
+
+    return SKILL_LOADER_KIND if is_skill_loader(tool) else "tool"
+
+
 def describe_tool(tool) -> dict:
-    """Everything the agent map records about a live tool (schemas, source, edges)."""
+    """Everything the agent map records about a live tool (schemas, source, kind, edges)."""
     args_schema, source = resolve_args_schema(tool)
     output_schema = resolve_output_schema(tool)
+    kind = tool_kind(tool)
     entry = {
         "name": tool.name,
         "description": tool.description or "",
@@ -76,8 +84,10 @@ def describe_tool(tool) -> dict:
         "schema_source": source,
         "models": list(dict.fromkeys(model_names(args_schema) + model_names(output_schema))),
         "side_effecting": bool(SIDE_EFFECT_RX.search(tool.description or "")),
+        "kind": kind,
+        "mockable": kind == "tool",
     }
-    entry["edge_cases"] = edge_cases(entry)
+    entry["edge_cases"] = edge_cases(entry) if entry["mockable"] else []
     return entry
 
 

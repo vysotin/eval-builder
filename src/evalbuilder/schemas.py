@@ -56,6 +56,7 @@ class AgentMap(BaseModel):
         default_factory=lambda: {"nodes": [], "edges": [], "conditional_edges": []}
     )
     tools: list[dict] = Field(default_factory=list)
+    skills: list[dict] = Field(default_factory=list)  # Agent Skills (SKILL.md) the agent embeds or loads on demand
     constraints: list[str] = Field(default_factory=list)
     data_domains: dict = Field(default_factory=lambda: {"topics": [], "sources": []})
     intents: list[dict] = Field(default_factory=list)
