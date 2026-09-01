@@ -98,7 +98,8 @@ def test_miss_goes_to_the_engine_and_is_validated_and_logged():
     wrapped = wrap_tool(lookup_order, RULES["lookup_order"], on_miss="llm", engine=engine, ledger=ledger)
     out = wrapped.invoke({"order_id": "A1500"})
     assert out == {"order_id": "A1500", "status": "delivered", "total": 99.5}
-    assert len(seen) == 1 and seen[0][0]["tool"] == "lookup_order" and "PREVIOUS CALLS" not in seen[0][1] or "[]" in seen[0][1]
+    assert len(seen) == 1 and seen[0][0]["tool"] == "lookup_order"
+    assert "PREVIOUS CALLS IN THIS CONVERSATION:\n[]" in seen[0][1]
     entry = ledger[-1]
     assert entry["layer"] == "llm" and entry["strategy"] == "default" and entry["valid"] is True
     assert entry["repairs"] == 0 and entry["fallback"] is False and entry["response"]["status"] == "delivered"
@@ -163,7 +164,6 @@ def test_strategy_selection_and_generic_behaviour_without_strategies():
     engine.respond("lookup_order", {"order_id": "A9"})
     assert "Every order is 'lost'" in seen[0][1] and engine.ledger[-1]["strategy"] == "degraded"
     # a tool the alternate strategy does not describe falls back to the default strategy's behaviour
-    engine.respond("get_weather", {"city": "Oslo"}) if False else None
     assert engine.tool_strategy("get_weather")["behavior"] == "Mild weather everywhere."
     unknown, _ = _engine(lambda call, prompt: {"order_id": "A9", "status": "lost", "total": 0.0}, strategy="nope")
     assert unknown.strategy == "default" and unknown.notes == ["unknown mock strategy 'nope'; using 'default'"]

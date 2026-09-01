@@ -1,10 +1,21 @@
-"""ADK-style tool mocking: ordered rules, subset matchArgs, wildcard, miss policies."""
+"""Tool mocking, layer 1: ordered rules, subset matchArgs, wildcard, miss policies.
+
+A wrapped tool answers from its rules first (first match wins, `{}` is a wildcard). On a
+miss the policy decides: `real` (call the tool), `fallback` (a canned value), `strict`
+(raise `MockMissError`), or `llm` — hand the call to an `LLMMockEngine`
+(`mock_engine.py`), the second layer. Every answered call can be appended to a ledger
+(`layer: rule | llm | real | fallback | error`). Skill loaders are never wrapped.
+"""
 
 from __future__ import annotations
+
+import copy
 
 from langchain_core.tools import BaseTool, StructuredTool
 
 from evalbuilder.skills import is_skill_loader
+
+ON_MISS_POLICIES = ("real", "fallback", "strict", "llm")
 
 
 def mockable(tool: BaseTool) -> bool:
@@ -39,15 +50,19 @@ def args_subset(expected: dict, actual: dict) -> bool:
     return True
 
 
+def match_index(rules: list[dict], args: dict) -> int | None:
+    """Index of the first rule whose matchArgs is a (recursive) subset of args; {} matches anything."""
+    for index, rule in enumerate(rules):
+        match_args = rule.get("matchArgs", {})
+        if not match_args or args_subset(match_args, args):
+            return index
+    return None
+
+
 def match_rule(rules: list[dict], args: dict) -> dict | None:
     """First rule whose matchArgs is a (recursive) subset of args; {} matches anything."""
-    for rule in rules:
-        match_args = rule.get("matchArgs", {})
-        if not match_args:
-            return rule
-        if args_subset(match_args, args):
-            return rule
-    return None
+    index = match_index(rules, args)
+    return rules[index] if index is not None else None
 
 
 def wrap_tool(
@@ -55,24 +70,52 @@ def wrap_tool(
     rules: list[dict],
     on_miss: str = "real",
     fallback=None,
+    *,
+    engine=None,
+    ledger: list[dict] | None = None,
 ) -> StructuredTool:
     """Wrap a tool so matching mock rules answer instead of the real function.
 
-    The wrapped tool keeps the original name/description/args_schema so the
-    model's tool-selection behavior is unchanged.
+    The wrapped tool keeps the original name/description/args_schema so the model's
+    tool-selection behavior is unchanged. `on_miss="llm"` needs an `engine`
+    (`mock_engine.LLMMockEngine`); `ledger` collects one entry per call.
     """
-    if on_miss not in ("real", "fallback", "strict"):
-        raise ValueError(f"invalid on_miss policy {on_miss!r}")
+    if on_miss not in ON_MISS_POLICIES:
+        raise ValueError(f"invalid on_miss policy {on_miss!r}; use one of {ON_MISS_POLICIES}")
+    if on_miss == "llm" and engine is None:
+        raise ValueError("on_miss='llm' needs a mock engine (mock_engine.LLMMockEngine)")
+
+    def _record(entry: dict) -> None:
+        if ledger is not None:
+            ledger.append(entry)
 
     def _mocked(**kwargs):
-        rule = match_rule(rules, kwargs)
-        if rule is not None:
-            return rule["response"]
+        index = match_index(rules, kwargs)
+        if index is not None:
+            response = copy.deepcopy(rules[index]["response"])
+            _record({"tool": tool.name, "args": kwargs, "layer": "rule", "rule": index, "response": copy.deepcopy(response)})
+            return response
+        if on_miss == "llm":
+            try:
+                response = engine.respond(tool.name, kwargs)
+            except Exception as e:  # noqa: BLE001 - the engine already logged the failed entry
+                if engine.ledger:
+                    _record(dict(engine.ledger[-1]))
+                else:
+                    _record({"tool": tool.name, "args": kwargs, "layer": "error", "error": f"{type(e).__name__}: {e}"})
+                raise
+            _record(dict(engine.ledger[-1]))
+            return response
         if on_miss == "real":
-            return tool.invoke(kwargs)
+            response = tool.invoke(kwargs)
+            _record({"tool": tool.name, "args": kwargs, "layer": "real", "response": response})
+            return response
         if on_miss == "strict":
-            raise MockMissError(tool.name, kwargs, rules)
-        return fallback
+            error = MockMissError(tool.name, kwargs, rules)
+            _record({"tool": tool.name, "args": kwargs, "layer": "error", "error": str(error)})
+            raise error
+        _record({"tool": tool.name, "args": kwargs, "layer": "fallback", "response": fallback})
+        return copy.deepcopy(fallback)
 
     return StructuredTool.from_function(
         func=_mocked,
@@ -95,14 +138,21 @@ def wrap_tools(
     rules_by_tool: dict[str, list[dict]],
     on_miss: str = "real",
     fallback=None,
+    *,
+    engine=None,
+    ledger: list[dict] | None = None,
 ) -> list[BaseTool]:
-    """Wrap only the tools that have rules; others (and skill loaders) pass through untouched."""
-    return [
-        wrap_tool(t, rules_by_tool[t.name], on_miss=on_miss, fallback=fallback)
-        if t.name in rules_by_tool and mockable(t)
-        else t
-        for t in tools
-    ]
+    """Wrap the tools that have rules — and, when an engine is given, every mockable
+    tool (the engine answers calls no rule covers). Skill loaders pass through untouched."""
+    if on_miss == "llm" and engine is None:
+        raise ValueError("on_miss='llm' needs a mock engine (mock_engine.LLMMockEngine)")
+    out: list[BaseTool] = []
+    for t in tools:
+        if mockable(t) and (t.name in rules_by_tool or engine is not None):
+            out.append(wrap_tool(t, rules_by_tool.get(t.name, []), on_miss=on_miss, fallback=fallback, engine=engine, ledger=ledger))
+        else:
+            out.append(t)
+    return out
 
 
 def with_fallback(case_rules: list[dict], dataset_rules: list[dict]) -> list[dict]:
@@ -131,3 +181,16 @@ def verify_dataset(ds, only_approved: bool = False) -> list[dict]:
             if name in merged and match_rule(merged[name], expected.get("args", {})) is None:
                 misses.append({"case": c.id, "tool": name, "args": expected.get("args", {})})
     return misses
+
+
+def verify_summary(ds, only_approved: bool = False) -> dict:
+    """`verify_dataset` read through the dataset's policy: under `on_miss: llm` a miss is
+    answered by the mock engine (informational), under any other policy it is a defect."""
+    policy = (ds.mocks or {}).get("on_miss", "real")
+    misses = verify_dataset(ds, only_approved=only_approved)
+    return {
+        "policy": policy,
+        "misses": [] if policy == "llm" else misses,
+        "llm_answered": misses if policy == "llm" else [],
+        "ok": policy == "llm" or not misses,
+    }
