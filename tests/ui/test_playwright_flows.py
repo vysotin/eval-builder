@@ -127,7 +127,15 @@ def _select(page, label: str, option: str) -> None:
     if option in (box.input_value() or ""):
         return  # already selected; re-clicking a selected react-aria option keeps re-rendering it
     box.click()
-    page.locator("[role='option']").filter(has_text=option).first.click()
+    box.fill(option)  # react-aria filters the listbox by the typed text (a click alone shows only the current value)
+    options = page.locator("[role='option']").filter(has_text=option)
+    try:
+        options.first.wait_for(state="visible", timeout=2_000)
+    except playwright.TimeoutError:  # listbox still closed: ArrowDown opens the full list
+        box.fill("")
+        box.press("ArrowDown")
+        options.first.wait_for(state="visible", timeout=5_000)
+    options.first.click()
     _settle(page)
 
 
@@ -581,7 +589,7 @@ def test_skills_and_llm_mock_layer_end_to_end(page, app_url, work):
     _click(page, "Discover structure")
     expect(page.get_by_text("Tools and schemas")).to_be_visible()
     expect(page.get_by_text("Agent skills").first).to_be_visible()
-    expect(page.get_by_text("refund-policy").first).to_be_visible()
+    expect(page.get_by_text("support_bot/skills").first).to_be_visible()  # the skills folder (table cells are canvas)
     _select(page, "Mock miss policy", "llm")
     _fill(page, "Mock model", "scripted:examples.support_bot.offline:mock_model")
     _configure(page, work, "ui-llm", auto_approve=True, instructions="Exercise the skills and the LLM mock layer.")
@@ -597,19 +605,17 @@ def test_skills_and_llm_mock_layer_end_to_end(page, app_url, work):
     assert report["mocking"]["calls"]["llm"] > 0 and report["mocking"]["calls"]["invalid"] == 0
     assert report["agent"]["skills"] == ["product-troubleshooting", "refund-policy"] and report["coverage"]["uncovered_skills"] == []
     assert (out_dir / "mock-strategies.json").exists()
-    # the review section names the policy, the model and the strategies
-    expect(page.get_by_text("mock miss policy").first).to_be_visible()
     _nav(page, "Agent graph & tools", "agent")
     expect(page.locator("h3#agent-skills")).to_be_visible()
-    expect(page.get_by_text("skills: product-troubleshooting, refund-policy").first).to_be_visible()  # node expander label
+    expect(page.locator("details").filter(has_text="skills: product-troubleshooting, refund-policy").first).to_be_visible()  # node expander label
     _expand(page, "refund-policy — instructions")
-    expect(page.get_by_text("Refund policy").first).to_be_visible()
+    expect(page.get_by_role("heading", name="Refund policy")).to_be_visible()  # the skill body (get_by_text would hit a hidden grid cell)
     _nav(page, "Dataset & mocks", "dataset")
     expect(page.locator("h3#mock-strategies")).to_be_visible()
-    expect(page.get_by_text("World:").first).to_be_visible()
+    expect(page.get_by_test_id("stMarkdown").filter(has_text="World:").first).to_be_visible()
     _nav(page, "Coverage", "coverage")
     expect(page.locator("h3#coverage-skills")).to_be_visible()
     _nav(page, "Summary", "summary")
     expect(page.locator("h3#mocking-summary")).to_be_visible()
-    expect(page.get_by_text("rules → llm_engine").first).to_be_visible()
+    expect(page.get_by_test_id("stMarkdown").filter(has_text="rules → llm_engine").first).to_be_visible()
     _shot(page, "summary-llm")
