@@ -80,5 +80,18 @@ def run_case(graph, case: Case) -> CaseRun:
         return CaseRun(
             case_id=case.id,
             error=f"{type(e).__name__}: {e}",
-            error_class="agent",
+            error_class="infrastructure" if _is_mock_engine_error(e) else "agent",
         )
+
+
+def _is_mock_engine_error(exc: BaseException) -> bool:
+    """A mock engine failure (invalid LLM mock under `on_invalid: strict`) is not the agent's doing."""
+    from evalbuilder.mock_engine import MockEngineError
+
+    seen = 0
+    while exc is not None and seen < 5:
+        if isinstance(exc, MockEngineError):
+            return True
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return False

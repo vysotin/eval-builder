@@ -144,10 +144,46 @@ def analysis(_messages=None) -> dict:
             "stability_notes": "stable across repeats", "evaluator_issues": [], "recommendations": ["Add judge evaluators with a real model."]}
 
 
+
+
+# ── LLM mock engine, offline ──────────────────────────────────
+#
+# `mock_model()` plays the backend for the second mocking layer (`mocking.on_miss: llm`,
+# `models.mock: scripted:<module>:mock_model`): it reads the TOOL CALL block of the engine
+# prompt and answers from the fixtures above, so pipeline runs stay offline and repeatable.
+
+
+def mock_strategies(_messages=None) -> dict:
+    return {"world": "Acme Store: order A1234 (electronics, delivered, $59.99); every other id is unknown.", "strategies": [
+        {"id": "default", "description": "healthy order and KB APIs", "tools": [
+            {"name": "lookup_order", "behavior": "A1234 is delivered; any other id returns {\"error\": \"order not found\"}.", "fallback_response": json.dumps(ORDER), "examples": []},
+            {"name": "check_refund_policy", "behavior": "electronics: 30 days, no fee; other categories: 14 days, 10% fee.", "fallback_response": json.dumps(POLICY), "examples": []},
+            {"name": "issue_refund", "behavior": "Issue refund R77 for any confirmed order.", "fallback_response": json.dumps(REFUND), "examples": []},
+            {"name": "search_kb", "behavior": "Headset questions find 'Pairing the X1 headset'; anything else finds nothing.", "fallback_response": json.dumps(KB), "examples": []},
+        ]},
+    ]}
+
+
+def _mock_response(messages) -> dict:
+    from evalbuilder.mock_engine import call_in_prompt
+
+    call = call_in_prompt(str(messages[-1].content)) or {}
+    tool = call.get("tool")
+    payload = {"lookup_order": ORDER, "check_refund_policy": POLICY, "issue_refund": REFUND, "search_kb": KB}.get(tool, {"ok": True})
+    return {"response_json": json.dumps(payload)}
+
+
+def mock_model() -> SchemaScriptedModel:
+    from evalbuilder.mock_engine import MOCK_RESPONSE_TITLE
+
+    return SchemaScriptedModel(handlers={MOCK_RESPONSE_TITLE: _mock_response})
+
+
 def generator_model() -> SchemaScriptedModel:
     return SchemaScriptedModel(handlers={
         "agent_map": agent_map,
         "mock_fixtures": mock_fixtures,
+        "mock_strategies": mock_strategies,
         "cases": cases,
         "case_review": {"reviews": []},
         "simulation_scenarios": simulation_scenarios,

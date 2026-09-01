@@ -37,6 +37,7 @@ class ModelsConfig(BaseModel):
     agent: str | None = None
     judge: str = DEFAULT_MODEL
     generator: str = DEFAULT_MODEL
+    mock: str | None = None  # drives LLM mock responses (mocking.on_miss: llm); None = the generator model
 
 
 class PerIntent(BaseModel):
@@ -72,7 +73,11 @@ class RunsConfig(BaseModel):
 
 class MockingConfig(BaseModel):
     required: bool = True
-    on_miss: Literal["real", "fallback", "strict"] = "strict"
+    on_miss: Literal["real", "fallback", "strict", "llm"] = "strict"
+    strategies: bool = True  # generate mock-strategies.json (the LLM mock engine's backend behaviours) in the mocks stage
+    strategy: str = "default"  # dataset-level strategy id; cases / scenarios may select another
+    on_invalid: Literal["fallback", "strict"] = "fallback"  # after the repair round: schema-conformant fallback, or an error
+    max_repairs: int = 1
 
 
 class StagesConfig(BaseModel):
@@ -100,7 +105,7 @@ class FeedbackEntry(BaseModel):
 
 SECTION_COMMENTS = {
     "target": "agent source file (AST discovery) + importable module exposing TOOLS and build_agent",
-    "models": "provider:model[@effort] — claude-cli (Claude Code subscription), anthropic|claude, openai, gemini|google, scripted",
+    "models": "provider:model[@effort] — claude-cli (Claude Code subscription), anthropic|claude, openai, gemini|google, scripted; mock drives LLM mock responses (null = generator)",
     "constraints": "rules the agent must honor; every generation prompt sees them and judges check them",
     "instructions": "free-text general rules for the generator (domain notes, what to emphasise, what to avoid)",
     "feedback": "reviewer comments appended after partial runs; the generation stages read them on rerun",
@@ -108,7 +113,7 @@ SECTION_COMMENTS = {
     "evaluators": "deterministic first (expected_tools, contains), then judges (contract, correctness, openevals, trajectory_llm)",
     "thresholds": "pass rate per metric / per slice / overall",
     "runs": "repeats detect unstable cases and evaluators; parallel_intents / parallel_scoring / parallel_simulations size the run, scoring and simulation thread pools (1 = sequential)",
-    "mocking": "every tool gets a fixture; on_miss strict = unmatched call is an error, never a real call",
+    "mocking": "layer 1 = deterministic rules; on_miss strict = unmatched call is an error, llm = the LLM mock engine answers from pre-generated strategies (validated against the tool's output schema; on_invalid fallback|strict, max_repairs)",
     "stages": "skip list, retries, optional simulate/publish",
     "review": "auto_approve + approved_by is the explicit human authorization to approve generated cases",
     "output": "artifact directory (default eval/pipeline/<name>)",
@@ -139,6 +144,15 @@ class PipelineConfig(BaseModel):
     @property
     def output_dir(self) -> Path:
         return Path(self.output.dir or f"eval/pipeline/{self.name}")
+
+    @property
+    def mock_model_spec(self) -> str:
+        """The model behind the LLM mock engine (`models.mock`, else the generator)."""
+        return self.models.mock or self.models.generator
+
+    @property
+    def llm_mocking(self) -> bool:
+        return self.mocking.on_miss == "llm"
 
     def add_feedback(self, note: str, from_stage: str = "dataset") -> FeedbackEntry:
         entry = FeedbackEntry(at=datetime.now(timezone.utc).isoformat(timespec="seconds"), note=note.strip(), from_stage=from_stage)
@@ -218,6 +232,12 @@ class PipelineConfig(BaseModel):
                 errors.append(f"models.{field} must look like provider:model")
         if self.models.agent and ":" not in self.models.agent:
             errors.append("models.agent must look like provider:model")
+        if self.models.mock and ":" not in self.models.mock:
+            errors.append("models.mock must look like provider:model")
+        if self.mocking.max_repairs < 0:
+            errors.append("mocking.max_repairs must be >= 0")
+        if not self.mocking.strategy.strip():
+            errors.append("mocking.strategy must be a non-empty strategy id")
         if self.review.auto_approve and not self.review.approved_by:
             errors.append("review.auto_approve requires review.approved_by")
         return errors
@@ -262,7 +282,8 @@ models:                       # provider:model[@effort]; providers: claude-cli (
                               # anthropic|claude, openai, gemini|google (API keys + `uv sync --extra llm`)
   agent: {DEFAULT_MODEL}    # injected into build_agent(model=...); omit to use the target's default
   judge: {DEFAULT_MODEL}    # LLM-as-judge, e.g. anthropic:claude-sonnet-5, openai:gpt-5, gemini:gemini-2.5-pro
-  generator: {DEFAULT_MODEL}  # authors intents, scenarios, cases, mocks, analysis
+  generator: {DEFAULT_MODEL}  # authors intents, scenarios, cases, mocks, strategies, analysis
+  mock: null                  # drives LLM mock responses when mocking.on_miss is llm (null = generator)
 constraints: []               # free-text rules the agent must honor, e.g. "Never quote a refund before lookup_order"
 instructions: ""              # free-text general rules for the generator (domain notes, emphasis, exclusions)
 feedback: []                  # reviewer comments appended after a partial run: [{{at, note, from_stage}}]
@@ -292,8 +313,12 @@ runs:
   parallel_scoring: 4         # case runs scored concurrently within each run report (1 = sequential)
   parallel_simulations: 4     # simulation scenarios run concurrently (1 = sequential)
 mocking:
-  required: true              # every introspected tool gets a mock rule
-  on_miss: strict             # unmatched tool call -> error, never a real call
+  required: true              # every mockable tool gets a fixture (skill loaders are never mocked)
+  on_miss: strict             # layer 1 rules miss -> strict: error | llm: the LLM mock engine answers | fallback | real
+  strategies: true            # pre-generate mock-strategies.json (backend world + per-tool behaviours for the engine)
+  strategy: default           # dataset-level strategy; cases and simulation scenarios may pick another id
+  on_invalid: fallback        # engine answer still invalid after the repair round -> fallback (schema sample) | strict (error)
+  max_repairs: 1              # repair rounds against the tool's output schema
 stages:
   skip: []                    # e.g. [simulate, publish]
   max_retries: 1

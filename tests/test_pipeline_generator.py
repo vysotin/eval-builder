@@ -336,3 +336,90 @@ def test_author_mocks_validates_against_output_schema():
     assert len(rules["lookup_order"]) == 2 and rules["search_kb"][-1]["response"] == {"articles": []}
     assert sum("dropped (schema)" in p for p in problems) == 2 and any("violated output_schema" in p for p in problems)
     assert "REVIEWER FEEDBACK" in gen.prompts[0][2] and "output_schema" in gen.prompts[0][2]
+
+
+# ── mock strategies (layer 2) ──────────────────────────────────
+
+ORDER_TOOL = {"name": "lookup_order", "description": "Look up an order.", "args_schema": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+              "output_schema": {"type": "object", "properties": {"order_id": {"type": "string"}, "status": {"type": "string", "enum": ["shipped", "lost"]}}, "required": ["order_id", "status"]}}
+KB_TOOL = {"name": "search_kb", "description": "Search articles.", "args_schema": {"type": "object", "properties": {"query": {"type": "string"}}}}
+
+
+def _strategies_answer():
+    return {"world": "Acme: orders A1xxx exist.", "strategies": [
+        {"id": "default", "description": "healthy", "tools": [
+            {"name": "lookup_order", "behavior": "A1xxx are shipped.", "fallback_response": json.dumps({"order_id": "A1000", "status": "shipped"}),
+             "examples": [{"args": json.dumps({"order_id": "A1001"}), "response": json.dumps({"order_id": "A1001", "status": "shipped"})},
+                          {"args": json.dumps({"order_id": "A1002"}), "response": json.dumps({"order_id": "A1002", "status": "teleported"})},
+                          {"args": "not json", "response": "{}"}]},
+            {"name": "search_kb", "behavior": "Three articles about headsets.", "fallback_response": json.dumps({"articles": []}), "examples": []},
+            {"name": "ghost_tool", "behavior": "n/a", "fallback_response": "{}", "examples": []},
+        ]},
+        {"id": "degraded", "description": "orders API stale", "tools": [
+            {"name": "lookup_order", "behavior": "Everything is lost.", "fallback_response": json.dumps({"order_id": "A", "status": "gone"}), "examples": []},
+        ]},
+        {"id": "", "description": "no id", "tools": []},
+    ]}
+
+
+def test_author_strategies_validates_and_completes_the_default_strategy():
+    fake = g.FakeGenerator({"mock_strategies": [_strategies_answer()]})
+    strategies, problems = g.author_strategies(fake, [ORDER_TOOL, KB_TOOL], {"lookup_order": []})
+    assert strategies["world"] == "Acme: orders A1xxx exist."
+    assert list(strategies["strategies"]) == ["default", "degraded"]
+    default = strategies["strategies"]["default"]
+    assert set(default["tools"]) == {"lookup_order", "search_kb"}  # unknown tool dropped, every mockable tool present
+    order = default["tools"]["lookup_order"]
+    assert order["behavior"] == "A1xxx are shipped." and order["fallback_response"] == {"order_id": "A1000", "status": "shipped"}
+    assert order["examples"] == [{"args": {"order_id": "A1001"}, "response": {"order_id": "A1001", "status": "shipped"}}]  # bad enum + bad JSON dropped
+    degraded = strategies["strategies"]["degraded"]["tools"]["lookup_order"]
+    assert degraded["behavior"] == "Everything is lost." and degraded["fallback_response"] == {"order_id": "order_id", "status": "shipped"}  # replaced by a schema sample
+    assert any("ghost_tool" in p for p in problems) and any("teleported" in p or "not in enum" in p for p in problems)
+    assert any("fallback_response" in p and "degraded" in p for p in problems) and any("without an id" in p for p in problems)
+
+    # generator failure → a deterministic default strategy still covers every tool
+    broken = g.FakeGenerator({})
+    strategies2, problems2 = g.author_strategies(broken, [ORDER_TOOL, KB_TOOL], {})
+    assert list(strategies2["strategies"]) == ["default"] and set(strategies2["strategies"]["default"]["tools"]) == {"lookup_order", "search_kb"}
+    assert "Look up an order." in strategies2["strategies"]["default"]["tools"]["lookup_order"]["behavior"]
+    assert strategies2["strategies"]["default"]["tools"]["lookup_order"]["fallback_response"] == {"order_id": "order_id", "status": "shipped"}
+    assert problems2 and "strategy generation failed" in problems2[0]
+    # the prompt carries the fixtures so strategies stay consistent with them
+    assert "MOCK FIXTURES" in fake.prompts[0][2]
+
+
+def test_author_mocks_can_skip_the_wildcard_default_for_the_llm_layer():
+    tools = [{"name": "lookup_order", "description": "", "args_schema": {}}]
+    answer = {"tools": [{"name": "lookup_order", "default_response": json.dumps({"order_id": "A1", "status": "shipped"}),
+                         "variants": [{"match_args": json.dumps({"order_id": "B2"}), "response": json.dumps({"order_id": "B2", "status": "lost"}), "purpose": "x"}]}]}
+    rules, _ = g.author_mocks(g.FakeGenerator({"mock_fixtures": [answer]}), tools, wildcard=False)
+    assert rules["lookup_order"] == [{"matchArgs": {"order_id": "B2"}, "response": {"order_id": "B2", "status": "lost"}}]
+    rules2, _ = g.author_mocks(g.FakeGenerator({"mock_fixtures": [answer]}), tools)
+    assert rules2["lookup_order"][-1]["matchArgs"] == {}
+
+
+def test_cases_and_scenarios_may_select_a_mock_strategy():
+    amap = _map()
+    cfg = CoverageConfig(total_cases=1, per_intent=PerIntent(happy=1, failure=0), out_of_intent=0, per_failure_category=0, per_tool_edge_cases=0)
+    cells = [c for c in plan_cells(cfg, amap, []) if c.intent == "intent.order-status"][:1]
+    answer = _cases_answer(0, 2)
+    answer["cases"][0]["mock_strategy"] = "degraded"
+    answer["cases"][1]["mock_strategy"] = "nope"
+    fake = g.FakeGenerator({"cases": [answer]})
+    cases, problems = g.author_cases(fake, cells, amap, [], {"lookup_order": []}, {s["id"]: s for s in amap.scenarios},
+                                     strategies={"world": "w", "strategies": {"default": {}, "degraded": {}}})
+    assert cases[0]["metadata"]["mocks"]["strategy"] == "degraded"
+    assert "MOCK STRATEGIES" in fake.prompts[0][2] and "degraded" in fake.prompts[0][2]
+    # the second case was trimmed by the cell count; an unknown id would be a reported problem
+    trimmed = _cases_answer(0, 1)
+    trimmed["cases"][0]["mock_strategy"] = "nope"
+    cases2, problems2 = g.author_cases(g.FakeGenerator({"cases": [trimmed]}), cells, amap, [], {}, {s["id"]: s for s in amap.scenarios},
+                                       strategies={"world": "w", "strategies": {"default": {}}})
+    assert "mocks" not in cases2[0]["metadata"] and any("unknown mock strategy" in p for p in problems2)
+    scen = {"scenarios": [{"id": "s1", "intent": "i", "persona": "p", "goal": "g", "opening": "o", "followups": [], "max_turns": 3,
+                           "success_contains": "x", "expect_contains": "", "expect_not_contains": "", "mock_strategy": "degraded"},
+                          {"id": "s2", "intent": "i", "persona": "p", "goal": "g", "opening": "o", "followups": [], "max_turns": 3,
+                           "success_contains": "x", "expect_contains": "", "expect_not_contains": "", "mock_strategy": "nope"}]}
+    scenarios, sproblems = g.author_scenarios(g.FakeGenerator({"simulation_scenarios": [scen]}), amap, [], {},
+                                              strategies={"world": "w", "strategies": {"default": {}, "degraded": {}}})
+    assert scenarios[0]["mock_strategy"] == "degraded" and "mock_strategy" not in scenarios[1] and any("unknown mock strategy" in p for p in sproblems)

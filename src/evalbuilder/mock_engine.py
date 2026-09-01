@@ -102,6 +102,54 @@ def fallback_response(spec: dict, entry: dict) -> Any:
     return {"ok": True, "tool": spec.get("name"), "note": "generic fixture (mock engine fallback)"}
 
 
+def validate_strategies(strategies: Any, tool_specs: dict[str, dict]) -> list[str]:
+    """Problems of a strategies document (`{world, strategies: {id: {description, tools: {name:
+    {behavior, examples, fallback_response}}}}}`) against the tools' schemas; [] = usable."""
+    problems: list[str] = []
+    if not isinstance(strategies, dict):
+        return ["strategies must be an object with `world` and `strategies`"]
+    if not isinstance(strategies.get("world", ""), str):
+        problems.append("world must be a string")
+    table = strategies.get("strategies")
+    if not isinstance(table, dict) or not table:
+        return problems + ["strategies must be a non-empty object keyed by strategy id"]
+    if DEFAULT_STRATEGY not in table:
+        problems.append(f"a {DEFAULT_STRATEGY!r} strategy is required")
+    for sid, entry in table.items():
+        if not isinstance(entry, dict):
+            problems.append(f"strategy {sid}: must be an object")
+            continue
+        tools = entry.get("tools") or {}
+        if not isinstance(tools, dict):
+            problems.append(f"strategy {sid}: tools must be an object keyed by tool name")
+            continue
+        for name, t in tools.items():
+            spec = tool_specs.get(name)
+            if spec is None:
+                problems.append(f"strategy {sid}: unknown tool {name!r}")
+                continue
+            if not isinstance(t, dict) or not str(t.get("behavior") or "").strip():
+                problems.append(f"strategy {sid}: {name} needs a behavior text")
+                continue
+            output = spec.get("output_schema") or {}
+            if "fallback_response" in t and t["fallback_response"] is not None:
+                for err in tool_schemas.validate(t["fallback_response"], output):
+                    problems.append(f"strategy {sid}: {name} fallback_response {err}")
+            for i, ex in enumerate(t.get("examples") or []):
+                if not isinstance(ex, dict) or not isinstance(ex.get("args"), dict) or "response" not in ex:
+                    problems.append(f"strategy {sid}: {name} example {i} needs args (object) and response")
+                    continue
+                props = (spec.get("args_schema") or {}).get("properties") or {}
+                defs = dict((spec.get("args_schema") or {}).get("$defs", {}))
+                for key, value in ex["args"].items():
+                    if key in props:
+                        for err in tool_schemas.validate(value, props[key], defs, f"$.{key}", partial=True):
+                            problems.append(f"strategy {sid}: {name} example {i} args {err}")
+                for err in tool_schemas.validate(ex["response"], output):
+                    problems.append(f"strategy {sid}: {name} example {i} response {err}")
+    return problems
+
+
 # ── prompt ─────────────────────────────────────────────────────
 
 

@@ -76,6 +76,10 @@ ARTIFACTS: dict[str, ArtifactKind] = {
             legacy_files=("mocks.json",), wrap_key="tools",
         ),
         ArtifactKind(
+            "mock_strategies", "mock-strategies.json", "evalbuilder/mock-strategies/v1", "mocks",
+            "LLM mock strategies (layer 2): the shared backend world and, per strategy, each tool's behaviour, examples and fallback response.",
+        ),
+        ArtifactKind(
             "coverage_plan", "coverage-plan.json", "evalbuilder/coverage-plan/v1", "dataset",
             "Planned coverage cells (intent × topic × scenario × failure mode) and their counts.",
             legacy_files=("plan.json",),

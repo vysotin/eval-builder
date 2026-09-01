@@ -70,6 +70,8 @@ def aggregate(
             if cr is not None:
                 entry["outputs"].append(output_hash(cr))
                 entry["trajectories"].append(trajectory_hash(cr))
+                entry["llm_mock_calls"] = entry.get("llm_mock_calls", 0) + sum(1 for m in (cr.mock_calls or []) if m.get("layer") == "llm")
+                entry["invalid_mock_calls"] = entry.get("invalid_mock_calls", 0) + sum(1 for m in (cr.mock_calls or []) if m.get("layer") == "llm" and not m.get("valid", True))
                 if cr.error:
                     entry["agent_errors"].append(f"{cr.error_class}: {cr.error}")
             for metric, value in row.get("scores", {}).items():
@@ -128,6 +130,7 @@ def aggregate(
     unstable_cases = []
     unstable_evaluators = []
     unstable_outputs = []
+    llm_mocked_unstable = []
     text_varies = 0
     for cid, e in per_case.items():
         distinct_traj = len(set(e["trajectories"]))
@@ -136,8 +139,11 @@ def aggregate(
         disagreeing = [m for m, s in e["scores"].items() if len(s) > 1 and len(set(s)) > 1]
         if distinct_traj > 1:
             unstable_cases.append(
-                {"id": cid, "distinct_trajectories": distinct_traj, "metrics_disagreeing": disagreeing}
+                {"id": cid, "distinct_trajectories": distinct_traj, "metrics_disagreeing": disagreeing,
+                 "llm_mock_calls": e.get("llm_mock_calls", 0)}
             )
+            if e.get("llm_mock_calls"):
+                llm_mocked_unstable.append(cid)  # instability that coincides with LLM-mocked tool answers
             continue
         for m in disagreeing:
             entry = {"case_id": cid, "metric": m, "scores": e["scores"][m]}
@@ -165,6 +171,8 @@ def aggregate(
             "outputs_hash": e["outputs"],
             "trajectory_hash": e["trajectories"],
             "stable": len(set(e["trajectories"])) <= 1,
+            "llm_mock_calls": e.get("llm_mock_calls", 0),
+            "invalid_mock_calls": e.get("invalid_mock_calls", 0),
         }
         cases_out.append(row)
         if failing_metrics or e["agent_errors"]:
@@ -217,6 +225,8 @@ def aggregate(
             "text_varies": text_varies,
             "stable_case_fraction": _r(1 - len(unstable_cases) / len(per_case)) if per_case else None,
             "suspect_judge_comments": suspect_comments,
+            "llm_mocked_unstable": llm_mocked_unstable,
+            "llm_mock_calls": sum(e.get("llm_mock_calls", 0) for e in per_case.values()),
         },
         "evaluator_errors": evaluator_errors,
         "failing_cases": failing,

@@ -225,8 +225,25 @@ def review(
     _emit({"updated": n, "status": status})
 
 
-mock_app = typer.Typer(help="Manage ADK-style tool-mock rules.", no_args_is_help=True)
+mock_app = typer.Typer(help="Manage tool mocks: layer 1 rules (matchArgs → response) and layer 2 LLM mock strategies.", no_args_is_help=True)
 app.add_typer(mock_app, name="mock")
+
+
+def _tool_specs(ds: Dataset) -> dict[str, dict]:
+    from evalbuilder import target as target_mod
+    from evalbuilder.runner import tool_specs_of
+
+    return tool_specs_of(target_mod.load_target(ds.target))
+
+
+def _mock_model_for(ds: Dataset, spec: Optional[str]):
+    from evalbuilder.claude_cli import model_from_spec
+
+    chosen = spec or ((ds.mocks or {}).get("llm") or {}).get("model")
+    if not chosen:
+        typer.echo("no mock model: pass --mock-model SPEC or set mocks.llm.model (evalbuilder mock strategies PATH --model SPEC)", err=True)
+        raise typer.Exit(1)
+    return model_from_spec(chosen), chosen
 
 
 @mock_app.command("set")
@@ -253,13 +270,146 @@ def mock_set(
 
 @mock_app.command("verify")
 def mock_verify(path: Path) -> None:
-    """Check every expected tool call in mocked cases matches at least one rule."""
-    from evalbuilder.mocking import verify_dataset
+    """Check every expected tool call in mocked cases matches a rule (under `on_miss: llm`
+    a miss is answered by the LLM mock engine and only counted)."""
+    from evalbuilder.mocking import verify_summary
 
     ds = _load_ds(path)
-    misses = verify_dataset(ds)
-    _emit({"ok": not misses, "misses": misses})
-    if misses:
+    summary = verify_summary(ds)
+    _emit(summary)
+    if not summary["ok"]:
+        raise typer.Exit(1)
+
+
+@mock_app.command("strategies")
+def mock_strategies(
+    path: Path,
+    set_from: Optional[str] = typer.Option(None, "--set", help="strategies JSON ({world, strategies}) or @file (mock-strategies.json accepted)"),
+    model: Optional[str] = typer.Option(None, "--model", help="mock model spec for the LLM engine (mocks.llm.model)"),
+    strategy: Optional[str] = typer.Option(None, "--strategy", help="dataset-level default strategy id"),
+    on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy: real|fallback|strict|llm"),
+    on_invalid: Optional[str] = typer.Option(None, "--on-invalid", help="engine answer still invalid after repair: fallback|strict"),
+    max_repairs: Optional[int] = typer.Option(None, "--max-repairs"),
+) -> None:
+    """Show or update the dataset's LLM mock layer: strategies, model, policy."""
+    from evalbuilder.mock_engine import validate_strategies
+
+    ds = _load_ds(path)
+    mocks = ds.mocks if isinstance(ds.mocks, dict) else {}
+    mocks.setdefault("tools", {})
+    changed: list[str] = []
+    if set_from is not None:
+        data = _read_json_arg(set_from)
+        if isinstance(data, dict) and "schema" in data:
+            data = {k: v for k, v in data.items() if k != "schema"}
+        problems = validate_strategies(data, _tool_specs(ds))
+        if problems:
+            _emit({"errors": problems})
+            raise typer.Exit(1)
+        mocks["strategies"] = data
+        changed.append("strategies")
+    if on_miss is not None:
+        mocks["on_miss"] = on_miss
+        changed.append("on_miss")
+    if strategy is not None:
+        mocks["strategy"] = strategy
+        changed.append("strategy")
+    if model is not None or on_invalid is not None or max_repairs is not None:
+        llm = mocks.setdefault("llm", {})
+        if model is not None:
+            llm["model"] = model
+        if on_invalid is not None:
+            llm["on_invalid"] = on_invalid
+        if max_repairs is not None:
+            llm["max_repairs"] = max_repairs
+        llm.setdefault("on_invalid", "fallback")
+        llm.setdefault("max_repairs", 1)
+        changed.append("llm")
+    ds.mocks = mocks
+    if changed:
+        _save_valid(path, ds)
+    strategies = mocks.get("strategies") or {}
+    _emit({
+        "path": str(path), "updated": changed, "on_miss": mocks.get("on_miss", "real"), "strategy": mocks.get("strategy"),
+        "llm": mocks.get("llm"), "world": strategies.get("world"),
+        "strategies": {sid: sorted((s.get("tools") or {}).keys()) for sid, s in (strategies.get("strategies") or {}).items()},
+    })
+
+
+@mock_app.command("validate")
+def mock_validate(
+    path: Path,
+    tool: str = typer.Option(..., "--tool"),
+    response: str = typer.Option(..., "--response", help="response JSON, or @file.json"),
+) -> None:
+    """Validate a mock response against the tool's declared output schema (the same check the
+    LLM mock engine applies); exit 1 when it does not conform."""
+    from evalbuilder import tool_schemas
+
+    ds = _load_ds(path)
+    specs = _tool_specs(ds)
+    if tool not in specs:
+        typer.echo(f"unknown or non-mockable tool {tool!r}; mockable tools: {sorted(specs)}", err=True)
+        raise typer.Exit(1)
+    value = _read_json_arg(response)
+    schema = specs[tool].get("output_schema") or {}
+    problems = tool_schemas.validate(value, schema)
+    _emit({"tool": tool, "valid": not problems, "problems": problems, "output_schema": schema})
+    if problems:
+        raise typer.Exit(1)
+
+
+@mock_app.command("try")
+def mock_try(
+    path: Path,
+    tool: str = typer.Option(..., "--tool"),
+    args: str = typer.Option("{}", "--args", help="call args JSON, or @file.json"),
+    strategy: Optional[str] = typer.Option(None, "--strategy", help="strategy id (default: the dataset's)"),
+    mock_model: Optional[str] = typer.Option(None, "--mock-model", help="model spec for the engine (default: mocks.llm.model)"),
+    on_miss: Optional[str] = typer.Option(None, "--on-miss", help="policy to try (default: the dataset's, or llm)"),
+    case: Optional[str] = typer.Option(None, "--case", help="use this case's rules and strategy"),
+) -> None:
+    """Answer one tool call through both layers (rules, then the LLM mock engine) and show
+    which layer answered, the response and its validation."""
+    from evalbuilder import target as target_mod
+    from evalbuilder.mocking import merge_mock_rules, wrap_tools
+    from evalbuilder.runner import build_engine, tool_specs_of
+
+    ds = _load_ds(path)
+    module = target_mod.load_target(ds.target)
+    call_args = _read_json_arg(args)
+    case_rules, case_strategy = {}, None
+    if case is not None:
+        matches = [c for c in ds.cases if c.id == case]
+        if not matches:
+            typer.echo(f"unknown case id {case}", err=True)
+            raise typer.Exit(1)
+        case_rules = (matches[0].metadata.get("mocks") or {}).get("tools") or {}
+        case_strategy = (matches[0].metadata.get("mocks") or {}).get("strategy")
+    rules = merge_mock_rules((ds.mocks or {}).get("tools", {}), case_rules)
+    policy = on_miss or (ds.mocks or {}).get("on_miss") or "llm"
+    engine = None
+    model_spec = None
+    if policy == "llm":
+        model, model_spec = _mock_model_for(ds, mock_model)
+        engine = build_engine(model, ds, tool_specs_of(module), strategy=strategy or case_strategy)
+    ledger: list[dict] = []
+    wrapped = {t.name: t for t in wrap_tools(list(getattr(module, "TOOLS")), rules, on_miss=policy, engine=engine, ledger=ledger)}
+    if tool not in wrapped:
+        typer.echo(f"unknown tool {tool!r}; tools: {sorted(wrapped)}", err=True)
+        raise typer.Exit(1)
+    try:
+        response = wrapped[tool].invoke(call_args)
+        error = None
+    except Exception as e:  # noqa: BLE001 - reported, not raised
+        response, error = None, f"{type(e).__name__}: {e}"
+    entry = ledger[-1] if ledger else {}
+    _emit({
+        "tool": tool, "args": call_args, "policy": policy, "layer": entry.get("layer"), "strategy": entry.get("strategy"),
+        "model": model_spec, "response": response, "valid": entry.get("valid"), "repairs": entry.get("repairs"),
+        "fallback": entry.get("fallback"), "problems": entry.get("problems"), "error": error,
+    })
+    if error:
         raise typer.Exit(1)
 
 
@@ -309,7 +459,9 @@ def run(
     model: Optional[str] = typer.Option(
         None, "--model", help="agent model spec, e.g. claude-cli:sonnet (default: target's own)"
     ),
-    on_miss: str = typer.Option("real", "--on-miss", help="mock miss policy: real|fallback|strict"),
+    on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy: real|fallback|strict|llm (default: the dataset's, else real)"),
+    mock_model: Optional[str] = typer.Option(None, "--mock-model", help="model driving the LLM mock engine with --on-miss llm (default: mocks.llm.model)"),
+    strategy: Optional[str] = typer.Option(None, "--strategy", help="mock strategy id for the engine (default: the dataset's)"),
 ) -> None:
     """Execute approved cases against the target agent; write a run artifact."""
     from evalbuilder.runner import run_dataset
@@ -321,10 +473,15 @@ def run(
         from evalbuilder.claude_cli import model_from_spec
 
         agent_model = model_from_spec(model)
+    policy = on_miss or ((ds.mocks or {}).get("on_miss") if mock else None) or "real"
+    engine_model, engine_spec = (None, None)
+    if mock and policy == "llm":
+        engine_model, engine_spec = _mock_model_for(ds, mock_model)
     try:
         art = run_dataset(
             ds, path, mocked=mock, ids=id_list, out_dir=out,
-            model=agent_model, model_spec=model, on_miss=on_miss,
+            model=agent_model, model_spec=model, on_miss=policy,
+            mock_model=engine_model, mock_model_spec=engine_spec, strategy=strategy,
         )
     except ValueError as e:
         typer.echo(str(e), err=True)
@@ -340,6 +497,7 @@ def run(
                 {"case_id": cr.case_id, "error": cr.error, "class": cr.error_class}
                 for cr in errors
             ],
+            "mocking": art.mocking,
         }
     )
 
@@ -350,6 +508,9 @@ def simulate(
     scenarios: Path = typer.Option(..., "--scenarios"),
     out: Path = typer.Option(Path("eval/results"), "--out"),
     mine: bool = typer.Option(True, "--mine/--no-mine"),
+    mock: bool = typer.Option(False, "--mock/--no-mock", help="install the dataset's mock layers (rules, and the LLM engine under on_miss llm)"),
+    on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy with --mock (default: the dataset's, else real)"),
+    mock_model: Optional[str] = typer.Option(None, "--mock-model", help="model driving the LLM mock engine (default: mocks.llm.model)"),
 ) -> None:
     """Run multi-turn simulation scenarios; mine violations into pending cases."""
     from uuid import uuid4
@@ -364,8 +525,25 @@ def simulate(
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
     module = target_mod.load_target(ds.target)
-    graph = target_mod.build_graph(module, ds.target)
-    results = [sim.simulate_scenario(graph, s) for s in scenario_list]
+    if mock:
+        from evalbuilder.mocking import merge_mock_rules, wrap_tools
+        from evalbuilder.runner import build_engine, tool_specs_of
+
+        policy = on_miss or (ds.mocks or {}).get("on_miss") or "real"
+        engine_model = _mock_model_for(ds, mock_model)[0] if policy == "llm" else None
+        specs = tool_specs_of(module) if policy == "llm" else {}
+
+        def graph_factory(scenario):
+            ledger: list[dict] = []
+            engine = build_engine(engine_model, ds, specs, strategy=scenario.get("mock_strategy")) if policy == "llm" else None
+            tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules((ds.mocks or {}).get("tools", {}), {}),
+                               on_miss=policy, engine=engine, ledger=ledger)
+            return target_mod.build_graph(module, ds.target, tools=tools), ledger
+
+        results = sim.simulate_scenarios(graph_factory, scenario_list)
+    else:
+        graph = target_mod.build_graph(module, ds.target)
+        results = [sim.simulate_scenario(graph, s) for s in scenario_list]
     mined = sim.mine_failures(ds, results) if mine else 0
     if mined:
         _save_valid(path, ds)
@@ -380,6 +558,7 @@ def simulate(
                 r["scenario_id"]: r["violations"] for r in results if r["violations"]
             },
             "mined": mined,
+            "mock_calls": {r["scenario_id"]: r["mock_calls"] for r in results if r.get("mock_calls")},
         }
     )
 

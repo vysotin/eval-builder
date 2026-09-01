@@ -165,6 +165,26 @@ def with_fallback(case_rules: list[dict], dataset_rules: list[dict]) -> list[dic
     return rules + [r for r in dataset_rules if r not in rules]
 
 
+LEDGER_LAYERS = ("rule", "llm", "real", "fallback", "error")
+
+
+def ledger_totals(entries: list[dict]) -> dict[str, int]:
+    """Counts per layer plus `invalid` (LLM answers that failed validation, fallback or error)."""
+    totals = {layer: 0 for layer in LEDGER_LAYERS}
+    totals["invalid"] = 0
+    for e in entries or []:
+        layer = e.get("layer", "rule")
+        if layer in totals:
+            totals[layer] += 1
+        if e.get("fallback") and layer != "fallback":
+            totals["fallback"] += 1
+        if e.get("error") and layer != "error":
+            totals["error"] += 1
+        if layer == "llm" and not e.get("valid", True):
+            totals["invalid"] += 1
+    return totals
+
+
 def verify_dataset(ds, only_approved: bool = False) -> list[dict]:
     """Expected tool calls in mocked cases that no rule answers: [{case, tool, args}]."""
     misses: list[dict] = []

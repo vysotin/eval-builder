@@ -74,9 +74,30 @@ def analysis_summary(ctx: PipelineContext) -> dict:
         "failing_cases": agg.get("failing_cases", [])[:40],
         "unstable_cases": agg.get("stability", {}).get("unstable_cases", []),
         "evaluator_errors": [f"{m}: {n} error(s)" for m, n in agg.get("evaluator_errors", {}).items()],
+        "mocking": {"on_miss": ctx.config.mocking.on_miss, "llm_mock_calls": agg.get("stability", {}).get("llm_mock_calls", 0),
+                    "llm_mocked_unstable": agg.get("stability", {}).get("llm_mocked_unstable", [])},
         "stages": {k: v["status"] for k, v in _stage_status(ctx).items()},
         "problems": ctx.problems,
         "simulation": (ctx.state.stages["simulate"].details if ctx.state and "simulate" in ctx.state.stages else None),
+    }
+
+
+def _mocking_summary(ctx: PipelineContext, stages: dict) -> dict:
+    """Policy, model, strategies and per-layer call totals of the two mocking layers."""
+    cfg = ctx.config
+    strategies = ctx.optional_json("mock_strategies") or {}
+    run_calls = ((stages.get("run", {}).get("details") or {}).get("mocking") or {}).get("calls") or {}
+    sim_calls = (stages.get("simulate", {}).get("details") or {}).get("mock_calls") or {}
+    return {
+        "on_miss": cfg.mocking.on_miss,
+        "layers": ["rules", "llm_engine"] if cfg.llm_mocking else ["rules"],
+        "model": cfg.mock_model_spec if cfg.llm_mocking else None,
+        "strategy": cfg.mocking.strategy,
+        "on_invalid": cfg.mocking.on_invalid if cfg.llm_mocking else None,
+        "strategies": list((strategies.get("strategies") or {}).keys()),
+        "world": (strategies.get("world") or "")[:400],
+        "calls": run_calls,
+        "simulation_calls": sim_calls,
     }
 
 
@@ -131,6 +152,7 @@ def build_report(ctx: PipelineContext) -> dict:
         "metrics": agg.get("metrics", {}) if agg else {},
         "slices": agg.get("slices", {}) if agg else {},
         "stability": agg.get("stability") if agg else None,
+        "mocking": _mocking_summary(ctx, stages),
         "cases": agg.get("cases", []) if agg else [],
         "failing_cases": agg.get("failing_cases", []) if agg else [],
         "simulation": {
@@ -169,6 +191,13 @@ def summary_text(report: dict) -> str:
             f"(trajectory) unstable_outputs={len(st.get('unstable_outputs', []))} "
             f"unstable_evaluators={len(st.get('unstable_evaluators', []))} "
             f"text_varies={st.get('text_varies')} suspect_judge_comments={len(st.get('suspect_judge_comments', []))}"
+        )
+    mocking = report.get("mocking") or {}
+    if mocking.get("calls"):
+        calls = mocking["calls"]
+        lines.append(
+            f"mocking: on_miss={mocking.get('on_miss')} model={mocking.get('model')} rule={calls.get('rule', 0)} "
+            f"llm={calls.get('llm', 0)} invalid={calls.get('invalid', 0)} fallback={calls.get('fallback', 0)} error={calls.get('error', 0)}"
         )
     if report.get("analysis"):
         lines.append(f"analysis ({report['analysis'].get('source')}): {report['analysis'].get('summary', '')[:300]}")

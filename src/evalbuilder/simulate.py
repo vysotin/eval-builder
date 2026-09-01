@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
 
 from evalbuilder.artifacts import add_case
+from evalbuilder.mocking import ledger_totals
 from evalbuilder.schemas import Dataset
 
 REQUIRED_KEYS = ("id", "opening", "max_turns")
@@ -105,13 +107,22 @@ def simulate_scenarios(
 ) -> list[dict]:
     """Run every scenario, each against its own graph from `graph_factory()`.
 
-    With `max_workers > 1` the scenarios run concurrently in a thread pool — each
-    worker builds a fresh graph (mirroring the per-case graphs of `run_dataset`),
-    so no graph or tool wrapper is shared between threads. Results keep scenario
-    order and are identical to a sequential pass."""
+    A factory that takes an argument receives the scenario (so it can select the
+    scenario's `mock_strategy`); it may return `(graph, ledger)` to have the mock ledger
+    summarised into the result (`mock_calls`). With `max_workers > 1` the scenarios run
+    concurrently in a thread pool — each worker builds a fresh graph (mirroring the
+    per-case graphs of `run_dataset`), so no graph or tool wrapper is shared between
+    threads. Results keep scenario order and are identical to a sequential pass."""
+    takes_scenario = bool(inspect.signature(graph_factory).parameters)
 
     def _one(scenario: dict) -> dict:
-        return simulate_scenario(graph_factory(), scenario, user_model=user_model)
+        built = graph_factory(scenario) if takes_scenario else graph_factory()
+        graph, ledger = built if isinstance(built, tuple) else (built, None)
+        result = simulate_scenario(graph, scenario, user_model=user_model)
+        if ledger is not None:
+            result["mock_calls"] = ledger_totals(ledger)
+            result["mock_strategy"] = scenario.get("mock_strategy")
+        return result
 
     if max_workers > 1 and len(scenarios) > 1:
         with ThreadPoolExecutor(max_workers=min(max_workers, len(scenarios))) as pool:

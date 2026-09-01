@@ -236,10 +236,44 @@ def analysis() -> dict:
     }
 
 
+
+
+# ── LLM mock engine, offline ──────────────────────────────────
+#
+# `mock_model()` plays the backend for the second mocking layer (`mocking.on_miss: llm`,
+# `models.mock: scripted:<module>:mock_model`): it reads the TOOL CALL block of the engine
+# prompt and answers from the fixtures above, so pipeline runs stay offline and repeatable.
+
+
+def mock_strategies() -> dict:
+    return {"world": "Retail bank: customers C10001 (retail) and C10002 (premium); application APP-000123.", "strategies": [
+        {"id": "default", "description": "healthy bank APIs", "tools": []},
+    ]}
+
+
+def _mock_response(messages) -> dict:
+    from evalbuilder.mock_engine import call_in_prompt
+
+    call = call_in_prompt(str(messages[-1].content)) or {}
+    tool, args = call.get("tool"), call.get("args") or {}
+    payload = {
+        "get_customer_profile": PREMIUM_PROFILE if args.get("customer_id") == "C10002" else PROFILE,
+        "quote_installment": QUOTE, "credit_check": CREDIT, "document_status": PAYSLIP, "submit_application": RECEIPT,
+    }.get(tool, {"ok": True})
+    return {"response_json": json.dumps(payload)}
+
+
+def mock_model() -> SchemaScriptedModel:
+    from evalbuilder.mock_engine import MOCK_RESPONSE_TITLE
+
+    return SchemaScriptedModel(handlers={MOCK_RESPONSE_TITLE: _mock_response})
+
+
 def generator_model() -> SchemaScriptedModel:
     return SchemaScriptedModel(handlers={
         "agent_map": agent_map(),
         "mock_fixtures": mock_fixtures(),
+        "mock_strategies": mock_strategies(),
         "cases": cases,
         "case_review": {"reviews": []},
         "simulation_scenarios": simulation_scenarios(),

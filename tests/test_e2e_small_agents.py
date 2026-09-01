@@ -127,3 +127,91 @@ def test_weather_bot_background_jobs_dataset_then_resume(tmp_path):
     report = json.loads((out / "report.json").read_text())
     assert report["verdict"] == "pass" and report["stages"]["simulate"]["status"] == "skipped"
     assert yaml.safe_load(cfg_path.read_text())["review"]["approved_by"] == "job tester"
+
+
+# ── layer 2: the LLM mock engine end to end (weather bot, everything offline) ──
+
+WEATHER_MOCK = "scripted:examples.weather_bot.offline:mock_model"
+
+
+def _llm_config(tmp_path: Path, **overrides) -> Path:
+    cfg_path = _weather_config(tmp_path, **overrides)
+    cfg = load_config(cfg_path)
+    cfg.mocking.on_miss = "llm"
+    cfg.models.mock = WEATHER_MOCK
+    return cfg.save(cfg_path)
+
+
+def test_weather_bot_llm_mocking_layer_answers_the_long_tail(tmp_path):
+    cfg_path = _llm_config(tmp_path)
+    state, report = run_pipeline(cfg_path, settings=Settings())
+    statuses = {k: v["status"] for k, v in report["stages"].items()}
+    assert all(s == "ok" for k, s in statuses.items() if k != "publish"), statuses
+    assert report["verdict"] == "pass", report["verdict_reasons"]
+    # the mocks stage wrote strategies and kept the wildcard out; the dataset embeds both layers
+    out = tmp_path / "out"
+    strategies = json.loads((out / "mock-strategies.json").read_text())
+    assert strategies["schema"] == "evalbuilder/mock-strategies/v1" and list(strategies["strategies"]) == ["default", "stormy"]
+    assert set(strategies["strategies"]["default"]["tools"]) == {"get_weather", "get_alerts"}
+    assert report["stages"]["mocks"]["details"]["strategies"] == {"default": ["get_alerts", "get_weather"], "stormy": ["get_alerts"]}
+    ds = json.loads((out / "dataset.json").read_text())
+    assert ds["mocks"]["on_miss"] == "llm" and ds["mocks"]["llm"] == {"model": WEATHER_MOCK, "on_invalid": "fallback", "max_repairs": 1}
+    assert ds["mocks"]["strategy"] == "default" and ds["mocks"]["strategies"]["world"].startswith("One city")
+    assert all(all(r["matchArgs"] for r in rules) for rules in ds["mocks"]["tools"].values())  # no wildcard defaults
+    # verify counted the calls the engine will answer instead of failing; run recorded every layer
+    verify = report["stages"]["verify"]["details"]
+    assert verify["on_miss"] == "llm" and verify["llm_answered_calls"] > 0 and verify["strategy_tools"] == ["get_alerts", "get_weather"]
+    calls = report["stages"]["run"]["details"]["mocking"]["calls"]
+    assert calls["llm"] > 0 and calls["invalid"] == 0 and calls["error"] == 0
+    assert report["mocking"]["layers"] == ["rules", "llm_engine"] and report["mocking"]["model"] == WEATHER_MOCK
+    assert report["mocking"]["strategies"] == ["default", "stormy"] and report["mocking"]["calls"] == calls
+    run = json.loads(Path(report["runs"][0]["run"]).read_text())
+    assert run["mocking"]["on_miss"] == "llm" and any(m["layer"] == "llm" and m["valid"] for cr in run["case_runs"] for m in cr["mock_calls"])
+    assert report["stability"]["llm_mock_calls"] > 0 and report["stability"]["llm_mocked_unstable"] == []
+    assert report["simulation"]["details"]["stop_reasons"] == {"weather-then-alerts": "success"}
+    assert report["simulation"]["details"]["mock_calls"]["llm"] >= 1
+    summary = CliRunner().invoke(app, ["pipeline", "report", str(out)]).stdout
+    assert "mocking: on_miss=llm" in summary
+
+
+def test_weather_bot_llm_mocking_repair_round_and_strict_policy(tmp_path):
+    from examples.weather_bot import offline
+
+    cfg_path = _llm_config(tmp_path, repeats=1, simulate=False)
+    offline.INVALID_FIRST["enabled"] = True
+    try:
+        _, report = run_pipeline(cfg_path, settings=Settings())
+        calls = report["stages"]["run"]["details"]["mocking"]["calls"]
+        assert report["verdict"] == "pass" and calls["llm"] > 0 and calls["invalid"] == 0  # every first answer repaired
+        run = json.loads(Path(report["runs"][0]["run"]).read_text())
+        llm_entries = [m for cr in run["case_runs"] for m in cr["mock_calls"] if m["layer"] == "llm"]
+        assert llm_entries and all(m["repairs"] == 1 and m["valid"] for m in llm_entries)
+
+        # no repair budget + strict → fallback is not allowed: the run records infrastructure errors, never agent errors
+        cfg = load_config(cfg_path)
+        cfg.mocking.max_repairs = 0
+        cfg.mocking.on_invalid = "strict"
+        cfg.save(cfg_path)
+        _, report2 = run_pipeline(cfg_path, resume=True, invalidate_from="dataset", settings=Settings())
+        details = report2["stages"]["run"]["details"]
+        assert details["mocking"]["calls"]["error"] >= 1 and details["errors"]["infrastructure"] >= 1 and details["errors"]["agent"] == 0
+        assert any("failed output-schema validation" in p["message"] for p in report2["problems"])
+        # …and with fallback the strategy's fallback_response answers instead
+        cfg.mocking.on_invalid = "fallback"
+        cfg.save(cfg_path)
+        _, report3 = run_pipeline(cfg_path, resume=True, invalidate_from="dataset", settings=Settings())
+        details3 = report3["stages"]["run"]["details"]
+        assert details3["mocking"]["calls"]["fallback"] >= 1 and details3["errors"]["infrastructure"] == 0
+        assert report3["verdict"] == "pass", report3["verdict_reasons"]
+    finally:
+        offline.INVALID_FIRST["enabled"] = False
+
+
+def test_weather_bot_llm_mocking_needs_a_ready_mock_model(tmp_path):
+    cfg_path = _llm_config(tmp_path)
+    cfg = load_config(cfg_path)
+    cfg.models.mock = "scripted:examples.weather_bot.offline:no_such_factory"
+    cfg.save(cfg_path)
+    _, report = run_pipeline(cfg_path, settings=Settings())
+    assert report["verdict"] == "incomplete" and report["stages"]["preflight"]["status"] == "ok"  # scripted specs are 'ready' until built
+    assert report["stages"]["run"]["status"] == "failed" and "no_such_factory" in (report["stages"]["run"]["error"] or "")

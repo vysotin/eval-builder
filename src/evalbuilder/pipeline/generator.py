@@ -421,10 +421,12 @@ def _present_arg_problems(args: dict, tool: dict) -> list[str]:
     return problems
 
 
-def author_mocks(gen: Generator, tools: list[dict], guidance: str = "") -> tuple[dict[str, list[dict]], list[str]]:
-    """Returns (rules by tool, problems). Every tool ends with a wildcard rule; responses
-    are validated against `output_schema` (non-conforming defaults are replaced with a
-    schema-conformant sample, non-conforming variants are dropped)."""
+def author_mocks(gen: Generator, tools: list[dict], guidance: str = "", wildcard: bool = True) -> tuple[dict[str, list[dict]], list[str]]:
+    """Returns (rules by tool, problems). Every tool ends with a wildcard rule (unless
+    `wildcard=False`: under `on_miss: llm` only the keyed variants stay and the long tail
+    goes to the mock engine); responses are validated against `output_schema`
+    (non-conforming defaults are replaced with a schema-conformant sample,
+    non-conforming variants are dropped)."""
     problems: list[str] = []
     rules: dict[str, list[dict]] = {}
     try:
@@ -468,9 +470,166 @@ def author_mocks(gen: Generator, tools: list[dict], guidance: str = "") -> tuple
             if by_name:
                 problems.append(f"generator returned no fixture for {name}; using schema/generic sample")
             default = _schema_fixture(tool)
-        tool_rules.append({"matchArgs": {}, "response": default})
+        if wildcard:
+            tool_rules.append({"matchArgs": {}, "response": default})
         rules[name] = tool_rules
     return rules, problems
+
+
+# ── mock strategies (layer 2) ──────────────────────────────────
+
+STRATEGIES_SCHEMA = {
+    "title": "mock_strategies",
+    "type": "object",
+    "properties": {
+        "world": {"type": "string", "description": "one paragraph: the simulated backend every tool shares (entities, ids, invariants)"},
+        "strategies": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "slug: default, degraded, empty, ..."},
+                    "description": {"type": "string"},
+                    "tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "behavior": {"type": "string", "description": "concrete rules an LLM follows to answer this tool under this strategy"},
+                                "fallback_response": {"type": "string", "description": "JSON text: a valid response used when a generated one fails validation"},
+                                "examples": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {"args": {"type": "string", "description": "JSON object"}, "response": {"type": "string", "description": "JSON text"}},
+                                        "required": ["args", "response"],
+                                    },
+                                },
+                            },
+                            "required": ["name", "behavior", "fallback_response", "examples"],
+                        },
+                    },
+                },
+                "required": ["id", "description", "tools"],
+            },
+        },
+    },
+    "required": ["world", "strategies"],
+}
+
+STRATEGIES_SYSTEM = """You design the behaviour of a simulated backend for an agent's tools. At run time an
+LLM plays each tool for calls that no deterministic fixture answers; your strategies are
+its script. Write:
+- world: one paragraph describing the shared backend every tool draws from — the
+  entities and ids that exist (consistent with the MOCK FIXTURES), invariants, ranges.
+- a `default` strategy (healthy backend) with a behaviour entry for EVERY tool: concrete
+  rules the LLM can follow deterministically (which ids resolve to what, how unknown ids
+  are answered, value ranges, ordering), 1-2 examples (args → response), and a
+  fallback_response that conforms to the tool's output_schema.
+- 1-2 alternate strategies named for a failure mode the cases may select (e.g. `degraded`:
+  slow/stale/erroring backend as value-level error payloads; `empty`: no results). Only
+  describe the tools whose behaviour changes.
+Every response and fallback_response must be valid JSON text conforming to the tool's
+output_schema; example args must conform to args_schema. No prose outside the fields."""
+
+
+def _generic_strategy_entry(tool: dict) -> dict:
+    from evalbuilder.mock_engine import generic_behavior
+
+    return {"behavior": generic_behavior(tool), "examples": [], "fallback_response": _schema_fixture(tool)}
+
+
+def author_strategies(gen: Generator, tools: list[dict], rules: dict[str, list[dict]] | None = None, guidance: str = "") -> tuple[dict, list[str]]:
+    """Returns (`{world, strategies: {id: {description, tools: {name: {behavior, examples,
+    fallback_response}}}}}`, problems). The `default` strategy always exists and covers every
+    tool; fallbacks are validated against `output_schema` (replaced by a schema sample when
+    invalid), examples too (dropped when invalid), unknown tools and id-less strategies dropped."""
+    problems: list[str] = []
+    by_name = {t["name"]: t for t in tools}
+    try:
+        result = gen.ask(
+            STRATEGIES_SYSTEM,
+            with_guidance(
+                "TOOLS:\n" + json.dumps([tool_brief(t) for t in tools], indent=1, ensure_ascii=False)
+                + "\n\nMOCK FIXTURES (deterministic rules the strategies must stay consistent with):\n"
+                + json.dumps(rules or {}, ensure_ascii=False)[:6000],
+                guidance,
+            ),
+            STRATEGIES_SCHEMA,
+        )
+        raw_strategies = [x for x in result.get("strategies", []) if isinstance(x, dict)]
+        world = str(result.get("world") or "").strip()
+    except Exception as e:  # noqa: BLE001 - deterministic default strategy
+        problems.append(f"strategy generation failed, using a generic default strategy: {type(e).__name__}: {e}")
+        raw_strategies, world = [], ""
+
+    strategies: dict[str, dict] = {}
+    for raw in raw_strategies:
+        sid = str(raw.get("id") or "").strip()
+        if not sid:
+            problems.append("mock strategy without an id dropped")
+            continue
+        entry = {"description": str(raw.get("description") or "").strip(), "tools": {}}
+        for raw_tool in raw.get("tools") or []:
+            if not isinstance(raw_tool, dict):
+                continue
+            name = raw_tool.get("name")
+            tool = by_name.get(name)
+            if tool is None:
+                problems.append(f"strategy {sid}: unknown tool {name!r} dropped")
+                continue
+            output_schema = tool.get("output_schema") or {}
+            fallback = _parse_json(raw_tool.get("fallback_response"), allow_scalar=True)
+            bad = tool_schemas.validate(fallback, output_schema) if fallback is not None else ["missing or invalid JSON"]
+            if bad:
+                problems.append(f"strategy {sid}: fallback_response for {name} replaced by a schema sample ({'; '.join(bad[:2])})")
+                fallback = _schema_fixture(tool)
+            examples = []
+            for ex in raw_tool.get("examples") or []:
+                if not isinstance(ex, dict):
+                    continue
+                args = _parse_json(ex.get("args"))
+                response = _parse_json(ex.get("response"), allow_scalar=True)
+                if not isinstance(args, dict) or response is None:
+                    problems.append(f"strategy {sid}: example for {name} dropped (invalid JSON)")
+                    continue
+                bad = _present_arg_problems(args, tool) + tool_schemas.validate(response, output_schema)
+                if bad:
+                    problems.append(f"strategy {sid}: example for {name} dropped (schema): {'; '.join(bad[:2])}")
+                    continue
+                examples.append({"args": args, "response": response})
+            entry["tools"][name] = {
+                "behavior": str(raw_tool.get("behavior") or "").strip() or _generic_strategy_entry(tool)["behavior"],
+                "examples": examples,
+                "fallback_response": fallback,
+            }
+        strategies[sid] = entry
+
+    default = strategies.setdefault("default", {"description": "healthy backend (generic)", "tools": {}})
+    for tool in tools:
+        if tool["name"] not in default["tools"]:
+            if raw_strategies:
+                problems.append(f"default strategy has no behaviour for {tool['name']}; using the tool description")
+            default["tools"][tool["name"]] = _generic_strategy_entry(tool)
+    ordered = {"default": default, **{k: v for k, v in strategies.items() if k != "default"}}
+    return {"world": world, "strategies": ordered}, problems
+
+
+def strategy_brief(strategies: dict | None) -> str:
+    """The strategies as the case/scenario prompts see them (ids, descriptions, behaviours)."""
+    if not strategies or not strategies.get("strategies"):
+        return ""
+    rows = {
+        sid: {"description": s.get("description"), "tools": {n: t.get("behavior") for n, t in (s.get("tools") or {}).items()}}
+        for sid, s in strategies["strategies"].items()
+    }
+    return (
+        "\n\nMOCK STRATEGIES (backend behaviours the LLM mock engine follows for calls no fixture answers; "
+        "world: " + str(strategies.get("world") or "")[:600] + "). Select one per case/scenario with "
+        "`mock_strategy` ONLY when its failure mode needs it; '' keeps the dataset default:\n"
+        + json.dumps(rows, indent=1, ensure_ascii=False)[:6000]
+    )
 
 
 def _parse_json(text: Any, allow_scalar: bool = False):
@@ -537,6 +696,7 @@ CASES_SCHEMA = {
                         },
                         "description": "per-case mock rules (error injections, special fixtures)",
                     },
+                    "mock_strategy": {"type": "string", "description": "id of the mock strategy for this case ('' = dataset default)"},
                     "evidence": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": [
@@ -615,10 +775,12 @@ def author_cases(
     scenario_index: dict[str, dict],
     batch_size: int = 6,
     guidance: str = "",
+    strategies: dict | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Returns (case dicts ready for artifacts.add_case, problems)."""
     guide = _skill_reference("agent-eval-dataset", "references", "generation-guide.md")
     tools_by_name = {t["name"]: t for t in agent_map.tools}
+    strategy_ids = list((strategies or {}).get("strategies") or {})
     context = with_guidance(
         agent_brief(agent_map, constraints)
         + "\n\nSCENARIOS:\n"
@@ -627,6 +789,7 @@ def author_cases(
         + json.dumps(FAILURE_TYPES, indent=1)
         + "\n\nMOCK FIXTURES (what tools will return):\n"
         + json.dumps(mock_rules, indent=1, ensure_ascii=False)[:8000]
+        + strategy_brief(strategies)
         + ("\n\nGENERATION GUIDE:\n" + guide if guide else ""),
         guidance,
     )
@@ -635,7 +798,7 @@ def author_cases(
     pending = [c for c in cells if c.count > 0]
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
-        got, errs = _author_batch(gen, batch, context, tools_by_name)
+        got, errs = _author_batch(gen, batch, context, tools_by_name, strategy_ids=strategy_ids)
         problems += errs
         cases += got
         missing = _missing_in(batch, got)
@@ -643,6 +806,7 @@ def author_cases(
             got2, errs2 = _author_batch(
                 gen, missing, context, tools_by_name,
                 note="These cells were missing or invalid in your previous answer; return only cases for them.",
+                strategy_ids=strategy_ids,
             )
             problems += errs2
             cases += got2
@@ -672,7 +836,8 @@ def _missing_in(cells: list[Cell], cases: list[dict]) -> list[Cell]:
 
 
 def _author_batch(
-    gen: Generator, cells: list[Cell], context: str, tools_by_name: dict[str, dict] | set, note: str = ""
+    gen: Generator, cells: list[Cell], context: str, tools_by_name: dict[str, dict] | set, note: str = "",
+    strategy_ids: list[str] | None = None,
 ) -> tuple[list[dict], list[str]]:
     if not isinstance(tools_by_name, dict):  # bare names (older callers/tests)
         tools_by_name = {n: {"name": n} for n in tools_by_name}
@@ -760,6 +925,12 @@ def _author_batch(
             metadata["user_turns"] = user_turns
         if mocks:
             metadata["mocks"] = {"tools": mocks}
+        chosen = str(raw.get("mock_strategy") or "").strip()
+        if chosen:
+            if chosen in (strategy_ids or []):
+                metadata.setdefault("mocks", {})["strategy"] = chosen
+            else:
+                errors.append(f"case for {cell.key}: unknown mock strategy {chosen!r} ignored (known: {strategy_ids or []})")
         cases.append(
             {
                 "inputs": {"messages": [{"role": "user", "content": message}]},
@@ -862,6 +1033,7 @@ SCENARIOS_SCHEMA = {
                     "success_contains": {"type": "string", "description": "literal that marks success; empty if none"},
                     "expect_contains": {"type": "string"},
                     "expect_not_contains": {"type": "string"},
+                    "mock_strategy": {"type": "string", "description": "id of the mock strategy for this scenario ('' = dataset default)"},
                 },
                 "required": ["id", "intent", "persona", "goal", "opening", "followups", "max_turns",
                              "success_contains", "expect_contains", "expect_not_contains"],
@@ -879,14 +1051,17 @@ expect_not_contains (text that would indicate a violated constraint). Use fixtur
 
 
 def author_scenarios(
-    gen: Generator, agent_map: AgentMap, constraints: list[str], mock_rules: dict, guidance: str = ""
+    gen: Generator, agent_map: AgentMap, constraints: list[str], mock_rules: dict, guidance: str = "",
+    strategies: dict | None = None,
 ) -> tuple[list[dict], list[str]]:
+    strategy_ids = list((strategies or {}).get("strategies") or {})
     user = (
         agent_brief(agent_map, constraints)
         + "\n\nINTENTS:\n"
         + json.dumps(agent_map.intents, ensure_ascii=False)
         + "\n\nMOCK FIXTURES:\n"
         + json.dumps(mock_rules, ensure_ascii=False)[:6000]
+        + strategy_brief(strategies)
     )
     result = gen.ask(SCENARIOS_SYSTEM, with_guidance(user, guidance), SCENARIOS_SCHEMA)
     scenarios: list[dict] = []
@@ -916,6 +1091,12 @@ def author_scenarios(
             scenario["success_contains"] = raw["success_contains"]
         if expect:
             scenario["expect"] = expect
+        chosen = str(raw.get("mock_strategy") or "").strip()
+        if chosen:
+            if chosen in strategy_ids:
+                scenario["mock_strategy"] = chosen
+            else:
+                problems.append(f"scenario {scenario['id']}: unknown mock strategy {chosen!r} ignored (known: {strategy_ids})")
         scenarios.append(scenario)
     return scenarios, problems
 

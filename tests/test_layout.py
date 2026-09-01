@@ -87,3 +87,13 @@ def test_convention_table_lists_every_kind():
     assert {r["kind"] for r in rows} == set(ARTIFACTS)
     assert all(r["description"] for r in rows)
     json.dumps(rows)
+
+
+def test_mock_strategies_artifact_kind():
+    a = ARTIFACTS["mock_strategies"]
+    assert a.file == "mock-strategies.json" and a.schema == "evalbuilder/mock-strategies/v1" and a.stage == "mocks"
+    payload = {"world": "w", "strategies": {"default": {"description": "d", "tools": {}}}}
+    stamped = stamp("mock_strategies", payload)
+    assert stamped["schema"] == a.schema and unwrap("mock_strategies", stamped) == {"schema": a.schema, **payload}
+    assert kind_of_file("mock-strategies.json")[0].kind == "mock_strategies"
+    assert kind_of_schema("evalbuilder/mock-strategies/v1").kind == "mock_strategies"

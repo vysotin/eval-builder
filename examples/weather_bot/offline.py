@@ -97,10 +97,58 @@ def analysis(_messages=None) -> dict:
             "stability_notes": "stable across repeats", "evaluator_issues": [], "recommendations": ["Add judge evaluators with a real model."]}
 
 
+
+
+# ── LLM mock engine, offline ──────────────────────────────────
+#
+# `mock_model()` plays the backend for the second mocking layer (`mocking.on_miss: llm`,
+# `models.mock: scripted:<module>:mock_model`): it reads the TOOL CALL block of the engine
+# prompt and answers from the fixtures above, so pipeline runs stay offline and repeatable.
+
+
+def mock_strategies(_messages=None) -> dict:
+    return {"world": "One city, Paris, with stable sunny weather and one heat advisory.", "strategies": [
+        {"id": "default", "description": "healthy weather service", "tools": [
+            {"name": "get_weather", "behavior": "Every city is 72F and sunny; echo the city.", "fallback_response": json.dumps(WEATHER),
+             "examples": [{"args": json.dumps({"city": "Paris"}), "response": json.dumps(WEATHER)}]},
+            {"name": "get_alerts", "behavior": "Paris has a heat advisory; other cities have no alerts.", "fallback_response": json.dumps(ALERTS), "examples": []},
+        ]},
+        {"id": "stormy", "description": "storm season: every city has a storm warning", "tools": [
+            {"name": "get_alerts", "behavior": "Every city has exactly one alert: 'storm warning'.", "fallback_response": json.dumps({"alerts": ["storm warning"], "city": "Paris"}), "examples": []},
+        ]},
+    ]}
+
+
+INVALID_FIRST = {"enabled": False}  # tests flip this to exercise the repair round
+
+
+def _mock_response(messages) -> dict:
+    from evalbuilder.mock_engine import call_in_prompt
+
+    call = call_in_prompt(str(messages[-1].content)) or {}
+    tool, args, strategy = call.get("tool"), call.get("args") or {}, call.get("strategy")
+    if INVALID_FIRST["enabled"] and "PROBLEMS WITH YOUR PREVIOUS ANSWER" not in str(messages[-1].content):
+        return {"response_json": "not json {"}
+    city = args.get("city", "Paris")
+    if tool == "get_weather":
+        return {"response_json": json.dumps({"temp": 72, "condition": "sunny", "city": city})}
+    if tool == "get_alerts":
+        alerts = ["storm warning"] if strategy == "stormy" else (["heat advisory"] if city == "Paris" else [])
+        return {"response_json": json.dumps({"alerts": alerts, "city": city})}
+    return {"response_json": json.dumps({"ok": True})}
+
+
+def mock_model() -> SchemaScriptedModel:
+    from evalbuilder.mock_engine import MOCK_RESPONSE_TITLE
+
+    return SchemaScriptedModel(handlers={MOCK_RESPONSE_TITLE: _mock_response})
+
+
 def generator_model() -> SchemaScriptedModel:
     return SchemaScriptedModel(handlers={
         "agent_map": agent_map,
         "mock_fixtures": mock_fixtures,
+        "mock_strategies": mock_strategies,
         "cases": cases,
         "case_review": {"reviews": []},
         "simulation_scenarios": simulation_scenarios,

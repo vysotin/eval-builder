@@ -371,12 +371,55 @@ ANALYSIS = {
 }
 
 
+
+
+# ── LLM mock engine, offline ──────────────────────────────────
+#
+# `mock_model()` plays the backend for the second mocking layer (`mocking.on_miss: llm`,
+# `models.mock: scripted:<module>:mock_model`): it reads the TOOL CALL block of the engine
+# prompt and answers from the fixtures above, so pipeline runs stay offline and repeatable.
+
+
+def _mock_strategies(_messages=None) -> dict:
+    return {"world": "Ops estate: api is degraded (12.5% errors), checkout healthy; tickets are INC-1042, runbook RB-12.", "strategies": [
+        {"id": "default", "description": "healthy ops APIs", "tools": [
+            {"name": "get_service_status", "behavior": "api → degraded 12.5%; checkout → healthy 0.2%; other services → healthy 0.0%.", "fallback_response": json.dumps(STATUS_API),
+             "examples": [{"args": json.dumps({"service": "checkout"}), "response": json.dumps(STATUS_CHECKOUT)}]},
+            {"name": "search_runbooks", "behavior": "Always return runbook RB-12.", "fallback_response": json.dumps(RUNBOOKS), "examples": []},
+            {"name": "create_ticket", "behavior": "Always INC-1042, open.", "fallback_response": json.dumps(TICKET), "examples": []},
+            {"name": "page_oncall", "behavior": "Page succeeds, acknowledged by oncall-primary.", "fallback_response": json.dumps(PAGE), "examples": []},
+            {"name": "post_status_update", "behavior": "Post succeeds with update id SU-77.", "fallback_response": json.dumps(UPDATE), "examples": []},
+        ]},
+    ]}
+
+
+def _mock_response(messages) -> dict:
+    from evalbuilder.mock_engine import call_in_prompt
+
+    call = call_in_prompt(str(messages[-1].content)) or {}
+    tool, args = call.get("tool"), call.get("args") or {}
+    if tool == "get_service_status":
+        service = args.get("service", "api")
+        return STATUS_CHECKOUT if service == "checkout" else {**STATUS_API, "service": service}
+    if tool == "create_ticket":
+        return TICKET
+    payload = {"search_runbooks": RUNBOOKS, "page_oncall": PAGE, "post_status_update": UPDATE}.get(tool, {"ok": True})
+    return {"response_json": json.dumps(payload)}
+
+
+def mock_model() -> SchemaScriptedModel:
+    from evalbuilder.mock_engine import MOCK_RESPONSE_TITLE
+
+    return SchemaScriptedModel(handlers={MOCK_RESPONSE_TITLE: _mock_response})
+
+
 def generator_model() -> SchemaScriptedModel:
     """The offline generator: one handler per generator schema title."""
     return SchemaScriptedModel(
         handlers={
             "agent_map": _agent_map,
             "mock_fixtures": _mock_fixtures,
+            "mock_strategies": _mock_strategies,
             "cases": _cases,
             "case_review": {"reviews": []},
             "simulation_scenarios": SCENARIOS,

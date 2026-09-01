@@ -73,6 +73,7 @@ class CaseRun(BaseModel):
     node_path: list[str] = Field(default_factory=list)
     error: str | None = None
     error_class: Literal["none", "agent", "infrastructure"] = "none"
+    mock_calls: list[dict] = Field(default_factory=list)  # ledger: one entry per mocked call (layer rule|llm|real|fallback|error)
 
 
 class RunArtifact(BaseModel):
@@ -86,6 +87,7 @@ class RunArtifact(BaseModel):
     case_runs: list[CaseRun] = Field(default_factory=list)
     timestamp: str = ""
     agent_model: str | None = None
+    mocking: dict | None = None  # {on_miss, model, strategy, calls: {rule, llm, real, fallback, error, invalid}}
 
 
 class Report(BaseModel):

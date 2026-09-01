@@ -20,7 +20,7 @@ from evalbuilder import target as target_mod
 from evalbuilder import tool_schemas
 from evalbuilder.config import Settings, capability_check, provider_ready
 from evalbuilder.evaluators import is_judge_spec, score_run
-from evalbuilder.mocking import merge_mock_rules, verify_dataset, with_fallback, wrap_tools
+from evalbuilder.mocking import ledger_totals, merge_mock_rules, verify_dataset, verify_summary, with_fallback, wrap_tools
 from evalbuilder.pipeline import generator as gen_mod
 from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
 from evalbuilder.pipeline.config import PipelineConfig
@@ -28,7 +28,7 @@ from evalbuilder.pipeline.engine import Stage, StageStop
 from evalbuilder.pipeline.layout import artifact_index, path_for, stamp, unwrap
 from evalbuilder.pipeline.planning import Cell, achieved, plan_cells, summarize_plan
 from evalbuilder.pipeline.taxonomy import applicable_failure_types
-from evalbuilder.runner import run_dataset
+from evalbuilder.runner import build_engine, run_dataset, tool_specs_of
 from evalbuilder.schemas import AgentMap, Dataset, Report, RunArtifact, Target
 
 REQUIRED_STAGES = (
@@ -117,6 +117,20 @@ class PipelineContext:
             self._cache["agent_model"] = model_from_spec(spec)
         return self._cache["agent_model"]
 
+    def mock_model(self):
+        """The model behind the LLM mock engine (only when `mocking.on_miss` is `llm`)."""
+        if not self.config.llm_mocking:
+            return None
+        if "mock_model" not in self._cache:
+            spec = self.config.mock_model_spec
+            if spec == self.config.models.generator and "generator" in self._cache:
+                self._cache["mock_model"] = self._cache["generator"].model
+            else:
+                from evalbuilder.claude_cli import model_from_spec
+
+                self._cache["mock_model"] = model_from_spec(spec)
+        return self._cache["mock_model"]
+
     # ── artifacts (lazy, disk-backed) ──────────────────────────
     def _json(self, key: str, path: Path, loader=None):
         if key not in self._cache:
@@ -162,6 +176,24 @@ class PipelineContext:
 
     def mock_rules(self) -> dict[str, list[dict]]:
         return self._artifact_json("mock_rules", "mock_rules")
+
+    def mock_strategies(self) -> dict | None:
+        """`mock-strategies.json` without its schema stamp, or None when the stage did not write it."""
+        data = self.optional_json("mock_strategies")
+        if not isinstance(data, dict):
+            return None
+        return {k: v for k, v in data.items() if k != "schema"}
+
+    def mock_block(self) -> dict:
+        """The dataset's `mocks` block: rules, policy, the LLM engine settings and strategies."""
+        cfg = self.config.mocking
+        block: dict[str, Any] = {"tools": self.mock_rules(), "on_miss": cfg.on_miss, "strategy": cfg.strategy}
+        strategies = self.mock_strategies()
+        if strategies:
+            block["strategies"] = strategies
+        if self.config.llm_mocking:
+            block["llm"] = {"model": self.config.mock_model_spec, "on_invalid": cfg.on_invalid, "max_repairs": cfg.max_repairs}
+        return block
 
     def applicable(self) -> dict[str, list[str]]:
         return self._artifact_json("applicable", "applicable_failures")
@@ -210,22 +242,23 @@ def preflight(ctx: PipelineContext) -> dict:
     if caps["blocking"]:
         raise ValueError("blocking: " + "; ".join(b["issue"] for b in caps["blocking"]))
     models = {}
-    for role, spec in (("agent", cfg.models.agent), ("judge", cfg.models.judge), ("generator", cfg.models.generator)):
+    roles = [("agent", cfg.models.agent), ("judge", cfg.models.judge), ("generator", cfg.models.generator)]
+    if cfg.llm_mocking:
+        roles.append(("mock", cfg.mock_model_spec))
+    for role, spec in roles:
         if not spec:
             models[role] = {"spec": None, "ready": True, "note": "target default model"}
             continue
         ready, reason = provider_ready(spec)
         models[role] = {"spec": spec, "ready": ready, "reason": reason}
         if not ready:
-            if role == "generator":
-                raise ValueError(f"generator model {spec!r} unavailable: {reason}")
-            if role == "agent":
-                raise ValueError(f"agent model {spec!r} unavailable: {reason}")
+            if role in ("generator", "agent", "mock"):
+                raise ValueError(f"{role} model {spec!r} unavailable: {reason}")
             ctx.problem("preflight", f"judge model {spec!r} unavailable: {reason}; judge evaluators will error")
     judge_specs = [e for e in cfg.evaluators if is_judge_spec(e)]
     ctx.out_dir.mkdir(parents=True, exist_ok=True)
     return {"capabilities": caps["capabilities"], "degraded": caps["degraded"], "models": models,
-            "judge_evaluators": len(judge_specs)}
+            "judge_evaluators": len(judge_specs), "mocking": cfg.mocking.on_miss}
 
 
 def _live_tools(module) -> list[dict]:
@@ -361,21 +394,38 @@ def author_map(ctx: PipelineContext) -> dict:
 
 
 def author_mocks(ctx: PipelineContext) -> dict:
+    cfg = ctx.config.mocking
     amap = ctx.agent_map()
     tools = mockable_tools(amap)
-    rules, problems = gen_mod.author_mocks(ctx.generator(), tools, guidance=ctx.config.guidance())
+    llm = ctx.config.llm_mocking
+    # Under `on_miss: llm` the wildcard default stays out: keyed variants are deterministic,
+    # everything else is answered by the LLM mock engine from the strategies.
+    rules, problems = gen_mod.author_mocks(ctx.generator(), tools, guidance=ctx.config.guidance(), wildcard=not llm)
     for p in problems:
         ctx.problem("mocks", p)
-    if ctx.config.mocking.required:
-        missing = [t["name"] for t in tools if not rules.get(t["name"])]
-        if missing:
-            raise ValueError(f"tools without mock rules: {missing}")
     path = ctx.save_artifact("mock_rules", rules)
     ctx.set("mock_rules", rules)
-    return {
+    details: dict[str, Any] = {
         "artifacts": {"mock_rules": str(path)},
         "tools": {name: len(r) for name, r in rules.items()},
+        "on_miss": cfg.on_miss,
+        "skipped_tools": [t["name"] for t in amap.tools if not t.get("mockable", True)],
     }
+    strategies = None
+    if cfg.strategies or llm:
+        strategies, sproblems = gen_mod.author_strategies(ctx.generator(), tools, rules, guidance=ctx.config.guidance())
+        for p in sproblems:
+            ctx.problem("mocks", p)
+        spath = ctx.save_artifact("mock_strategies", strategies)
+        ctx._cache.pop("optional:mock_strategies", None)
+        details["artifacts"]["mock_strategies"] = str(spath)
+        details["strategies"] = {sid: sorted(s.get("tools") or {}) for sid, s in strategies["strategies"].items()}
+    if cfg.required:
+        covered = set((strategies or {}).get("strategies", {}).get("default", {}).get("tools", {})) if llm else set()
+        missing = [t["name"] for t in tools if not rules.get(t["name"]) and t["name"] not in covered]
+        if missing:
+            raise ValueError(f"tools without mock rules{' or a default strategy' if llm else ''}: {missing}")
+    return details
 
 
 def build_dataset(ctx: PipelineContext) -> dict:
@@ -391,11 +441,12 @@ def build_dataset(ctx: PipelineContext) -> dict:
         name=cfg.name,
         dataset_type="final_response",
         target=Target(module=cfg.target.module, factory=cfg.target.factory),
-        mocks={"tools": rules, "on_miss": cfg.mocking.on_miss},
+        mocks=ctx.mock_block(),
     )
     scenario_index = {s["id"]: s for s in amap.scenarios}
     cases, problems = gen_mod.author_cases(
-        ctx.generator(), cells, amap, amap.constraints, rules, scenario_index, guidance=cfg.guidance()
+        ctx.generator(), cells, amap, amap.constraints, rules, scenario_index, guidance=cfg.guidance(),
+        strategies=ctx.mock_strategies(),
     )
     for p in problems:
         ctx.problem("dataset", p)
@@ -453,7 +504,7 @@ def review(ctx: PipelineContext) -> dict:
         verdict = reviews.get(c.id, {})
         if verdict.get("verdict") == "reject":
             rejected[c.id] = verdict.get("reason", "")
-    for miss in verify_dataset(ds):
+    for miss in verify_summary(ds)["misses"]:  # under on_miss: llm a miss is answered by the engine
         rejected.setdefault(miss["case"], f"expected call {miss['tool']}({miss['args']}) has no mock rule")
     if rejected:
         artifacts.set_review(ds, list(rejected), "rejected", "pipeline self-review")
@@ -489,21 +540,29 @@ def review(ctx: PipelineContext) -> dict:
 
 def verify(ctx: PipelineContext) -> dict:
     ds = ctx.dataset()
-    misses = verify_dataset(ds, only_approved=True)
-    if misses:
-        raise ValueError(f"{len(misses)} expected tool call(s) have no mock rule: {misses[:3]}")
+    summary = verify_summary(ds, only_approved=True)
+    if summary["misses"]:
+        raise ValueError(f"{len(summary['misses'])} expected tool call(s) have no mock rule: {summary['misses'][:3]}")
+    llm = summary["policy"] == "llm"
+    strategy_tools = sorted((ds.mocks.get("strategies") or {}).get("strategies", {}).get("default", {}).get("tools", {})) if llm else []
     if ctx.config.mocking.required:
         from evalbuilder.mocking import mockable
 
         module = target_mod.load_target(ds.target)
         names = [t.name for t in getattr(module, "TOOLS", []) if mockable(t)]
-        unmocked = [n for n in names if n not in ds.mocks.get("tools", {})]
+        unmocked = [n for n in names if n not in ds.mocks.get("tools", {}) and n not in strategy_tools]
         if unmocked:
-            raise ValueError(f"mocking.required but tools have no rules: {unmocked}")
+            raise ValueError(f"mocking.required but tools have no rules{' or a default strategy' if llm else ''}: {unmocked}")
+    if llm and not (ds.mocks.get("llm") or {}).get("model"):
+        raise ValueError("mocks.on_miss is llm but the dataset names no mock model (mocks.llm.model)")
     approved = [c for c in ds.cases if c.review.status == "approved"]
     if not approved:
         raise ValueError("no approved cases to run")
-    return {"approved": len(approved), "mocked_tools": sorted(ds.mocks.get("tools", {}))}
+    return {
+        "approved": len(approved), "mocked_tools": sorted(ds.mocks.get("tools", {})), "on_miss": summary["policy"],
+        "llm_answered_calls": len(summary["llm_answered"]), "strategy_tools": strategy_tools,
+        "strategies_used": sorted({(c.metadata.get("mocks") or {}).get("strategy") or ds.mocks.get("strategy") or "default" for c in approved}) if llm else [],
+    }
 
 
 def run(ctx: PipelineContext) -> dict:
@@ -519,8 +578,9 @@ def run(ctx: PipelineContext) -> dict:
         "repeats": cfg.runs.repeats, "repeat": 0, "parallel_intents": cfg.runs.parallel_intents,
         "cases_total": len(approved), "cases_done": 0,
         "overall_total": len(approved) * cfg.runs.repeats, "overall_done": 0,
-        "by_intent": by_intent, "runs": [], "current": [],
+        "by_intent": by_intent, "runs": [], "current": [], "mock_calls": {},
     }
+    mock_calls: dict[str, int] = {}
 
     def on_case(evt: dict) -> None:  # serialized by the runner; keeps run-progress.json live
         prog["cases_done"] = evt["completed"]
@@ -542,6 +602,8 @@ def run(ctx: PipelineContext) -> dict:
             ds, ctx.dataset_path, mocked=True, out_dir=ctx.results_dir,
             model=ctx.agent_model(), model_spec=cfg.models.agent, on_miss=cfg.mocking.on_miss,
             max_workers=cfg.runs.parallel_intents, progress=on_case,
+            mock_model=ctx.mock_model(), mock_model_spec=cfg.mock_model_spec if cfg.llm_mocking else None,
+            strategy=cfg.mocking.strategy,
         )
         infra = [cr for cr in art.case_runs if cr.error_class == "infrastructure"]
         if infra and len(infra) == len(art.case_runs):
@@ -549,11 +611,19 @@ def run(ctx: PipelineContext) -> dict:
         errors["agent"] += sum(1 for cr in art.case_runs if cr.error_class == "agent")
         errors["infrastructure"] += len(infra)
         runs.append({"run_id": art.run_id, "path": str(ctx.artifact("run", art.run_id))})
+        for layer, n in ((art.mocking or {}).get("calls") or {}).items():
+            mock_calls[layer] = mock_calls.get(layer, 0) + n
         prog["runs"] = list(runs)
+        prog["mock_calls"] = dict(mock_calls)
         ctx.save_artifact("run_progress", prog)
+    if mock_calls.get("invalid"):
+        ctx.problem("run", f"{mock_calls['invalid']} LLM mock response(s) failed output-schema validation "
+                           f"({mock_calls.get('fallback', 0)} answered by the strategy fallback, {mock_calls.get('error', 0)} raised)")
     return {"artifacts": {"runs": runs, "run_progress": str(ctx.artifact("run_progress"))},
             "repeats": cfg.runs.repeats, "parallel_intents": cfg.runs.parallel_intents,
-            "cases": len(ds.cases), "errors": errors}
+            "cases": len(ds.cases), "errors": errors,
+            "mocking": {"on_miss": cfg.mocking.on_miss, "model": cfg.mock_model_spec if cfg.llm_mocking else None,
+                        "strategy": cfg.mocking.strategy if cfg.llm_mocking else None, "calls": mock_calls}}
 
 
 def score(ctx: PipelineContext) -> dict:
@@ -608,7 +678,8 @@ def simulate(ctx: PipelineContext) -> dict:
     cfg = ctx.config
     ds = ctx.dataset()
     amap = ctx.agent_map()
-    scenarios, problems = gen_mod.author_scenarios(ctx.generator(), amap, amap.constraints, ctx.mock_rules(), guidance=cfg.guidance())
+    scenarios, problems = gen_mod.author_scenarios(ctx.generator(), amap, amap.constraints, ctx.mock_rules(), guidance=cfg.guidance(),
+                                                   strategies=ctx.mock_strategies())
     for p in problems:
         ctx.problem("simulate", p)
     if not scenarios:
@@ -618,10 +689,16 @@ def simulate(ctx: PipelineContext) -> dict:
     scenario_list = sim.load_scenarios(scen_path)
     module = target_mod.load_target(ds.target)
     agent_model = ctx.agent_model()
+    llm = cfg.llm_mocking
+    tool_specs = tool_specs_of(module) if llm else {}
+    mock_model = ctx.mock_model()
 
-    def graph_factory():  # a fresh graph (and tool wrappers) per scenario, so scenarios can run concurrently
-        tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules(ds.mocks.get("tools", {}), {}), on_miss=cfg.mocking.on_miss)
-        return target_mod.build_graph(module, ds.target, tools=tools, model=agent_model)
+    def graph_factory(scenario):  # a fresh graph (and tool wrappers) per scenario, so scenarios can run concurrently
+        ledger: list[dict] = []
+        engine = build_engine(mock_model, ds, tool_specs, strategy=scenario.get("mock_strategy") or cfg.mocking.strategy) if llm else None
+        tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules(ds.mocks.get("tools", {}), {}),
+                           on_miss=cfg.mocking.on_miss, engine=engine, ledger=ledger)
+        return target_mod.build_graph(module, ds.target, tools=tools, model=agent_model), ledger
 
     user_model = getattr(ctx.generator(), "model", None)
     results = sim.simulate_scenarios(graph_factory, scenario_list, user_model=user_model,
@@ -630,6 +707,10 @@ def simulate(ctx: PipelineContext) -> dict:
     if mined:
         ctx.save_dataset(ds)
     sim_path = ctx.save_artifact("simulation", {"results": results})
+    totals: dict[str, int] = {}
+    for r in results:
+        for layer, n in (r.get("mock_calls") or {}).items():
+            totals[layer] = totals.get(layer, 0) + n
     return {
         "artifacts": {"scenarios": str(scen_path), "simulation": str(sim_path)},
         "parallel_simulations": cfg.runs.parallel_simulations,
@@ -637,6 +718,8 @@ def simulate(ctx: PipelineContext) -> dict:
         "stop_reasons": {r["scenario_id"]: r["stop_reason"] for r in results},
         "violations": {r["scenario_id"]: r["violations"] for r in results if r["violations"]},
         "mined_pending_cases": mined,
+        "mock_calls": totals,
+        "strategies": {r["scenario_id"]: r.get("mock_strategy") for r in results if r.get("mock_strategy")},
     }
 
 

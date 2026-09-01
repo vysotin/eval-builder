@@ -154,3 +154,26 @@ def test_cli_dataset_add_refuses_invalid(tmp_path):
     assert r.exit_code == 1
     assert "inputs" in r.output
     assert json.loads(ds_path.read_text())["cases"] == []
+
+
+def test_validate_checks_the_llm_mock_policy_and_strategy_references():
+    ds = _ds()
+    c = add_case(ds, {"inputs": {"q": 1}})
+    ds.mocks = {"tools": {}, "on_miss": "guess"}
+    assert any("on_miss" in e for e in validate_dataset(ds))
+    ds.mocks = {"tools": {}, "on_miss": "llm"}
+    assert any("mocks.llm.model" in e for e in validate_dataset(ds))
+    ds.mocks = {"tools": {}, "on_miss": "llm", "llm": {"model": "nocolon"}}
+    assert any("provider:model" in e for e in validate_dataset(ds))
+    ds.mocks = {
+        "tools": {}, "on_miss": "llm", "strategy": "default",
+        "llm": {"model": "scripted:x:y", "on_invalid": "fallback", "max_repairs": 1},
+        "strategies": {"world": "w", "strategies": {"default": {"description": "d", "tools": {}}}},
+    }
+    assert validate_dataset(ds) == []
+    c.metadata["mocks"] = {"strategy": "degraded"}
+    assert any("unknown mock strategy 'degraded'" in e for e in validate_dataset(ds))
+    ds.mocks["strategy"] = "nope"
+    assert any("dataset: unknown mock strategy 'nope'" in e for e in validate_dataset(ds))
+    ds.mocks["llm"]["on_invalid"] = "shrug"
+    assert any("on_invalid" in e for e in validate_dataset(ds))

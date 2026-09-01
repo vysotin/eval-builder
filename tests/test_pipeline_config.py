@@ -125,3 +125,33 @@ def test_template_spells_out_parallel_scoring_and_simulations():
     text = template("demo", "examples/weather_bot/agent.py", "examples.weather_bot.agent")
     assert "parallel_scoring: 4" in text
     assert "parallel_simulations: 4" in text
+
+
+# ── two-layer mocking config ───────────────────────────────────
+
+
+def test_mocking_and_mock_model_defaults_and_problems():
+    cfg = PipelineConfig.model_validate(MINIMAL)
+    m = cfg.mocking
+    assert (m.on_miss, m.strategies, m.strategy, m.on_invalid, m.max_repairs) == ("strict", True, "default", "fallback", 1)
+    assert cfg.models.mock is None and cfg.mock_model_spec == cfg.models.generator
+    llm = PipelineConfig.model_validate({**MINIMAL, "mocking": {"on_miss": "llm"}, "models": {"mock": "openai:gpt-5"}})
+    assert llm.mock_model_spec == "openai:gpt-5" and llm.problems() == []
+    bad = PipelineConfig.model_validate({**MINIMAL, "mocking": {"on_miss": "llm", "max_repairs": -1, "strategy": ""}, "models": {"mock": "gpt"}})
+    problems = bad.problems()
+    assert any("models.mock must look like provider:model" in p for p in problems)
+    assert any("mocking.max_repairs" in p for p in problems) and any("mocking.strategy" in p for p in problems)
+    with pytest.raises(Exception):
+        PipelineConfig.model_validate({**MINIMAL, "mocking": {"on_miss": "guess"}})
+    text = template("x", "examples/support_bot/agent.py", "examples.support_bot.agent")
+    assert "mock:" in text and "on_invalid" in text and "strategies:" in text and "on_miss: strict" in text
+    back = load_config_text(text)
+    assert back.mocking.on_invalid == "fallback" and back.models.mock is None
+    round_trip = load_config_text(llm.to_yaml())
+    assert round_trip.mocking.on_miss == "llm" and round_trip.models.mock == "openai:gpt-5"
+
+
+def load_config_text(text: str) -> PipelineConfig:
+    from evalbuilder.pipeline.config import parse_config
+
+    return parse_config(text, "test")
