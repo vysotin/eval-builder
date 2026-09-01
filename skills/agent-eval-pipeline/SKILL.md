@@ -35,8 +35,19 @@ when they want a verdict.
    - `review.auto_approve: true` + `approved_by` is the user's explicit authorization
      for the pipeline to approve generated cases. **Never set it yourself** — ask; without
      it the pipeline stops at `awaiting_review` and writes a report saying so.
-   - `mocking.required: true` (default) means every introspected tool gets a fixture;
-     `on_miss: strict` means an unmatched call is an error, never a real call.
+   - `mocking.required: true` (default) means every mockable tool gets a fixture (skill
+     loaders are never mocked); `on_miss: strict` means an unmatched call is an error,
+     never a real call. `on_miss: llm` adds the second layer: the `mocks` stage also
+     writes `mock-strategies.json` (a described backend world + per-tool behaviours),
+     keeps the wildcard defaults out of the rules, and at run time an LLM mock engine
+     driven by `models.mock` (default: the generator) answers the calls no rule
+     covers — validated against the tool's `output_schema`, one repair round, then
+     `mocking.on_invalid` (`fallback` | `strict`). Cases and simulation scenarios may
+     select an alternate strategy (`mocking.strategy` is the default).
+   - Agent Skills (`SKILL.md` folders the agent embeds or loads on demand) are part of
+     the map (`skills[]`): the generator sees their instructions, scenarios list the
+     skills they exercise, `skill_misuse` becomes an applicable failure type, and
+     `coverage.json` counts cases per skill (`uncovered_skills`).
    - `instructions` (free text) and `feedback` entries reach every generation prompt;
      `coverage.per_tool_edge_cases` adds schema-derived edge cases per tool (missing /
      wrong / out-of-enum / boundary input, malformed tool output) from the tools'
@@ -73,7 +84,12 @@ when they want a verdict.
      (wording drift); unstable **evaluators** = same trajectory, a judge flips
      (judge variance, not an agent defect); `suspect_judge_comments` = judge
      rationales that look like placeholders — treat those scores as unverified.
-   - `coverage` — planned vs achieved cells; gaps are listed, never hidden.
+   - `coverage` — planned vs achieved cells; gaps are listed, never hidden; with
+     skills, `skills` / `uncovered_skills` say which skills no case exercises.
+   - `mocking` — the layers in force, the mock model and strategies, and the calls
+     answered per layer (`rule`, `llm`, `invalid`, `fallback`, `error`);
+     `stability.llm_mocked_unstable` lists unstable cases whose tool answers came from
+     the LLM engine — attribute those to the mock layer before the agent.
    - `analysis` — generator-written patterns and recommendations (`source:
      deterministic` means the LLM analysis failed and only facts are listed).
    - `problems[]` — everything that was dropped, degraded, or recovered.
@@ -94,5 +110,6 @@ when they want a verdict.
   point the user at `agent-map.json` and `dataset.json` for a spot check before they
   trust thresholds.
 - Costs: every case runs `runs.repeats` times and every judge evaluator calls the
-  judge model per case per repeat. Shrink `coverage.total_cases` or `runs.repeats`
-  for a first pass.
+  judge model per case per repeat; under `on_miss: llm` every unmatched tool call is
+  a mock-model call too. Shrink `coverage.total_cases` or `runs.repeats` for a first
+  pass.

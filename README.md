@@ -5,9 +5,13 @@ agents**, an **autonomous pipeline** that does the whole job from one config fil
 **Streamlit report UI** that visualises every artifact the pipeline produces.
 
 - parse the agent's source and compiled graph into a test surface (graph, tools,
-  prompts, intents, scenarios, failure modes, constraints) with cited evidence;
+  prompts, **Agent Skills** — SKILL.md folders embedded in prompts or loaded on demand —
+  intents, scenarios, failure modes, constraints) with cited evidence;
 - generate a coverage-driven golden dataset in OpenEvals/LangSmith-compatible JSON;
-- mock tools ADK-style so runs are deterministic;
+- mock tools in **two layers**: deterministic ADK-style rules first, then — under
+  `on_miss: llm` — an LLM mock engine that plays the backend from pre-generated
+  strategies, validates every answer against the tool's output schema and logs which
+  layer answered each call;
 - run cases repeatedly, score them with deterministic checks and LLM judges, aggregate
   pass rates vs thresholds, slices and stability, simulate multi-turn conversations,
   and write a report with a `pass | fail | incomplete` verdict;
@@ -140,9 +144,11 @@ src/evalbuilder/
   cli.py              typer CLI: dataset/agent-map/mock/review/discover/run/score/simulate/publish/check/pipeline/ui
   schemas.py          pydantic models: AgentMap, Dataset/Case, RunArtifact, Report (score report)
   artifacts.py        dataset load/save/validate, content-hash case IDs, review state machine
-  discover.py         AST + live introspection of a LangGraph module → agent-map
+  discover.py         AST + live introspection of a LangGraph module → agent-map (tools, prompts, skills)
+  skills.py           Agent Skills: SKILL.md loading, listing / inline prompts, the load_skill tool, map entries
   target.py           target contract: build_agent(model=None, tools=None) + TOOLS
-  mocking.py          ADK-style tool mocks (ordered rules, matchArgs subset, miss policy), verify
+  mocking.py          layer 1: ADK-style rules (ordered, matchArgs subset, miss policy), ledger, verify
+  mock_engine.py      layer 2: LLM mock engine — strategies, schema validation, repair, fallback/strict
   tool_schemas.py     tool args/output schemas (pydantic, args_schema, annotations), JSON-schema-subset
                       validator, sample/corrupt payloads, deterministic schema edge cases
   runner.py           run approved cases, capture trajectory / tool calls / node path
@@ -207,7 +213,8 @@ target:
 models:
   agent: claude-cli:claude-sonnet-5         # injected into build_agent(model=…); omit = target's own
   judge: claude-cli:claude-sonnet-5         # LLM-as-judge
-  generator: claude-cli:claude-sonnet-5     # authors intents/scenarios/cases/mocks/analysis
+  generator: claude-cli:claude-sonnet-5     # authors intents/scenarios/cases/mocks/strategies/analysis
+  mock: null                                # drives the LLM mock engine (mocking.on_miss: llm); null = generator
 constraints:
   - "Never call issue_refund before the customer explicitly confirms with yes."
 instructions: |                             # free-text general rules for the generator
@@ -217,7 +224,7 @@ coverage: {total_cases: 12, per_intent: {happy: 1, failure: 1}, per_failure_cate
 evaluators: [{type: expected_tools}, {type: contains}, {type: contract}, {type: correctness}]
 thresholds: {default: 0.7, metrics: {expected_tools: 0.8}, slice_min: 0.5, overall_pass: 0.75}
 runs: {repeats: 2}
-mocking: {required: true, on_miss: strict}
+mocking: {required: true, on_miss: strict, strategies: true, strategy: default, on_invalid: fallback, max_repairs: 1}
 review: {auto_approve: true, approved_by: "your name"}
 ```
 
@@ -229,13 +236,13 @@ Every key, default and semantic check is documented in
 | stage | depends on | what it does | on failure |
 |---|---|---|---|
 | preflight | – | config checks, target import, model readiness (`providers.provider_ready`) | blocking |
-| discover | preflight | AST + live introspection → `agent-map.json` (nodes, edges, tools, prompts) | blocking |
+| discover | preflight | AST + live introspection → `agent-map.json` (nodes, edges, tools with `kind`/`mockable`, prompts, skills) | blocking |
 | map | discover | generator authors intents, scenarios, failure scenarios, topics, derived constraints; taxonomy gates failure types | retry once; invalid entries dropped → `problems` |
-| mocks | discover | generator writes fixtures for **every** tool → `mock-rules.json` | generic fixture fallback |
+| mocks | discover | generator writes fixtures for every **mockable** tool → `mock-rules.json` (no wildcard under `on_miss: llm`), and the LLM mock strategies → `mock-strategies.json` | generic fixture / generic default strategy |
 | dataset | map, mocks | plan coverage cells → generator fills them → `dataset.json`, `coverage.json` | invalid cases dropped, gaps reported |
 | review | dataset | self-review rejects bad cases; approves the rest **only** with `review.auto_approve` | stops with `awaiting_review` |
-| verify | review | every expected tool call has a rule; every tool is mocked | blocking |
-| run | verify | `runs.repeats` executions of all approved cases → `results/run-<id>.json` | retry once |
+| verify | review | every expected tool call has a rule; every tool is mocked (under `llm`: misses are counted as engine-answered, a tool is covered by a rule or the default strategy) | blocking |
+| run | verify | `runs.repeats` executions of all approved cases → `results/run-<id>.json` (per-case `mock_calls` ledger, `mocking` totals) | retry once |
 | score | run | evaluators per run → `results/score-report-<id>.json` | judge errors recorded per metric |
 | aggregate | score | pass rates vs thresholds, slices, stability, failing cases → `aggregate.json` | – |
 | simulate | review (optional) | multi-turn scenarios with a simulated user → `simulation.json`; violations mined into pending cases | never blocks |
@@ -355,14 +362,15 @@ file can be identified by name (directories) or by content (uploads).
 
 | file | schema | stage | contents |
 |---|---|---|---|
-| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph (AST + live), tools + arg schemas, prompts, intents, scenarios, failure scenarios, constraints, topics |
+| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph (AST + live), tools + arg schemas (`kind`, `mockable`), prompts, skills, intents, scenarios (`skills`), failure scenarios, constraints, topics |
 | `applicable-failures.json` | `evalbuilder/applicable-failures/v1` | map | `failure_types`: failure type → gating evidence |
-| `mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules |
+| `mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules (layer 1) |
+| `mock-strategies.json` | `evalbuilder/mock-strategies/v1` | mocks | `world` + `strategies`: per strategy, each tool's behaviour, examples, fallback response (layer 2) |
 | `coverage-plan.json` | `evalbuilder/coverage-plan/v1` | dataset | planned cells and summary |
 | `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases (inputs, references, metadata, mocks), review + publication state |
-| `coverage.json` | `evalbuilder/coverage/v1` | dataset, review | planned vs covered, by kind, multi-turn, gaps |
+| `coverage.json` | `evalbuilder/coverage/v1` | dataset, review | planned vs covered, by kind, multi-turn, gaps, `skills` / `uncovered_skills` |
 | `evaluators.yaml` | – | score | evaluator specs |
-| `results/run-<id>.json` | `evalbuilder/run/v1` | run | per-case outputs, trajectory, tool calls, node path, errors |
+| `results/run-<id>.json` | `evalbuilder/run/v1` | run | per-case outputs, trajectory, tool calls, node path, errors, `mock_calls` ledger; `mocking` totals |
 | `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores/comments/errors/skips |
 | `aggregate.json` | `evalbuilder/aggregate/v1` | aggregate | pass rates vs thresholds, slices, weak slices, stability, failing cases, verdict |
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |
@@ -439,7 +447,7 @@ The skills are policy prose for Claude Code (`skills/agent-eval-*/SKILL.md`, exp
 |---|---|
 | `agent-eval-discover` | starting eval work / agent code changed — map the test surface into `eval/agent-map.json` |
 | `agent-eval-dataset` | generating or extending the golden dataset (cases land `pending` → human review) |
-| `agent-eval-mock` | cases depend on nondeterministic or side-effecting tools |
+| `agent-eval-mock` | cases depend on nondeterministic or side-effecting tools — rules (layer 1) and LLM mock strategies (layer 2) |
 | `agent-eval-run` | running/scoring experiments, publishing to LangSmith, simulating multi-turn scenarios |
 | `agent-eval-pipeline` | one config → full autonomous evaluation → `report.json` (+ reading it) |
 
@@ -447,14 +455,17 @@ The skills are policy prose for Claude Code (`skills/agent-eval-*/SKILL.md`, exp
 
 ```
 evalbuilder check [--target-module M] [--env-file F]      capability matrix incl. providers
-evalbuilder discover MODULE [--source F] [--eval-dir D]   AST + live introspection → agent-map.json
+evalbuilder discover MODULE [--source F] [--eval-dir D]   AST + live introspection → agent-map.json (tools, nodes, skills)
 evalbuilder agent-map update MAP [--intents|--scenarios|--failures|--topics|--constraints JSON|@file]
 evalbuilder dataset init|add|import|validate|list|gaps    dataset lifecycle (cases always land pending)
 evalbuilder review DATASET --approve ids | --reject ids   the only way a case becomes approved
-evalbuilder mock set|verify                               ADK-style rules; verify expected calls match
-evalbuilder run DATASET [--mock] [--model SPEC] [--on-miss real|fallback|strict] [--ids …] [--out D]
+evalbuilder mock set|verify                               layer-1 rules; verify expected calls match (llm: misses only counted)
+evalbuilder mock strategies DATASET [--set @f] [--model SPEC] [--on-miss P] [--case ID --strategy S]   layer 2
+evalbuilder mock validate DATASET --tool T --response JSON   validate a response against the tool's output schema
+evalbuilder mock try DATASET --tool T --args JSON [--strategy S] [--mock-model SPEC]   one call through both layers
+evalbuilder run DATASET [--mock] [--model SPEC] [--on-miss real|fallback|strict|llm] [--mock-model SPEC] [--strategy S] [--ids …] [--out D]
 evalbuilder score RUN --dataset D --evaluators evaluators.yaml [--out D]
-evalbuilder simulate DATASET --scenarios scenarios.yaml [--no-mine]
+evalbuilder simulate DATASET --scenarios scenarios.yaml [--no-mine] [--mock] [--on-miss P] [--mock-model SPEC]
 evalbuilder publish DATASET [--dataset-name N]            LangSmith, idempotent
 evalbuilder pipeline init|run|report                      the autonomous pipeline
 evalbuilder ui [DIR] [--port P] [--headless]              Streamlit report UI
@@ -493,20 +504,45 @@ never duplicates. The coverage grid is intent × topic × scenario × failure_mo
 
 ### Mocking
 
-ADK-eval semantics: ordered per-tool rule lists, first match wins, `matchArgs` is a
-subset match, `{}` is a wildcard. Miss policy `real` (call the real tool), `fallback`
-(dataset-level rule), `strict` (error — the pipeline default). Per-case rules override
-dataset-level fixtures; the pipeline appends dataset fixtures as fallback to every
-per-case list. Subagents exposed as tool functions are mocked like tools.
+Two layers (`docs/tool-mocking.md` is the full walkthrough). **Layer 1** — ADK-eval
+semantics: ordered per-tool rule lists, first match wins, `matchArgs` is a recursive
+subset match, `{}` is a wildcard; per-case rules override dataset-level fixtures, and
+the pipeline appends dataset fixtures as fallback to every per-case list. Miss policy
+`real` (call the real tool), `fallback` (a canned value), `strict` (error — the pipeline
+default), or `llm`. **Layer 2** — under `on_miss: llm`, an `LLMMockEngine` (one per
+case / scenario, model `mocks.llm.model`) plays the backend from the dataset's
+`mocks.strategies` (a shared world + per-strategy, per-tool behaviours, examples and a
+fallback response), validates every answer against the tool's `output_schema`, repairs
+once, and then falls back or errors (`on_invalid`). Cases and scenarios may select an
+alternate strategy (`metadata.mocks.strategy`, `mock_strategy`). Every mocked call lands
+in the run artifact's per-case `mock_calls` ledger, and the report attributes
+instability that coincides with LLM-mocked calls (`stability.llm_mocked_unstable`).
+Subagents exposed as tool functions are mocked like tools; skill loaders
+(`load_skill`) are never mocked.
+
+### Agent skills
+
+An agent that uses Agent Skills — `skills/<name>/SKILL.md` folders with frontmatter
+(`name`, `description`, `allowed-tools`), markdown instructions and `references/` —
+declares them with `evalbuilder.skills` (`load_skills`, `skills_inline_prompt` to embed a
+skill in a prompt, `skills_prompt` + `skill_loader_tool` for on-demand disclosure through
+a `load_skill` tool). Discovery reads the folders, renders the composed prompts,
+records `skills[]` in the agent map (instructions, references, `used_by` nodes) and
+marks loader tools `kind: skill_loader`; the generator sees the skills, every scenario
+lists the skills it exercises (`skill:<name>` evidence), `skill_misuse` becomes an
+applicable failure type, and coverage reports cases per skill. `incident_desk` embeds
+its skills inline; `support_bot` reads them on demand.
 
 ### Target contract
 
 The dataset's `target` names a module exposing
 `build_agent(model=None, tools=None) -> CompiledStateGraph` and a `TOOLS` list. The
 runner rebuilds the graph per case, wrapping `TOOLS` with the merged mock rules, and
-injects `model=` when a run specifies one. Three example targets ship in `examples/`
-(`weather_bot`, `travel_planner`, `support_bot`) with scripted chat models, so the test
-suite runs offline.
+injects `model=` when a run specifies one. Five example targets ship in `examples/`
+(`weather_bot`, `travel_planner`, `support_bot`, `incident_desk`, `loan_desk`) with
+scripted chat models, offline generators and offline mock models
+(`offline.py::mock_model`), so the test suite — including the LLM mock layer — runs
+offline.
 
 ## Evaluators
 
@@ -561,7 +597,9 @@ agent end to end (`-m "not slow"` skips the subprocess job test).
 | `generator model 'x:y' unavailable: provider 'x' not ready: set X_API_KEY; install …` | preflight readiness: export the key (or put it in `.env`) and `uv sync --extra <provider>` |
 | `claude CLI not on PATH` | install Claude Code and log in; or switch specs to an API provider |
 | verdict `incomplete`, stage `review` = `awaiting_review` | set `review.auto_approve: true` + `approved_by`, or `evalbuilder review … --approve`, then `--resume` |
-| `tools without mock rules: […]` | `mocking.required: true` needs a fixture per tool; the generator retries once, otherwise add rules with `evalbuilder mock set` |
+| `tools without mock rules: […]` | `mocking.required: true` needs a fixture per mockable tool (under `llm`: a rule or a default-strategy behaviour); the generator retries once, otherwise add rules with `evalbuilder mock set` / strategies with `evalbuilder mock strategies --set` |
+| `mock model 'x:y' unavailable` / `no mock model` | `mocking.on_miss: llm` needs a ready `models.mock` (or the generator); standalone: `--mock-model SPEC` or `evalbuilder mock strategies … --model SPEC` |
+| `N LLM mock response(s) failed output-schema validation` | the engine's answers did not conform after the repair round: check `mock_calls` in the run artifact; tighten the strategy's behaviour or examples, or set `on_invalid: strict` to surface them as errors |
 | `every case failed with infrastructure errors` | target import / model transport problem — the first error is in the message; fix and `--resume --from run` |
 | judge scores with comment `Test.` | placeholder judge rationale; listed under `stability.suspect_judge_comments`, retried once automatically |
 | `streamlit is not installed` | `uv sync --extra ui` |

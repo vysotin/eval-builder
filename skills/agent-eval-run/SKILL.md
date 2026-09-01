@@ -17,11 +17,17 @@ semantic success — only evaluators decide that.
    evalbuilder dataset validate eval/datasets/NAME.json
    ```
 
-2. Execute approved cases (mocks from the dataset are installed with `--mock`):
+2. Execute approved cases (mocks from the dataset are installed with `--mock`; the
+   miss policy defaults to the dataset's `mocks.on_miss`, and under `llm` the LLM mock
+   engine needs a model — `mocks.llm.model` or `--mock-model`):
 
    ```bash
    evalbuilder run eval/datasets/NAME.json --mock --out eval/results
+   evalbuilder run eval/datasets/NAME.json --mock --on-miss llm --mock-model claude-cli:claude-sonnet-5 --strategy degraded
    ```
+
+   The run artifact records `mocking` (policy, model, calls answered per layer) and each
+   case's `mock_calls` ledger (which layer answered, validation, repairs, fallbacks).
 
 3. Choose evaluators per `references/evaluator-selection.md`, write
    `eval/evaluators.yaml`, then score the run artifact:
@@ -35,8 +41,10 @@ semantic success — only evaluators decide that.
    hides it.
 
 5. Keep failure classes separate in your report: agent errors, infrastructure
-   errors, and evaluator errors (`report.cases[].errors`) are different facts.
-   **An evaluator problem must never be read as the agent behaving badly.**
+   errors (including an LLM mock the engine could not make schema-conformant),
+   evaluator errors (`report.cases[].errors`) and mock-layer facts (`mocking.calls`:
+   `invalid`, `fallback`, `error`) are different things.
+   **An evaluator or mock problem must never be read as the agent behaving badly.**
 
 ## Optional: LangSmith
 
@@ -54,6 +62,7 @@ write a scenarios YAML and run:
 
 ```bash
 evalbuilder simulate eval/datasets/NAME.json --scenarios eval/scenarios.yaml
+evalbuilder simulate eval/datasets/NAME.json --scenarios eval/scenarios.yaml --mock   # dataset mocks; a scenario's mock_strategy selects the engine's strategy
 ```
 
 Stopping at `max_turns` is a truncation, not a pass. Only expectation-violating

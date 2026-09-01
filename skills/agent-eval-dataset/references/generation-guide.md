@@ -37,3 +37,18 @@ Applied after drafting, preserving the answerability contract:
 - **constrained** — add a constraint the agent must honor ("...and keep it under $400").
 - **comparative** — require weighing two options ("cheaper: AA100 or the 6am UA?").
 - **multicontext** — require combining two facts/topics in one answer.
+
+
+## Skills and mock strategies
+
+- When the agent map lists `skills[]`, cases for scenarios that list a skill cite
+  `skill:<name>` in `metadata.evidence`. For on-demand skills (a `skill_loader` tool
+  such as `load_skill`) a correct agent reads the skill before acting, so put that call
+  first in `expected_tools` (args `{"name": "<skill>"}`). `skill_misuse` cases push the
+  agent to skip or bend a step the skill mandates; the contract states that the agent
+  still follows the skill.
+- When the dataset mocks with `on_miss: llm`, calls no rule answers are played by the
+  LLM mock engine from the dataset's strategies. Select an alternate strategy for a case
+  (`metadata.mocks.strategy`) only when its failure mode needs it (e.g. `degraded` for
+  `tool_error_handling`); keep `contains` literals to what a rule, a strategy example or
+  an explicit behaviour rule guarantees.

@@ -2,14 +2,14 @@
 
 How every skill, CLI command, module, the autonomous pipeline and the UI work — with the
 architectural decisions behind them, the reasoning for each choice, and the limitations
-you should expect. Written against the code as of 2026-08-30; file paths are relative
-to the repository root.
+you should expect. Written against the code as of 2026-08-30, extended 2026-09-01 (Agent Skills in the
+map, two-layer mocking); file paths are relative to the repository root.
 
 | document | covers |
 |---|---|
 | [01-skills.md](01-skills.md) | the five Claude Code skills (`agent-eval-discover`, `-dataset`, `-mock`, `-run`, `-pipeline`): what each one does, its workflow, its prohibitions, and why skills are prose while the CLI is code |
 | [02-cli.md](02-cli.md) | every `evalbuilder` command, its inputs/outputs, exit codes, and the module it delegates to |
-| [03-core-modules.md](03-core-modules.md) | the deterministic core: artifacts and schemas, discovery, tool schemas and edge cases, target contract and runner, mocking, evaluators, simulation, coverage, providers and the Claude CLI adapter, LangSmith I/O, offline testing helpers |
+| [03-core-modules.md](03-core-modules.md) | the deterministic core: artifacts and schemas, discovery (incl. Agent Skills), skills, tool schemas and edge cases, target contract and runner, two-layer mocking (rules + LLM mock engine), evaluators, simulation, coverage, providers and the Claude CLI adapter, LangSmith I/O, offline testing helpers |
 | [04-pipeline.md](04-pipeline.md) | the autonomous pipeline: config, stage engine, the 14 stages, the LLM generator and its validation loop, coverage planning, failure taxonomy gating, aggregation and stability, the report, the artifact naming convention, background jobs and the interactive setup helpers |
 | [05-ui.md](05-ui.md) | the Streamlit app: the project every page follows, the persistent *Pipeline setup* and *Run & review* pages, the report pages (Summary last), and how it is tested |
 | [06-decisions.md](06-decisions.md) | the architectural decision record: each important choice, the alternatives considered, and the reasoning |
@@ -51,10 +51,12 @@ Three ideas organise everything:
    `pending`; approval is an explicit, recorded human act (`evalbuilder review`, or
    `review.auto_approve` + `approved_by` in the pipeline config, or the UI's approver name).
 3. **Determinism where it is cheap, LLMs where they are needed.** Tool calls are mocked
-   ADK-style so runs are repeatable; deterministic evaluators run before judges; tool
-   schemas produce edge cases without an LLM; everything an LLM writes is validated by
-   the same code the CLI uses, with one repair round, and whatever is still invalid is
-   dropped and reported rather than silently kept.
+   ADK-style so runs are repeatable, and only where rules run out — and only when the
+   config opts in — an LLM mock engine plays the backend from pre-generated strategies,
+   validated against the tool's output schema and logged per call; deterministic
+   evaluators run before judges; tool schemas produce edge cases without an LLM;
+   everything an LLM writes is validated by the same code the CLI uses, with one repair
+   round, and whatever is still invalid is dropped and reported rather than silently kept.
 
 ## Where the reasoning came from
 

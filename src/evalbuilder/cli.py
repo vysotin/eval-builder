@@ -290,14 +290,27 @@ def mock_strategies(
     on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy: real|fallback|strict|llm"),
     on_invalid: Optional[str] = typer.Option(None, "--on-invalid", help="engine answer still invalid after repair: fallback|strict"),
     max_repairs: Optional[int] = typer.Option(None, "--max-repairs"),
+    case: Optional[str] = typer.Option(None, "--case", help="with --strategy: select the strategy for this case only (metadata.mocks.strategy)"),
 ) -> None:
-    """Show or update the dataset's LLM mock layer: strategies, model, policy."""
+    """Show or update the dataset's LLM mock layer: strategies, model, policy (or one case's strategy)."""
     from evalbuilder.mock_engine import validate_strategies
 
     ds = _load_ds(path)
     mocks = ds.mocks if isinstance(ds.mocks, dict) else {}
     mocks.setdefault("tools", {})
     changed: list[str] = []
+    if case is not None:
+        matches = [c for c in ds.cases if c.id == case]
+        if not matches:
+            typer.echo(f"unknown case id {case}", err=True)
+            raise typer.Exit(1)
+        if strategy is None:
+            typer.echo("--case needs --strategy ID", err=True)
+            raise typer.Exit(1)
+        matches[0].metadata.setdefault("mocks", {})["strategy"] = strategy
+        _save_valid(path, ds)
+        _emit({"path": str(path), "case": case, "strategy": strategy})
+        return
     if set_from is not None:
         data = _read_json_arg(set_from)
         if isinstance(data, dict) and "schema" in data:

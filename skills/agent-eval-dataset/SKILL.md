@@ -41,7 +41,11 @@ state machine; you own case content and quality.
      `expected_tools` with args, optionally a reference `trajectory`, a `contains`
      substring, and a `contract` sentence derived from the agent map's constraints;
    - `metadata` — the full coverage cell (`intent`, `topic`, `scenario`,
-     `failure_mode`), a `variant`, and `evidence` naming the agent-map entry it tests.
+     `failure_mode`), a `variant`, and `evidence` naming the agent-map entry it tests
+     (`skill:<name>` when the case exercises a skill; with an on-demand skill the
+     loader call — e.g. `load_skill` with the skill name — opens `expected_tools`).
+     Optionally `mocks.strategy` selects the LLM mock strategy the case runs under
+     (only when the dataset's policy is `llm`; see agent-eval-mock).
 
 4. Quality-filter your own cases: reject ambiguous or unanswerable inputs — rewrite
    rather than discard. Then apply input evolutions (concretizing, constrained,
@@ -49,8 +53,9 @@ state machine; you own case content and quality.
    unevolved synthetic dataset is trivially easy and will pass regardless of whether
    the agent is any good.
 
-5. Re-run `evalbuilder dataset gaps` and fill what is missing, then
-   `evalbuilder dataset validate` the result.
+5. Re-run `evalbuilder dataset gaps` and fill what is missing — including
+   `uncovered_skills` when the agent has skills — then `evalbuilder dataset validate`
+   the result.
 
 6. Present the pending cases to the user (id, input, expected result, coverage cell,
    source) and ask whether to review one-by-one or in a batch.

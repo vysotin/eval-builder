@@ -204,6 +204,12 @@ def test_cli_mock_strategies_sets_the_llm_layer_and_validates(tmp_path):
     # show without changes
     r = runner.invoke(app, ["mock", "strategies", str(ds_path)])
     assert r.exit_code == 0 and json.loads(r.stdout)["updated"] == []
+    # one case selects an alternate strategy (validated against the declared ids)
+    case_id = json.loads(ds_path.read_text())["cases"][0]["id"]
+    r = runner.invoke(app, ["mock", "strategies", str(ds_path), "--case", case_id, "--strategy", "stormy"])
+    assert r.exit_code == 0 and json.loads(ds_path.read_text())["cases"][0]["metadata"]["mocks"]["strategy"] == "stormy"
+    r = runner.invoke(app, ["mock", "strategies", str(ds_path), "--case", case_id, "--strategy", "nope"])
+    assert r.exit_code == 1 and "unknown mock strategy 'nope'" in r.stdout
     # invalid strategies are refused with the schema problems
     bad = {"world": "w", "strategies": {"default": {"tools": {"get_weather": {"behavior": "x", "examples": [{"args": {"city": 5}, "response": {}}]}, "nope": {"behavior": "y"}}}}}
     r = runner.invoke(app, ["mock", "strategies", str(ds_path), "--set", json.dumps(bad)])

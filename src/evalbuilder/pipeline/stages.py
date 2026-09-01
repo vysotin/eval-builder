@@ -20,7 +20,7 @@ from evalbuilder import target as target_mod
 from evalbuilder import tool_schemas
 from evalbuilder.config import Settings, capability_check, provider_ready
 from evalbuilder.evaluators import is_judge_spec, score_run
-from evalbuilder.mocking import ledger_totals, merge_mock_rules, verify_dataset, verify_summary, with_fallback, wrap_tools
+from evalbuilder.mocking import merge_mock_rules, verify_summary, with_fallback, wrap_tools
 from evalbuilder.pipeline import generator as gen_mod
 from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
 from evalbuilder.pipeline.config import PipelineConfig

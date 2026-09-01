@@ -58,6 +58,17 @@ Two complementary views of a LangGraph module:
    `add_conditional_edges` (targets from the dict mapping). When an LLM node has no
    resolvable tool list, the tools mentioned in its prompt are linked
    (`tools_source: prompt`) — dynamically built tool lists are opaque to the AST.
+   **Skills**: skill folders are resolved from `load_skills(...)` calls, `SKILLS_DIR`-style
+   constants (`"skills"`, `Path(__file__).parent / "skills"`, `Path(__file__).with_name(..)`,
+   `os.path.join(os.path.dirname(__file__), ..)`) and `skills=` factory keywords, loaded
+   from disk (never executed) and recorded under `skills[]`; **composed prompts**
+   (`BASE + skills_inline_prompt(SKILLS, "x")`, f-strings, `x if c else y`, string
+   methods, module or factory-local assignments) are rendered — the skill helpers
+   from the loaded skills — so the recorded prompt is what the model sees, and each
+   node lists the skills it embeds or names (`skills`, `skills_source`: `inline` |
+   `listing` | `prompt`); `skill_loader_tool(...)` assignments and loader-named `@tool`
+   functions become tools of `kind: skill_loader`, `mockable: false`. Tools are ordered
+   as the module's `TOOLS` list orders them.
 2. **Live introspection** (`discover_live`) — imports the module, calls the factory,
    reads `graph.get_graph()` nodes and edges. Failures are recorded as `graph.live.error`,
    never raised: a map without a live view is still useful.
@@ -74,9 +85,36 @@ listed separately with the same id (an LLM node created by `create_agent` and th
 **Limitations.** Only the patterns above are recognised: graphs built through helper
 functions, factories that take config objects, `Send`-based fan-out, subgraphs added
 via `add_node(name, compiled_subgraph)` (they appear as opaque graph nodes), prompts
-built with f-strings or templates, and tool lists computed at runtime are partially or
-not captured. Node kinds are only `llm` and `graph-node` (no router/tool-node
+built through templates or functions other than the skill helpers, and tool lists
+computed at runtime are partially or not captured; a skills folder computed at runtime
+(env vars, `glob`) is not found by the AST — the live `SKILLS` attribute still is. Node kinds are only `llm` and `graph-node` (no router/tool-node
 classification from the AST beyond conditional edges).
+
+## Agent skills (`skills.py`)
+
+Agent Skills are `SKILL.md` folders (YAML frontmatter `name`, `description`,
+`allowed-tools`, `metadata`; a markdown body of instructions; optional `references/`
+and `scripts/`). The module is pure data plumbing:
+
+- `load_skills(paths)` → `Skill(name, description, path, dir, body, metadata,
+  references[{path, title, chars, excerpt}], scripts)` for a skills root, one folder or
+  one file; a missing `name` defaults to the folder name.
+- `skills_inline_prompt(skills, *names)` embeds bodies into a prompt (`## Skill: <name>`
+  sections); `skills_prompt(skills)` lists names + descriptions for on-demand use;
+  `skill_loader_tool(skills, name="load_skill")` builds the tool that returns a skill's
+  body and reference list, tagged `metadata.kind = "skill_loader"`;
+  `is_skill_loader(tool)` recognises that tag or a loader-like name
+  (`load_skill`, `read_skill`, `get_skill`, `use_skill`).
+- `describe_skill(skill, tool_names)` → the agent-map entry (`prompt` = body,
+  `allowed_tools`, `tools_mentioned`, `references`, `used_by`, `evidence:
+  ["skill:<name>"]`).
+
+**Decision.** Skills are first-class map entries rather than prompt text, because the
+generator must know *which* behavioural rules come from a skill (to test `skill_misuse`
+and to count coverage per skill) and because a loader tool must be recognised as
+local and deterministic — never mocked. The examples use the module's helpers, but
+discovery does not require them: any `SKILLS_DIR`-style constant, `load_skills(...)`
+call, `skills=` factory keyword or loader-named `@tool` is recognised.
 
 ## Tool schemas and edge cases (`tool_schemas.py`)
 
@@ -90,7 +128,8 @@ Everything here is pure Python — no LLM:
   `title` is kept because it is the model name). `{}` when unknown.
 - `describe_tool(tool)` → name, description, both schemas, `models` (names from
   `$defs` + titled roots), `side_effecting` (docstring regex: "side-effect", "only call
-  after", "after the user confirms"), `edge_cases`.
+  after", "after the user confirms"), `kind` (`tool` | `skill_loader`), `mockable`
+  (false for skill loaders, which also get no edge cases), `edge_cases`.
 - `validate(value, schema, partial=False)` — a JSON-schema *subset*: `type`
   (int is not bool), `properties`/`required`/`additionalProperties`, `items`,
   `min/maxItems`, `enum`/`const`, `anyOf`/`oneOf`/`allOf`, `$ref → $defs`, nullable
@@ -154,23 +193,53 @@ group only (`max_workers` > 1 runs intent groups in threads, cases within one in
 stay sequential, and an optional `progress` callback reports each completed case);
 the graph must accept `{"messages": [...]}` as input.
 
-## Mocking (`mocking.py`)
+## Mocking (`mocking.py`, `mock_engine.py`)
 
-`match_rule(rules, args)` returns the first rule whose `matchArgs` is a recursive
-subset of the call args (`args_subset`; `{}` matches anything). `wrap_tool` builds a
-`StructuredTool` with the same name/description/`args_schema` whose function answers
-from the rules and otherwise applies the miss policy (`real` → invoke the original,
-`fallback` → a fixed value, `strict` → `MockMissError`). `wrap_tools` wraps only tools
-that have rules. `merge_mock_rules` overrides per tool name; `with_fallback` appends
-dataset-level rules after per-case rules unless the case already ends with a wildcard
-(so a per-case error injection for one argument set keeps the tool answerable for
-other calls). `verify_dataset` reports `expected_tools` calls that no rule answers.
+Two layers behind one wrapper. `docs/tool-mocking.md` is the full walkthrough.
 
-**Limitations.** Responses are static values (arg-dependent responses = several
-rules); no call counting or sequence-dependent responses; only tool calls are
-intercepted — nodes that call external services directly (not through tools) are not
-mocked; the wrapped tool loses tool-level settings such as `handle_tool_error`
-(mocks never raise, so this only matters for the `real` miss policy).
+**Layer 1 — rules** (`mocking.py`). `args_subset` (recursive subset), `match_index` /
+`match_rule` (first match wins, `{}` wildcard), `wrap_tool(tool, rules, on_miss,
+fallback, engine=, ledger=)` → a `StructuredTool` with the original name /
+description / `args_schema` whose function answers from the rules (responses deep-copied
+per call), else by policy: `real` (invoke the tool), `fallback` (a canned value),
+`strict` (`MockMissError`), `llm` (the engine). `wrap_tools` wraps the tools that have
+rules and — with an engine — every mockable tool; `mockable(tool)` excludes skill
+loaders. `merge_mock_rules` (case list replaces dataset list per tool), `with_fallback`
+(case rules + dataset rules unless the case ends with a wildcard), `verify_dataset`
+(expected calls without a rule) and `verify_summary` (the same read through the
+policy: under `llm` misses are informational `llm_answered`). Every answered call can
+be appended to a ledger (`layer`, args, response, rule index or the engine's record);
+`ledger_totals` sums layers plus `invalid`.
+
+**Layer 2 — the LLM mock engine** (`mock_engine.py`). `LLMMockEngine(model,
+strategies, tool_specs, strategy, on_invalid, max_repairs)` — one per conversation.
+`respond(tool, args)` builds one prompt (world, strategy description and the tool's
+behaviour, examples, tool definition with both schemas, the conversation's previous
+calls, the call in a `TOOL CALL:` block), asks for structured output (the tool's object
+`output_schema` retitled `mock_response`, or a `response_json` envelope), validates with
+`tool_schemas.validate`, re-asks once with the problems, then returns the strategy's
+`fallback_response` (`on_invalid: fallback`) or raises `MockEngineError` (`strict`; the
+runner classifies it as an infrastructure error). Strategy lookup: the selected
+strategy's entry → `default`'s → a generic behaviour from the tool description.
+`validate_strategies` checks a strategies document against the tools' schemas;
+`call_in_prompt` parses the call block (scripted mock models in the examples use it to
+answer offline).
+
+**Decisions.** Rules stay data in the dataset and answer first, so a deterministic
+fixture is never overridden by a model. The engine gets *strategies*, not free rein:
+behaviour text, examples and a validated fallback per tool, generated once in the
+`mocks` stage and embedded in the dataset — the same plan-plus-model shape ADK uses
+for its user simulator, applied to tools. Validation is the tool's own `output_schema`
+through the same validator the fixtures pass; an unfixable answer is a mock problem,
+never an agent failure. The ledger exists so the stability report can attribute
+instability to LLM-mocked calls.
+
+**Limitations.** Static responses per rule (no call counting or sequences); tool calls
+only (nodes calling services directly are not intercepted); wrapped tools drop
+tool-level settings such as `handle_tool_error`; the engine's history is per
+conversation, not per dataset (two cases can get different answers for the same
+unknown id — by design, and visible in the ledger); prompt size grows with the
+strategies document and the tool schemas.
 
 ## Evaluators (`evaluators.py`)
 

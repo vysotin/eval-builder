@@ -23,6 +23,7 @@ yet built.
 | Edge cases from top-level arguments only | Constraints inside nested models are not expanded into edges; add a top-level typed argument or author the case by hand. |
 | JSON-schema subset | No `format` semantics, `if/then`, `dependentRequired`, `uniqueItems`, external `$ref`; `example()` cannot satisfy arbitrary regex patterns (falls back to a plain string). |
 | Side effects by docstring | `side_effecting` is a regex over the docstring ("side-effect", "only call after", "after the user confirms"); undocumented side effects are not detected. |
+| Skills by convention | Skill folders are found through `load_skills(...)`, `SKILLS_DIR`-style constants, `skills=` keywords and the live `SKILLS` attribute; a folder computed at runtime is missed. Composed prompts are rendered for `+`, f-strings, conditionals, string methods and the skill helpers only. Skill *execution* (`scripts/`) is out of scope: the map records the scripts but never runs them. |
 
 ## Mocking
 
@@ -31,6 +32,9 @@ yet built.
 | Static responses | Arg-dependent or sequence-dependent responses are expressed as several rules; no call counting. By design. |
 | Tool calls only | Nodes that call external services directly are not intercepted — route external calls through tools. By design (decision 6). |
 | Wrapped tools drop tool-level settings | `handle_tool_error` and similar attributes are not carried onto the mock wrapper (mocks never raise, so this matters only for the `real` miss policy). |
+| LLM mocks are not deterministic | Under `on_miss: llm` the engine's answers vary between repeats; the ledger and `stability.llm_mocked_unstable` attribute the variance, they do not remove it. Consistency is per conversation (a case or a scenario), not per dataset. |
+| Engine validation is the output schema only | A tool without a return annotation (`-> dict`) is validated as "an object"; behaviour text is followed by the model, not enforced. Write examples and a `fallback_response` for such tools, or add a return model. |
+| Cost | Every unmatched tool call is a mock-model call (plus one repair at most); the report's `mocking.calls` shows how many. |
 
 ## Evaluation
 

@@ -119,3 +119,19 @@ def test_cli_agent_map_update_rejects_missing_evidence(tmp_path):
     )
     assert r.exit_code == 1
     assert "evidence" in r.output
+
+
+
+def test_coverage_gaps_report_skill_coverage():
+    from evalbuilder.artifacts import add_case
+    from evalbuilder.schemas import Dataset, Target
+
+    amap = _map()
+    amap.skills = [{"name": "refund-policy"}, {"name": "product-troubleshooting"}]
+    amap.scenarios[0]["skills"] = ["refund-policy"]
+    ds = Dataset(name="d", dataset_type="final_response", target=Target(module="m"))
+    add_case(ds, {"inputs": {"q": 1}, "metadata": {"intent": amap.scenarios[0]["intent"], "scenario": amap.scenarios[0]["id"]}})
+    add_case(ds, {"inputs": {"q": 2}, "reference_outputs": {"expected_tools": [{"name": "load_skill", "args": {"name": "product-troubleshooting"}}]}})
+    report = coverage_gaps(ds, amap)
+    assert report["skills"] == {"refund-policy": {"cases": 1}, "product-troubleshooting": {"cases": 1}} and report["uncovered_skills"] == []
+    assert "skills" not in coverage_gaps(ds, _map())

@@ -204,3 +204,51 @@ tracked so changes made by the review page or a job are reloaded instead of bein
 overwritten on the next save. The *Overview* page became *Summary* and moved after
 *Analysis*: it summarises a finished evaluation rather than introducing the app, whose
 entry point is now the setup page.
+
+
+## 19. Agent Skills are first-class entries of the agent map (2026-09-01)
+
+**Decision.** When the target agent uses Agent Skills (`SKILL.md` folders embedded in
+prompts or read on demand through a loader tool), discovery loads them from disk,
+renders the composed prompts so the recorded prompt is what the model sees, records
+`skills[]` (instructions, references, allowed tools, the nodes that use them) and marks
+loader tools `kind: skill_loader`, `mockable: false`. Downstream, the generator sees the
+skills, every scenario lists the skills it exercises (`skill:<name>` evidence),
+`skill_misuse` is a structurally gated failure type, coverage counts cases per skill,
+and the loader is never mocked. The examples show both disclosure styles
+(`incident_desk` inline, `support_bot` on demand).
+
+**Alternatives.** Treating skill text as ordinary prompt text — rejected: the generator
+could not tell which rules come from a skill (so it could not test skill misuse or
+count coverage per skill), and a `load_skill` tool would have been mocked like a
+backend call, feeding the agent invented instructions.
+
+**Consequence.** Discovery renders prompt expressions (`+`, f-strings, conditionals,
+the skill helpers) instead of accepting only string constants; the AST reads skill
+files but never executes anything.
+
+## 20. LLM mocking as a second layer behind deterministic rules, driven by strategies (2026-09-01)
+
+**Decision.** Rules answer first; only under `on_miss: llm` does a miss go to an
+`LLMMockEngine` that plays the backend from a pre-generated strategies document (a
+shared world + per-tool behaviour, examples and a validated fallback), validates every
+answer against the tool's `output_schema`, repairs once and then falls back or errors
+(`on_invalid`). Strategies are generated in the `mocks` stage, embedded in the dataset
+and selectable per case and per simulation scenario; the model is named in config
+(`models.mock`, default the generator); every mocked call is logged and the report
+attributes instability that coincides with LLM-mocked calls to the mock layer.
+
+**Alternatives.** (a) LLM-only mocking — rejected: fixtures for the known entities are
+cheaper, deterministic and verifiable, and the review gate depends on them. (b) Letting
+the engine improvise without strategies — rejected: answers would drift between cases
+and from the fixtures; the strategy is the script that keeps the world consistent, the
+same plan-plus-model shape ADK uses for its user simulator (ADK itself does not inject
+mock tool responses). (c) Making `llm` the default — rejected: stability tracking is the
+pipeline's main signal and needs deterministic tool answers; `strict` stays the default
+and `llm` is an explicit opt-in whose cost (a model call per unmatched tool call) and
+non-determinism are visible in the report.
+
+**Consequence.** Under `llm` the mocks stage leaves the wildcard defaults out (the long
+tail must reach the engine), verification counts misses instead of failing on them, an
+unfixable engine answer is an infrastructure error, and the run artifact carries a
+per-case ledger the UI shows.

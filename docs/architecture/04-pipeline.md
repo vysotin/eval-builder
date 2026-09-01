@@ -24,11 +24,13 @@ setup.py       interactive setup helpers (target discovery/preview, config from 
 `PipelineConfig` is a strict pydantic model (`extra="forbid"`) with these sections and
 defaults: `target{source, module, factory=build_agent, root_node}`, `models{agent=None,
 judge, generator}` (default `claude-cli:claude-sonnet-5`), `constraints[]`,
-`instructions` (free text), `feedback[{at, note, from_stage}]`, `coverage{total_cases=20,
+`instructions` (free text), `feedback[{at, note, from_stage}]`, `models.mock` (the
+LLM mock engine's model, default the generator), `coverage{total_cases=20,
 per_intent{happy=2, failure=1}, per_failure_category=1, out_of_intent=2,
 multi_turn_share=0.15, per_tool_edge_cases=2}`, `evaluators` (default expected_tools,
 contains, contract, correctness), `thresholds{default=0.8, metrics{}, slice_min=0.5,
-overall_pass=0.8}`, `runs{repeats=3, parallel_intents=4, parallel_scoring=4, parallel_simulations=4}`, `mocking{required=true, on_miss=strict}`,
+overall_pass=0.8}`, `runs{repeats=3, parallel_intents=4, parallel_scoring=4, parallel_simulations=4}`, `mocking{required=true,
+on_miss=strict|llm|fallback|real, strategies=true, strategy=default, on_invalid=fallback|strict, max_repairs=1}`,
 `stages{skip[], max_retries=1, simulate=true, publish=auto}`, `review{auto_approve=false,
 approved_by, note}`, `output{dir}`, `langsmith{dataset_name}`.
 
@@ -67,25 +69,26 @@ reported as a failure.
 
 | stage | deps | does | recovery |
 |---|---|---|---|
-| preflight | – | `config.problems()`, `capability_check` (target importable), `provider_ready` for agent/generator (blocking) and judge (degraded → problem) | none |
-| discover | preflight | AST discovery + live graph + `tool_schemas.describe_tool` for every live tool (schemas, models, side effects, edge cases; cleared when `per_tool_edge_cases: 0`) → `agent-map.json` | none |
-| map | discover | `taxonomy.applicable_failure_types` → `applicable-failures.json`; generator authors intents, scenarios, failure scenarios, topics, derived constraints; `_validate_map` drops invalid entries (bad slugs, unknown intents, non-applicable failure types, missing evidence) → problems; constraints merged with the config's | one repair prompt; retry once |
-| mocks | discover | generator writes a default fixture + variants per tool; responses validated against `output_schema` (bad defaults replaced by a schema-conformant sample, bad variants dropped, all reported); every tool ends with a wildcard rule → `mock-rules.json`; fails when `mocking.required` and a tool has no rules | generic/schema fixtures |
-| dataset | map, mocks | `planning.plan_cells` → `coverage-plan.json`; generator fills cells in batches of 6 with one re-request for missing cells; each case normalised via `artifacts.add_case` (duplicates dropped, reported); per-case mock overrides get dataset fallbacks; `malformed_output` cases get a corrupted fixture injected by code → `dataset.json`, `coverage.json` | retry once |
-| review | dataset | generator self-review rejects unanswerable / mismatched cases; `verify_dataset` rejects cases whose expected calls no rule answers; approves the rest **only with** `review.auto_approve` (note records `approved_by`); no pending cases + approved cases present → `already_reviewed` | without auto_approve → `awaiting_review` (pipeline stops, report still written) |
-| verify | review | approved cases' expected calls all mocked; every `TOOLS` entry mocked when required; at least one approved case | none (blocking) |
-| run | verify | `runs.repeats` × `run_dataset(mocked=True, on_miss, model=agent, max_workers=runs.parallel_intents)` — intent groups run concurrently within each repeat (cases inside one intent stay sequential, results keep dataset order); live progress (current repeat, per-case completions, per-intent tallies) is written to `run-progress.json` after every case; a run where every case is an infrastructure error fails the stage | retry once |
+| preflight | – | `config.problems()`, `capability_check` (target importable), `provider_ready` for agent/generator/mock (blocking; mock only under `on_miss: llm`) and judge (degraded → problem) | none |
+| discover | preflight | AST discovery (tools, prompts, skills) + live graph + `tool_schemas.describe_tool` for every live tool (schemas, models, side effects, kind/mockable, edge cases; cleared when `per_tool_edge_cases: 0`) + live `SKILLS` merged by name → `agent-map.json` | none |
+| map | discover | `taxonomy.applicable_failure_types` (incl. `skill_misuse` when the map has skills) → `applicable-failures.json`; generator authors intents, scenarios (with the `skills` they exercise), failure scenarios, topics, derived constraints; `_validate_map` drops invalid entries (bad slugs, unknown intents, non-applicable failure types, missing evidence, unknown skill names) → problems; a skill no scenario exercises is reported; constraints merged with the config's | one repair prompt; retry once |
+| mocks | discover | generator writes a default fixture + variants per **mockable** tool; responses validated against `output_schema` (bad defaults replaced by a schema-conformant sample, bad variants dropped, all reported); every tool ends with a wildcard rule — except under `on_miss: llm` → `mock-rules.json`; then (`mocking.strategies`, always under `llm`) the strategies document → `mock-strategies.json` (validated: unknown tools dropped, invalid fallbacks replaced, invalid examples dropped, a `default` entry synthesised for every tool); fails when `mocking.required` and a tool has neither rules nor (under `llm`) a default-strategy behaviour | generic/schema fixtures, generic default strategy |
+| dataset | map, mocks | `planning.plan_cells` → `coverage-plan.json`; the dataset's `mocks` block embeds rules, policy, `llm` settings and strategies; generator fills cells in batches of 6 with one re-request for missing cells (it sees the strategies and may put a case under one — `mock_strategy`, validated); each case normalised via `artifacts.add_case` (duplicates dropped, reported); per-case mock overrides get dataset fallbacks; `malformed_output` cases get a corrupted fixture injected by code → `dataset.json`, `coverage.json` (with per-skill counts) | retry once |
+| review | dataset | generator self-review rejects unanswerable / mismatched cases; `verify_summary` rejects cases whose expected calls no rule answers (not under `llm`); approves the rest **only with** `review.auto_approve` (note records `approved_by`); no pending cases + approved cases present → `already_reviewed` | without auto_approve → `awaiting_review` (pipeline stops, report still written) |
+| verify | review | approved cases' expected calls all mocked (under `llm`: counted as `llm_answered_calls`); every mockable `TOOLS` entry covered by a rule or, under `llm`, the default strategy; an `llm` dataset names a mock model; at least one approved case | none (blocking) |
+| run | verify | `runs.repeats` × `run_dataset(mocked=True, on_miss, model=agent, mock_model, strategy, max_workers=runs.parallel_intents)` — intent groups run concurrently within each repeat (cases inside one intent stay sequential, results keep dataset order); under `llm` one `LLMMockEngine` per case (the case's strategy, else the config's); live progress (current repeat, per-case completions, per-intent tallies, mock-call totals) is written to `run-progress.json` after every case; per-layer totals land in the stage details (`mocking.calls`) and invalid engine answers become a problem; a run where every case is an infrastructure error fails the stage | retry once |
 | score | run | `evaluators.yaml` written; `score_run(max_workers=runs.parallel_scoring)` per run — case runs scored concurrently in a thread pool, rows/metrics/slices aggregated in run order so the report is identical to a sequential pass → `results/score-report-<id>.json`; dead evaluators (all errors) reported; no scores at all → failure | retry once |
 | aggregate | score | `aggregate.aggregate` → `aggregate.json` | none |
-| simulate | review (optional) | generator writes scenarios → `scenarios.yaml`; runs them with mocked tools and the generator model as the simulated user — scenarios run concurrently (`runs.parallel_simulations`, a fresh graph per scenario, results keep scenario order) → `simulation.json`; violations mined into pending cases | never blocks the verdict |
+| simulate | review (optional) | generator writes scenarios (optionally `mock_strategy`) → `scenarios.yaml`; runs them with mocked tools (under `llm` an engine per scenario honouring its strategy; results carry `mock_calls`) and the generator model as the simulated user — scenarios run concurrently (`runs.parallel_simulations`, a fresh graph per scenario, results keep scenario order) → `simulation.json`; violations mined into pending cases | never blocks the verdict |
 | publish | review (optional) | LangSmith publish (`auto` = only with a key) | skipped |
 | analyze | aggregate (optional) | generator writes the analysis from a compact summary; falls back to a deterministic facts-only analysis → `analysis.json` | deterministic fallback |
 | report | always | `report.json` (`evalbuilder/pipeline-report/v1`) | – |
 
 `PipelineContext` lazily reloads every artifact from disk (by kind, with legacy names)
 so a resumed run sees the same data as a fresh one; `problems` live in `state.data`
-so they survive resumes. The generator model and the agent model are created once per
-run (`model_from_spec`).
+so they survive resumes. The generator model, the agent model and the mock model are
+created once per run (`model_from_spec`; the mock model reuses the generator's object
+when the specs match).
 
 ## The generator (`generator.py`)
 

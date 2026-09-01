@@ -12,7 +12,7 @@ of artifact JSON.
 | command | what it does | module | exit 1 when |
 |---|---|---|---|
 | `check [--target-module M] [--env-file F]` | capability matrix `{ready, degraded, blocking, capabilities, providers, models}` | `config.capability_check`, `providers.providers_status` | – |
-| `discover MODULE [--source F] [--eval-dir D]` | AST + live introspection → `eval/agent-map.json`; prints tools, nodes, live graph, `decisions_needed` | `discover.discover_from_source`, `discover.discover_live` | module source cannot be located |
+| `discover MODULE [--source F] [--eval-dir D]` | AST + live introspection → `eval/agent-map.json`; prints tools, skills, nodes, live graph, `decisions_needed` | `discover.discover_from_source`, `discover.discover_live` | module source cannot be located |
 | `agent-map update PATH [--intents J] [--scenarios J] [--failures J] [--topics J] [--constraints J]` | replace sections of the map after shape checks (`id` + `evidence` per entry; `failure_type` + `evidence` for failures; string lists for topics/constraints) | `schemas.AgentMap` | any entry lacks a required key |
 | `dataset init PATH --name N [--type final_response\|trajectory] --target MODULE[:FACTORY]` | empty dataset with the target contract recorded | `schemas.Dataset` | – |
 | `dataset add PATH --case JSON\|@file` | normalise one case (defaults for the coverage cell, content-hash id, review reset to `pending`) and append | `artifacts.add_case` | duplicate id, invalid dataset |
@@ -22,10 +22,13 @@ of artifact JSON.
 | `dataset gaps PATH --agent-map M [--target-per-cell N]` | required cells vs present cases | `coverage.coverage_gaps` | – |
 | `review PATH --approve IDS \| --reject IDS [--note …]` | record a human decision on specific case ids (exactly one of approve/reject) | `artifacts.set_review` | unknown ids, both/neither flag |
 | `mock set PATH --tool T --rules JSON [--case ID]` | set the ordered rule list (dataset-level or per-case) | dataset `mocks` / `metadata.mocks` | unknown case, invalid rules |
-| `mock verify PATH` | every `expected_tools` call in mocked cases matches a rule | `mocking.verify_dataset` | any miss |
-| `run PATH [--mock/--no-mock] [--ids …] [--out D] [--model SPEC] [--on-miss real\|fallback\|strict]` | execute approved cases, write `run-<id>.json` | `runner.run_dataset` | pending/rejected ids selected, no approved cases |
+| `mock verify PATH` | every `expected_tools` call in mocked cases matches a rule; under `on_miss: llm` misses are listed as `llm_answered` (informational) | `mocking.verify_summary` | any miss (non-llm policies) |
+| `mock strategies PATH [--set JSON\|@file] [--model SPEC] [--on-miss P] [--strategy S] [--on-invalid P] [--max-repairs N] [--case ID --strategy S]` | show / set the LLM mock layer: strategies (validated against the tools' schemas), model, policy; or one case's strategy | `mock_engine.validate_strategies`, dataset `mocks` | invalid strategies, unknown case |
+| `mock validate PATH --tool T --response JSON\|@file` | validate a response against the tool's declared output schema (the engine's validator) | `tool_schemas.validate` | non-conforming, unknown tool |
+| `mock try PATH --tool T --args JSON [--strategy S] [--mock-model SPEC] [--on-miss P] [--case ID]` | answer one call through both layers; prints the layer, response, validation, repairs | `mocking.wrap_tools`, `runner.build_engine` | engine error |
+| `run PATH [--mock/--no-mock] [--ids …] [--out D] [--model SPEC] [--on-miss real\|fallback\|strict\|llm] [--mock-model SPEC] [--strategy S]` | execute approved cases, write `run-<id>.json` (per-case `mock_calls`, `mocking` totals); the policy defaults to the dataset's | `runner.run_dataset` | pending/rejected ids selected, no approved cases, `llm` without a mock model |
 | `score RUN --dataset PATH --evaluators evaluators.yaml [--out D]` | score a stored run with the configured evaluators, write `score-report-<id>.json` | `evaluators.score_run` | no evaluators |
-| `simulate PATH --scenarios F [--out D] [--mine/--no-mine]` | multi-turn simulations; violations mined as pending cases | `simulate.*` | invalid scenario file |
+| `simulate PATH --scenarios F [--out D] [--mine/--no-mine] [--mock] [--on-miss P] [--mock-model SPEC]` | multi-turn simulations; violations mined as pending cases | `simulate.*` | invalid scenario file |
 | `publish PATH [--dataset-name N] [--env-file F]` | LangSmith publish of approved cases, read-back verified | `langsmith_io.publish_approved` | no key, no approved cases, read-back mismatch |
 | `pipeline init PATH --name N --source F --module M [--force]` | commented starter config | `pipeline.config.template` | file exists |
 | `pipeline run CONFIG [--resume] [--from STAGE] [--until STAGE] [--quiet] [--env-file F]` | the autonomous pipeline; exit 1 unless verdict `pass` (exit 0 when stopped deliberately with `--until`) | `pipeline.report.run_pipeline` | verdict ≠ pass; exit 2 on a bad config |

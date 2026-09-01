@@ -37,11 +37,18 @@ def _cell_key(cell: dict) -> str:
 
 
 def coverage_gaps(ds: Dataset, agent_map: AgentMap, target_per_cell: int = 1) -> dict:
+    from evalbuilder.pipeline.planning import skills_of_case
+
     required = required_cells(agent_map)
     have: dict[str, int] = {}
+    skill_names = [s.get("name") for s in (getattr(agent_map, "skills", None) or []) if s.get("name")]
+    scenario_skills = {s.get("id"): list(s.get("skills") or []) for s in agent_map.scenarios}
+    per_skill = {name: 0 for name in skill_names}
     for case in ds.cases:
         key = _cell_key(case.metadata)
         have[key] = have.get(key, 0) + 1
+        for name in skills_of_case(case.model_dump(), scenario_skills, skill_names):
+            per_skill[name] += 1
 
     gaps: list[dict] = []
     covered = 0
@@ -52,9 +59,13 @@ def coverage_gaps(ds: Dataset, agent_map: AgentMap, target_per_cell: int = 1) ->
         else:
             gaps.append({**cell, "missing": target_per_cell - count})
 
-    return {
+    out = {
         "required_cells": len(required),
         "covered_cells": covered,
         "target_per_cell": target_per_cell,
         "gaps": gaps,
     }
+    if skill_names:
+        out["skills"] = {name: {"cases": n} for name, n in per_skill.items()}
+        out["uncovered_skills"] = [name for name, n in per_skill.items() if n == 0]
+    return out

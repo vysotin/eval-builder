@@ -160,6 +160,12 @@ def _open_setup(page, app_url: str) -> None:
     expect(sidebar.get_by_text("No project selected")).to_be_visible()
 
 
+def _expand(page, text: str) -> None:
+    """Open a Streamlit expander (a <details> element) by its summary text."""
+    page.locator("details").filter(has_text=text).first.locator("summary").click()
+    _settle(page)
+
+
 def _nav(page, title: str, anchor: str) -> None:
     page.get_by_test_id("stSidebarNav").get_by_role("link", name=title).click()
     page.locator(f"h2#{anchor}").wait_for(timeout=60_000)
@@ -237,7 +243,7 @@ def test_setup_discover_generate_validate_and_save(page, app_url, work):
     _click(page, "Discover structure")
     expect(page.get_by_text("Tools and schemas")).to_be_visible()
     metrics = page.locator("[data-testid='stMetric']")
-    assert metrics.filter(has_text="Tools").first.inner_text().strip().endswith("4")
+    assert metrics.filter(has_text="Tools").first.inner_text().strip().endswith("5")  # four API tools + load_skill
     assert int(metrics.filter(has_text="Schema edge cases").first.locator("[data-testid='stMetricValue']").inner_text()) >= 4
     refund_expander = page.get_by_test_id("stExpander").filter(has_text="issue_refund — schemas & edge cases")
     refund_expander.locator("summary").click()
@@ -564,3 +570,46 @@ def test_weather_bot_small_dataset_review_and_evaluate(page, app_url, work):
         _nav(page, title, anchor)
         expect(page.get_by_test_id("stSidebar").get_by_text("ui-weather").first).to_be_visible()
     _shot(page, "results-weather-stages")
+
+
+def test_skills_and_llm_mock_layer_end_to_end(page, app_url, work):
+    """support_bot with on-demand skills (load_skill) and the LLM mock engine: the setup form
+    carries the mock model and the llm policy, the run answers the long tail through the engine,
+    and the report pages show the skills, the strategies and the mock-call ledger."""
+    _open_setup(page, app_url)
+    _select(page, "Example agent", "support-bot")
+    _click(page, "Discover structure")
+    expect(page.get_by_text("Tools and schemas")).to_be_visible()
+    expect(page.get_by_text("Agent skills").first).to_be_visible()
+    expect(page.get_by_text("refund-policy").first).to_be_visible()
+    _select(page, "Mock miss policy", "llm")
+    _fill(page, "Mock model", "scripted:examples.support_bot.offline:mock_model")
+    _configure(page, work, "ui-llm", auto_approve=True, instructions="Exercise the skills and the LLM mock layer.")
+    text = _yaml_area(page).input_value()
+    assert "on_miss: llm" in text and "mock: scripted:examples.support_bot.offline:mock_model" in text
+    out_dir = work / "ui-llm"
+    _click(page, "Run full pipeline")
+    _wait_job_finished(page, out_dir, "full")
+    _shot(page, "run-llm")
+    _expect_results_verdict(page, "pass")
+    report = json.loads((out_dir / "report.json").read_text())
+    assert report["verdict"] == "pass" and report["mocking"]["layers"] == ["rules", "llm_engine"]
+    assert report["mocking"]["calls"]["llm"] > 0 and report["mocking"]["calls"]["invalid"] == 0
+    assert report["agent"]["skills"] == ["product-troubleshooting", "refund-policy"] and report["coverage"]["uncovered_skills"] == []
+    assert (out_dir / "mock-strategies.json").exists()
+    # the review section names the policy, the model and the strategies
+    expect(page.get_by_text("mock miss policy").first).to_be_visible()
+    _nav(page, "Agent graph & tools", "agent")
+    expect(page.locator("h3#agent-skills")).to_be_visible()
+    expect(page.get_by_text("skills: product-troubleshooting, refund-policy").first).to_be_visible()  # node expander label
+    _expand(page, "refund-policy — instructions")
+    expect(page.get_by_text("Refund policy").first).to_be_visible()
+    _nav(page, "Dataset & mocks", "dataset")
+    expect(page.locator("h3#mock-strategies")).to_be_visible()
+    expect(page.get_by_text("World:").first).to_be_visible()
+    _nav(page, "Coverage", "coverage")
+    expect(page.locator("h3#coverage-skills")).to_be_visible()
+    _nav(page, "Summary", "summary")
+    expect(page.locator("h3#mocking-summary")).to_be_visible()
+    expect(page.get_by_text("rules → llm_engine").first).to_be_visible()
+    _shot(page, "summary-llm")

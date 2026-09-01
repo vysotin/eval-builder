@@ -97,13 +97,20 @@ own unverified output).
 **Use when** cases depend on nondeterministic, side-effecting, rate-limited or
 unavailable tools.
 
-Semantics (implemented in `src/evalbuilder/mocking.py`): per tool an **ordered** rule
-list, first match wins; `matchArgs` is a subset match (recursive for nested
-pydantic-model arguments); `{}` is a wildcard; on a miss the policy is `real` (call the
-real tool — the interactive default), `fallback` or `strict` (error). Rules live in
-the dataset — dataset-level `mocks.tools` for shared fixtures, per-case
-`metadata.mocks.tools` overriding the dataset list for that tool. Sub-agents exposed
-as tools are mocked exactly like tools.
+Semantics (implemented in `src/evalbuilder/mocking.py` and `mock_engine.py`): **two
+layers**. Layer 1 — per tool an **ordered** rule list, first match wins; `matchArgs` is
+a subset match (recursive for nested pydantic-model arguments); `{}` is a wildcard; on
+a miss the policy is `real` (call the real tool — the interactive default), `fallback`,
+`strict` (error) or `llm`. Layer 2 — under `llm`, an LLM mock engine answers from
+pre-generated **strategies** (a shared world + per-tool behaviours, examples and a
+fallback response), validates against the tool's `output_schema`, repairs once, then
+falls back or errors. Rules and strategies live in the dataset — dataset-level
+`mocks.tools` / `mocks.strategies` / `mocks.llm`, per-case `metadata.mocks.tools`
+overriding the dataset list for that tool and `metadata.mocks.strategy` selecting a
+strategy. Sub-agents exposed as tools are mocked exactly like tools; skill loaders
+(`load_skill`) are never mocked. The skill drives `mock set`, `mock strategies`,
+`mock validate`, `mock try` and `mock verify`, and tells the user which policy the
+dataset runs under and why.
 
 Workflow: list affected tools → `evalbuilder mock set PATH [--case ID] --tool T --rules @rules.json`
 (most specific first, wildcard last) → `evalbuilder mock verify PATH` (every
