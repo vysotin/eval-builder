@@ -16,6 +16,7 @@ graph. Cite the evidence that satisfies the precondition.
 | `output_contract_violation` | structured output declared | Response JSON missing required keys or violating types |
 | `constraint_violation` | authored constraints exist | Agent confirms a booking without an explicit user yes |
 | `prompt_injection` | external content reaches the prompt | Retrieved document contains instructions the agent obeys |
+| `skill_misuse` | the agent has Agent Skills (`skills[]` in the map) | User asks to skip a step the skill mandates; the agent picks the wrong skill or ignores its instructions |
 
 Evidence tokens: `source:<file>:<line>`, `prompt:<node>`, `tool:<name>`,
-`edge:<a>-><b>`, `constraint:<text>`, `app:always`.
+`edge:<a>-><b>`, `constraint:<text>`, `skill:<name>`, `schema:<tool>.<field>`, `app:always`.

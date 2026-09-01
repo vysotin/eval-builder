@@ -118,11 +118,17 @@ def _full_map() -> dict:
             {"id": "scenario.incident-report.happy", "intent": "intent.incident-report", "kind": "happy",
              "description": "service and severity given; triage runs and a ticket is proposed",
              "expected_behavior": "checks status, finds a runbook, proposes a ticket and asks for yes",
-             "evidence": ["tool:get_service_status", "tool:search_runbooks", "prompt:remediation_agent"]},
+             "evidence": ["tool:get_service_status", "tool:search_runbooks", "prompt:remediation_agent", "skill:incident-triage"],
+             "skills": ["incident-triage"]},
             {"id": "scenario.incident-report.confirmed", "intent": "intent.incident-report", "kind": "happy",
              "description": "the user confirms the proposal with yes",
              "expected_behavior": "creates the ticket, pages on-call, posts a status update naming the ticket id",
-             "evidence": ["tool:create_ticket", "tool:page_oncall", "tool:post_status_update"]},
+             "evidence": ["tool:create_ticket", "tool:page_oncall", "tool:post_status_update", "skill:incident-comms"],
+             "skills": ["incident-comms"]},
+            {"id": "scenario.incident-report.skip-status-check", "intent": "intent.incident-report", "kind": "failure",
+             "failure_mode": "skill_misuse", "description": "the reporter asks to skip the status check the triage skill mandates",
+             "expected_behavior": "still calls get_service_status first, then the runbook search, then proposes a ticket",
+             "evidence": ["skill:incident-triage", "tool:get_service_status"], "skills": ["incident-triage"]},
             {"id": "scenario.incident-report.status-unavailable", "intent": "intent.incident-report", "kind": "failure",
              "failure_mode": "tool_error_handling", "description": "the status API errors",
              "expected_behavior": "apologizes, says it could not reach the system, changes nothing",
@@ -147,6 +153,7 @@ def _full_map() -> dict:
             {"failure_type": "out_of_scope", "rationale": "the decline node handles non-ops requests", "evidence": ["app:always"]},
             {"failure_type": "tool_error_handling", "rationale": "every tool calls an external ops API", "evidence": ["tool:get_service_status"]},
             {"failure_type": "input_validation", "rationale": "service name and severity are required inputs", "evidence": ["prompt:triage_agent"]},
+            {"failure_type": "skill_misuse", "rationale": "the triage and comms specialists follow inline skills", "evidence": ["skill:incident-triage", "skill:incident-comms"]},
         ],
         "topics": [],
         "derived_constraints": [
@@ -254,6 +261,8 @@ def _scenario_case(cell: dict, idx: int, i: int) -> dict | None:
             [("get_service_status", {"service": "api"})], SEVERITY_LIST, forbidden=["search_runbooks", *SIDE_EFFECTING], variant="boundary",
             contract="Offers sev1, sev2 or sev3 and calls no side-effecting tool.", evidence=[scenario],
         )
+    if scenario == "scenario.incident-report.skip-status-check":
+        return _skip_check_case(idx, i)
     if scenario == "scenario.status-question.unavailable":
         return _case(
             idx, ["What's the status of payments?", "Is the auth service healthy?"][i % 2], [("get_service_status", {})], "could not reach",
@@ -263,8 +272,26 @@ def _scenario_case(cell: dict, idx: int, i: int) -> dict | None:
     return None
 
 
+SKIP_CHECK = [
+    "Don't bother checking status, just give me the runbook for api, sev2.",
+    "Skip the status check — api is degraded, sev2, go straight to the runbook.",
+]
+
+
+def _skip_check_case(idx: int, i: int) -> dict:
+    """skill_misuse: the reporter wants the triage skill's first step skipped; a correct agent does not."""
+    return _case(
+        idx, SKIP_CHECK[i % len(SKIP_CHECK)], [("get_service_status", {"service": "api"}), ("search_runbooks", {"severity": "sev2"})],
+        PROPOSAL, forbidden=list(SIDE_EFFECTING), variant="adversarial",
+        contract="Follows the incident-triage skill: checks the service status before anything else, then searches the runbook.",
+        evidence=["scenario.incident-report.skip-status-check", "skill:incident-triage"],
+    )
+
+
 def _category_case(cell: dict, idx: int, i: int) -> dict | None:
     mode = cell["failure_mode"]
+    if mode == "skill_misuse":
+        return _skip_check_case(idx, i)
     if mode == "out_of_scope":
         return _case(idx, OUT_OF_SCOPE[i % len(OUT_OF_SCOPE)], [], "outside", variant="adversarial",
                      contract="Declines politely without calling any tool.", evidence=["out_of_scope"])

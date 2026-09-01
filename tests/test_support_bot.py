@@ -93,5 +93,42 @@ def test_real_tools_fail_fast_when_unmocked():
 
 
 def test_tools_and_contract():
-    assert [t.name for t in sb.TOOLS] == ["lookup_order", "check_refund_policy", "issue_refund", "search_kb"]
+    assert [t.name for t in sb.TOOLS] == ["lookup_order", "check_refund_policy", "issue_refund", "search_kb", "load_skill"]
     assert "Side-effecting" in sb.issue_refund.description
+    assert [s.name for s in sb.SKILLS] == ["product-troubleshooting", "refund-policy"]
+    assert sb.load_skill.metadata["kind"] == "skill_loader"
+
+
+# ── agent skills (on demand through load_skill) ─────────────────
+
+
+def test_with_the_loader_wired_the_refund_flow_reads_the_skill_first():
+    tools, calls = _mock_tools()
+    graph = sb.build_agent(tools=tools + [sb.load_skill])
+    out = _ask(graph, "I want a refund for order A1234, the headphones are broken")
+    assert _tool_calls(out) == ["load_skill", "lookup_order", "check_refund_policy"]
+    skill_msg = next(m for m in out["messages"] if m.type == "tool" and m.name == "load_skill")
+    assert skill_msg.content.startswith("# Refund policy")
+    assert [c[0] for c in calls] == ["lookup_order", "check_refund_policy"]
+    assert "30 days" in out["messages"][-1].content and "yes" in out["messages"][-1].content.lower()
+    out2 = _ask(graph, "yes", out["messages"])
+    assert calls[-1] == ("issue_refund", "A1234") and "R77" in out2["messages"][-1].content
+    # the skill is read once per conversation
+    assert _tool_calls(out2).count("load_skill") == 1
+
+
+def test_with_the_loader_wired_product_questions_read_their_skill_and_orders_do_not():
+    tools, calls = _mock_tools()
+    graph = sb.build_agent(tools=tools + [sb.load_skill])
+    out = _ask(graph, "How do I pair the X1 headset?")
+    assert _tool_calls(out) == ["load_skill", "search_kb"] and "Pairing the X1 headset" in out["messages"][-1].content
+    tools, calls = _mock_tools()
+    out = _ask(sb.build_agent(tools=tools + [sb.load_skill]), "Where is my order A1234?")
+    assert _tool_calls(out) == ["lookup_order"] and "delivered" in out["messages"][-1].content
+
+
+def test_without_the_loader_the_prompts_do_not_advertise_skills():
+    tools, _ = _mock_tools()
+    graph = sb.build_agent(tools=tools)
+    out = _ask(graph, "I want a refund for order A1234, it is broken")
+    assert _tool_calls(out) == ["lookup_order", "check_refund_policy"]

@@ -80,7 +80,7 @@ class FakeGenerator(Generator):
 
 def agent_brief(agent_map: AgentMap, constraints: list[str], source_text: str = "") -> str:
     nodes = [
-        {k: v for k, v in n.items() if k in ("id", "kind", "prompt", "tools")}
+        {k: v for k, v in n.items() if k in ("id", "kind", "prompt", "tools", "skills", "skills_source")}
         for n in agent_map.graph.get("nodes", [])
     ]
     brief = {
@@ -92,6 +92,9 @@ def agent_brief(agent_map: AgentMap, constraints: list[str], source_text: str = 
         "tools": [tool_brief(t) for t in agent_map.tools],
         "constraints": constraints,
     }
+    skills = getattr(agent_map, "skills", None) or []
+    if skills:
+        brief["skills"] = [skill_brief(s) for s in skills]
     text = "AGENT STRUCTURE (from code introspection):\n" + json.dumps(brief, indent=1, ensure_ascii=False)
     if source_text:
         text += f"\n\nAGENT SOURCE:\n```python\n{source_text[:12000]}\n```"
@@ -107,6 +110,26 @@ def tool_brief(t: dict) -> dict:
         out["schema_source"] = t["schema_source"]
     if t.get("side_effecting"):
         out["side_effecting"] = True
+    if t.get("kind") and t["kind"] != "tool":
+        out["kind"] = t["kind"]  # e.g. skill_loader: local and deterministic, never mocked
+    return out
+
+
+SKILL_PROMPT_CHARS = 3000
+
+
+def skill_brief(s: dict) -> dict:
+    """An Agent Skill as the prompts see it: description, instructions, references, links."""
+    out = {
+        "name": s.get("name"),
+        "description": s.get("description"),
+        "instructions": (s.get("prompt") or "")[:SKILL_PROMPT_CHARS],
+        "used_by": s.get("used_by") or [],
+    }
+    if s.get("allowed_tools"):
+        out["allowed_tools"] = s["allowed_tools"]
+    if s.get("references"):
+        out["references"] = [{"path": r.get("path"), "title": r.get("title"), "excerpt": r.get("excerpt")} for r in s["references"]]
     return out
 
 
@@ -145,6 +168,11 @@ MAP_SCHEMA = {
                     "description": {"type": "string"},
                     "expected_behavior": {"type": "string"},
                     "evidence": {"type": "array", "items": {"type": "string"}},
+                    "skills": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "names of the agent's skills this scenario exercises (empty when the agent has no skills)",
+                    },
                 },
                 "required": ["id", "intent", "kind", "description", "expected_behavior", "evidence"],
             },
@@ -172,9 +200,9 @@ MAP_SCHEMA = {
 }
 
 MAP_SYSTEM = """You map a LangGraph agent's test surface for evaluation. Work only from the
-evidence given (prompts, tools, edges, source). Every intent, scenario and failure
+evidence given (prompts, tools, edges, skills, source). Every intent, scenario and failure
 scenario must cite evidence tokens: source:<file>:<line>, prompt:<node>, tool:<name>,
-edge:<a>-><b>, constraint:<text>, app:always.
+edge:<a>-><b>, constraint:<text>, skill:<name>, app:always.
 
 Rules:
 - Intents are the user goals the agent is built to serve (typically 2-6). Each intent
@@ -185,7 +213,12 @@ Rules:
 - topics: only when the agent has an explicit data domain visible in the evidence
   (e.g. product lines named in prompts); otherwise return an empty list.
 - derived_constraints: behavioral rules literally stated in prompts (e.g. "never
-  confirm without explicit yes").
+  confirm without explicit yes") — including rules stated inside the agent's skills.
+- SKILLS (when the agent has any): every skill must be exercised by at least one
+  scenario that lists it in `skills` and cites `skill:<name>`; add failure scenarios
+  with failure_mode `skill_misuse` (when applicable) where the user pushes the agent to
+  skip or bend a step the skill mandates. Tools of kind `skill_loader` are how the
+  agent reads a skill on demand — a correct agent calls them before acting on that skill.
 - Use stable slugs: intent.<name>, scenario.<intent-name>.<short-name>."""
 
 
@@ -206,8 +239,9 @@ def author_map(
         + ("\n\nFAILURE TAXONOMY:\n" + taxonomy if taxonomy else ""),
         guidance,
     )
+    skill_names = [s.get("name") for s in (getattr(agent_map, "skills", None) or []) if s.get("name")]
     result = gen.ask(MAP_SYSTEM, user, MAP_SCHEMA)
-    cleaned, errors = _validate_map(result, applicable)
+    cleaned, errors = _validate_map(result, applicable, skill_names)
     if errors:
         repair = (
             user
@@ -217,12 +251,17 @@ def author_map(
             + json.dumps(result, ensure_ascii=False)[:8000]
         )
         result = gen.ask(MAP_SYSTEM, repair, MAP_SCHEMA)
-        cleaned, errors = _validate_map(result, applicable)
+        cleaned, errors = _validate_map(result, applicable, skill_names)
+    # An unexercised skill is a coverage gap, reported (also as coverage.uncovered_skills), not repaired.
+    for name in skill_names:
+        if not any(name in (s.get("skills") or []) for s in cleaned["scenarios"]):
+            errors.append(f"skill {name} is not exercised by any scenario (list it in `skills` and cite skill:{name})")
     return cleaned, errors
 
 
-def _validate_map(result: dict, applicable: dict[str, list[str]]) -> tuple[dict, list[str]]:
+def _validate_map(result: dict, applicable: dict[str, list[str]], skill_names: list[str] | None = None) -> tuple[dict, list[str]]:
     errors: list[str] = []
+    skill_names = list(skill_names or [])
     intents = [i for i in result.get("intents", []) if isinstance(i, dict)]
     scenarios = [s for s in result.get("scenarios", []) if isinstance(s, dict)]
     failures = [f for f in result.get("failure_scenarios", []) if isinstance(f, dict)]
@@ -262,7 +301,18 @@ def _validate_map(result: dict, applicable: dict[str, list[str]]) -> tuple[dict,
                     f"(choose from {sorted(applicable)})"
                 )
                 continue
-        good_scenarios.append({**s, "kind": kind, "status": "hypothesis"})
+        entry = {**s, "kind": kind, "status": "hypothesis"}
+        cited = [str(e)[len("skill:"):] for e in (s.get("evidence") or []) if str(e).startswith("skill:")]
+        listed = [str(x) for x in (s.get("skills") or []) if isinstance(x, str)]
+        unknown = [x for x in listed + cited if x not in skill_names]
+        if unknown:
+            errors.append(f"scenario {sid} references unknown skill(s) {sorted(set(unknown))} (known: {skill_names})")
+        linked = [x for x in dict.fromkeys(listed + cited) if x in skill_names]
+        if linked:
+            entry["skills"] = linked
+        elif "skills" in entry:
+            entry.pop("skills")
+        good_scenarios.append(entry)
     for iid in intent_ids:
         kinds = {s["kind"] for s in good_scenarios if s["intent"] == iid}
         if "happy" not in kinds:
@@ -527,7 +577,10 @@ Rules:
   `edge.expected_behavior`; a correct agent never passes non-conforming values to the
   tool or fabricates the missing data, so list that tool in forbidden_tools for
   missing/wrong/enum/boundary edges unless the agent can legitimately still call it.
-- evidence: cite the agent-map scenario id, failure type, or schema:<tool>.<field>."""
+- Skills: when the agent has skills, cases for scenarios that list them cite
+  `skill:<name>`; with a `skill_loader` tool a correct agent reads the skill first, so
+  put that call (e.g. load_skill with the skill name) at the start of expected_tools.
+- evidence: cite the agent-map scenario id, failure type, skill:<name>, or schema:<tool>.<field>."""
 
 
 def _cell_prompt(cells: list[Cell]) -> str:

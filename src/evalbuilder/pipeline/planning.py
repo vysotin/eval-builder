@@ -169,10 +169,29 @@ def summarize_plan(cells: list[Cell]) -> dict:
     }
 
 
-def achieved(cells: list[Cell], cases: list[dict]) -> dict:
-    """Compare planned counts with what the dataset actually holds (approved only)."""
+def skills_of_case(case: dict, scenario_skills: dict[str, list[str]], skill_names: list[str]) -> list[str]:
+    """Skills a case exercises: its scenario lists them, its evidence cites `skill:<name>`,
+    or an expected tool call loads the skill by name."""
+    md = case.get("metadata", {}) or {}
+    found = list(scenario_skills.get(str(md.get("scenario")), []))
+    for token in md.get("evidence") or []:
+        if isinstance(token, str) and token.startswith("skill:") and token[6:] in skill_names:
+            found.append(token[6:])
+    for call in (case.get("reference_outputs") or {}).get("expected_tools") or []:
+        name = (call.get("args") or {}).get("name") if isinstance(call, dict) else None
+        if isinstance(name, str) and name in skill_names and str(call.get("name", "")).endswith("skill"):
+            found.append(name)
+    return list(dict.fromkeys(found))
+
+
+def achieved(cells: list[Cell], cases: list[dict], skills: list[dict] | None = None, scenarios: list[dict] | None = None) -> dict:
+    """Compare planned counts with what the dataset actually holds (approved only).
+    With `skills` (agent-map entries) the result also counts the cases per skill."""
     have: dict[str, int] = {}
     multi = 0
+    skill_names = [s.get("name") for s in (skills or []) if s.get("name")]
+    scenario_skills = {s.get("id"): list(s.get("skills") or []) for s in (scenarios or [])}
+    per_skill = {name: 0 for name in skill_names}
     for case in cases:
         md = case.get("metadata", {})
         key = "/".join(
@@ -182,6 +201,8 @@ def achieved(cells: list[Cell], cases: list[dict]) -> dict:
         have[key] = have.get(key, 0) + 1
         if md.get("user_turns"):
             multi += 1
+        for name in skills_of_case(case, scenario_skills, skill_names):
+            per_skill[name] += 1
     gaps = []
     by_kind_planned: dict[str, int] = {}
     by_kind_have: dict[str, int] = {}
@@ -193,7 +214,7 @@ def achieved(cells: list[Cell], cases: list[dict]) -> dict:
             gaps.append({**c.to_dict(), "have": count, "missing": c.count - count})
     planned_total = sum(c.count for c in cells)
     covered_total = sum(by_kind_have.values())
-    return {
+    out = {
         "planned": planned_total,
         "covered": covered_total,
         "coverage_pct": round(100.0 * covered_total / planned_total, 1) if planned_total else 100.0,
@@ -204,3 +225,7 @@ def achieved(cells: list[Cell], cases: list[dict]) -> dict:
         "multi_turn": {"planned": sum(c.multi_turn for c in cells), "have": multi},
         "gaps": gaps,
     }
+    if skill_names:
+        out["skills"] = {name: {"cases": n} for name, n in per_skill.items()}
+        out["uncovered_skills"] = [name for name, n in per_skill.items() if n == 0]
+    return out

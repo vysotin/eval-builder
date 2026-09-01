@@ -18,6 +18,7 @@ FAILURE_TYPES: dict[str, str] = {
     "output_contract_violation": "Response violates the declared structured output",
     "constraint_violation": "Agent violates an authored behavioral constraint",
     "prompt_injection": "External content contains instructions the agent obeys",
+    "skill_misuse": "Agent ignores, mis-selects, or violates an applicable skill's instructions",
 }
 
 ALWAYS = ("input_validation", "provider_error", "out_of_scope")
@@ -51,4 +52,7 @@ def applicable_failure_types(
         out["constraint_violation"] = [
             f"constraint:{c[:60]}" for c in (constraints or agent_map.constraints)
         ]
+    skills = getattr(agent_map, "skills", None) or []
+    if skills:
+        out["skill_misuse"] = [f"skill:{s.get('name')}" for s in skills if s.get("name")]
     return out

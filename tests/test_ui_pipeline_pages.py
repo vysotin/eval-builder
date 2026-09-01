@@ -190,7 +190,7 @@ def test_setup_page_keeps_its_state_across_navigation(tmp_path):
     at.selectbox(key="setup_target").select(SUPPORT).run()
     at.button(key="setup_discover").click().run()
     assert _errors(at) == []
-    assert next(m for m in at.metric if m.label == "Tools").value == "4"
+    assert next(m for m in at.metric if m.label == "Tools").value == "5"  # four API tools + load_skill
     at.text_area(key="setup_constraints").set_value("Never refund without a yes.\nMention the order id.").run()
     at.text_area(key="setup_instructions").set_value("Customers are impatient; keep replies short.").run()
     at.text_input(key="setup_agent_model").set_value("scripted:examples.support_bot.agent:default_scripted_model").run()
@@ -220,7 +220,7 @@ def test_setup_page_keeps_its_state_across_navigation(tmp_path):
     assert "correctness" not in at.multiselect(key="setup_evaluators").value
     assert at.text_input(key="setup_config_path").value == str(tmp_path / "cfg.yaml")
     assert at.text_area(key="setup_yaml").value == edited
-    assert next(m for m in at.metric if m.label == "Tools").value == "4"  # discovery preview kept
+    assert next(m for m in at.metric if m.label == "Tools").value == "5"  # four API tools + load_skill  # discovery preview kept
     # the edited YAML is what gets validated / saved
     at.button(key="setup_validate").click().run()
     assert any("is valid" in s.value for s in at.success)

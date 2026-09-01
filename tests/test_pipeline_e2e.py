@@ -143,7 +143,11 @@ def test_full_offline_pipeline_passes(tmp_path):
     assert report["stability"]["repeats"] == 2 and report["stability"]["unstable_cases"] == []
     assert len(report["runs"]) == 2 and len(report["cases"]) == 5
     assert report["analysis"]["source"] == "generator"
-    assert report["agent"]["tools"] == ["lookup_order", "check_refund_policy", "issue_refund", "search_kb"]
+    assert report["agent"]["tools"] == ["lookup_order", "check_refund_policy", "issue_refund", "search_kb", "load_skill"]
+    assert report["agent"]["skills"] == ["product-troubleshooting", "refund-policy"]
+    assert report["coverage"]["uncovered_skills"] == ["product-troubleshooting", "refund-policy"]  # this fake map cites none
+    assert any("not exercised by any scenario" in p["message"] for p in report["problems"])
+    assert "load_skill" not in report["stages"]["verify"]["details"]["mocked_tools"]  # skill loaders are never mocked
     assert "Always mention the order id in the answer." in report["agent"]["constraints"]
     assert report["simulation"]["details"]["stop_reasons"] == {"refund-flow": "success"}
     assert report["stages"]["review"]["details"]["approved_by"] == "tester"
@@ -162,7 +166,7 @@ def test_full_offline_pipeline_passes(tmp_path):
     assert len(prog["runs"]) == 2
     ds = json.loads((out / "dataset.json").read_text())
     assert all(c["review"]["status"] == "approved" for c in ds["cases"])
-    assert set(ds["mocks"]["tools"]) == set(report["agent"]["tools"]) and ds["mocks"]["on_miss"] == "strict"
+    assert set(ds["mocks"]["tools"]) == set(report["agent"]["tools"]) - {"load_skill"} and ds["mocks"]["on_miss"] == "strict"
     error_case = next(c for c in ds["cases"] if c["metadata"]["failure_mode"] == "tool_error_handling")
     assert error_case["metadata"]["mocks"]["tools"]["lookup_order"][0]["response"] == {"error": "timeout"}
     # CLI summary works on the output dir

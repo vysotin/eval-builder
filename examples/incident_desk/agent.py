@@ -11,6 +11,11 @@ run fails fast with an error payload instead of silently succeeding — the pipe
 every tool. Tools declare pydantic input/output models so the schema-derived edge cases
 (missing/invalid input, malformed output) are exercised; `create_ticket`, `page_oncall` and
 `post_status_update` are side-effecting and gated on an explicit user confirmation.
+
+The triage and comms specialists follow **Agent Skills** (`skills/<name>/SKILL.md` with
+frontmatter, instructions and `references/`) embedded *inline* into their system prompts
+(`skills_inline_prompt`), so discovery records the skills, links them to the nodes and the
+generator can test that the agent honors them.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -36,10 +42,13 @@ except ImportError:  # pragma: no cover - older langchain/langgraph installs
         return create_react_agent(model, tools, prompt=system_prompt, **kwargs)
 
 
+from evalbuilder.skills import load_skills, skills_inline_prompt
 from evalbuilder.testing import ScriptedChatModel, ai, tool_call
 
 OPS_API = "http://ops.example.invalid"
 HTTP_TIMEOUT_SECONDS = 3
+SKILLS_DIR = Path(__file__).parent / "skills"
+SKILLS = load_skills(SKILLS_DIR)  # incident-triage, incident-comms
 
 
 def _http(url: str, payload: dict | None = None) -> dict:
@@ -154,13 +163,8 @@ CLASSIFY_PROMPT = (
 )
 
 TRIAGE_PROMPT = (
-    "You are the triage specialist of the incident desk. Always call get_service_status "
-    "for the affected service before anything else, then call search_runbooks with the "
-    "reported severity to find remediation steps. If the user did not name the service, "
-    "ask which service is affected instead of guessing. Severity must be one of sev1, "
-    "sev2 or sev3: if it is missing or anything else (critical, P0, sev9), offer those "
-    "three values and stop. If a tool errors or returns an incomplete payload, say so "
-    "plainly and never invent status values. Summarize the triage in one message."
+    "You are the triage specialist of the incident desk. Follow the incident-triage skill "
+    "below for every reported incident.\n\n" + skills_inline_prompt(SKILLS, "incident-triage")
 )
 
 REMEDIATION_PROMPT = (
@@ -174,10 +178,8 @@ REMEDIATION_PROMPT = (
 )
 
 COMMS_PROMPT = (
-    "You are the communications specialist of the incident desk. Call post_status_update "
-    "only after a ticket has been created and on-call paged in this conversation; before "
-    "that, restate what is pending and post nothing. Mention the ticket id in the final "
-    "message. If the update fails, say the status page could not be reached."
+    "You are the communications specialist of the incident desk. Follow the incident-comms "
+    "skill below.\n\n" + skills_inline_prompt(SKILLS, "incident-comms")
 )
 
 STATUS_PROMPT = (

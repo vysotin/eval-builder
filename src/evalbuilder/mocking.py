@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool, StructuredTool
 
+from evalbuilder.skills import is_skill_loader
+
+
+def mockable(tool: BaseTool) -> bool:
+    """Whether the mock layers may answer for a tool: skill loaders (local, deterministic
+    reads of SKILL.md) are never wrapped."""
+    return not is_skill_loader(tool)
+
 
 class MockMissError(Exception):
     def __init__(self, tool_name: str, args: dict, rules: list[dict]):
@@ -88,10 +96,10 @@ def wrap_tools(
     on_miss: str = "real",
     fallback=None,
 ) -> list[BaseTool]:
-    """Wrap only the tools that have rules; others pass through untouched."""
+    """Wrap only the tools that have rules; others (and skill loaders) pass through untouched."""
     return [
         wrap_tool(t, rules_by_tool[t.name], on_miss=on_miss, fallback=fallback)
-        if t.name in rules_by_tool
+        if t.name in rules_by_tool and mockable(t)
         else t
         for t in tools
     ]

@@ -77,7 +77,8 @@ def _good_map_answer():
         ],
         "scenarios": [
             {"id": "scenario.order-status.happy", "intent": "intent.order-status", "kind": "happy",
-             "description": "d", "expected_behavior": "e", "evidence": ["tool:lookup_order"]},
+             "description": "d", "expected_behavior": "e", "evidence": ["tool:lookup_order", "skill:product-troubleshooting"],
+             "skills": ["refund-policy"]},
             {"id": "scenario.order-status.error", "intent": "intent.order-status", "kind": "failure",
              "failure_mode": "tool_error_handling", "description": "d", "expected_behavior": "e",
              "evidence": ["tool:lookup_order"]},
@@ -104,6 +105,26 @@ def test_author_map_repairs_once_then_filters():
     assert errors == [] and len(fake.prompts) == 2
     assert "PROBLEMS" in fake.prompts[1][2] and "intent.missing" in fake.prompts[1][2]
     assert [s["id"] for s in cleaned["scenarios"]] == ["scenario.order-status.happy", "scenario.order-status.error"]
+    # skills: listed names and `skill:` evidence are merged and validated against the map
+    assert cleaned["scenarios"][0]["skills"] == ["refund-policy", "product-troubleshooting"]
+    assert "skills" not in cleaned["scenarios"][1]
+    assert '"skills"' in fake.prompts[0][2] and "refund-policy" in fake.prompts[0][2]  # the brief carries the skills
+
+    # an unknown skill name is an error (repair), an unexercised skill only a reported problem
+    unknown = _good_map_answer()
+    unknown["scenarios"][0]["skills"] = ["nope"]
+    fake3 = g.FakeGenerator({"agent_map": [unknown, _good_map_answer()]})
+    cleaned3, errors3 = g.author_map(fake3, amap, "", [], applicable)
+    assert len(fake3.prompts) == 2 and "unknown skill" in fake3.prompts[1][2] and errors3 == []
+    unexercised = _good_map_answer()
+    unexercised["scenarios"][0].pop("skills")
+    unexercised["scenarios"][0]["evidence"] = ["tool:lookup_order"]
+    fake4 = g.FakeGenerator({"agent_map": [unexercised]})
+    _, errors4 = g.author_map(fake4, amap, "", [], applicable)
+    assert len(fake4.prompts) == 1 and [e for e in errors4 if "not exercised" in e] == [
+        "skill product-troubleshooting is not exercised by any scenario (list it in `skills` and cite skill:product-troubleshooting)",
+        "skill refund-policy is not exercised by any scenario (list it in `skills` and cite skill:refund-policy)",
+    ]
 
     # still-bad second answer: invalid entries are filtered and errors reported
     fake2 = g.FakeGenerator({"agent_map": [bad, bad]})

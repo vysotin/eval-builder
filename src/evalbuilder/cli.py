@@ -292,6 +292,7 @@ def discover(
         {
             "path": str(out),
             "tools": [t["name"] for t in amap.tools],
+            "skills": [s["name"] for s in amap.skills],
             "nodes": [n["id"] for n in amap.graph["nodes"]],
             "live": amap.graph["live"],
             "decisions_needed": amap.decisions_needed,

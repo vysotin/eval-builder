@@ -145,6 +145,15 @@ def test_tools_and_contract():
     assert [t.name for t in idk.TOOLS] == TOOL_NAMES
     for name in SIDE_EFFECTING:
         assert "Side-effecting" in next(t for t in idk.TOOLS if t.name == name).description
+    assert [s.name for s in idk.SKILLS] == ["incident-comms", "incident-triage"]
+    assert "## Skill: incident-triage" in idk.TRIAGE_PROMPT and "## Skill: incident-comms" in idk.COMMS_PROMPT
+
+
+def test_skip_the_status_check_request_still_follows_the_triage_skill():
+    tools, calls = _mock_tools()
+    out = _ask(idk.build_agent(tools=tools), "Don't bother checking status, just give me the runbook for api, sev2.")
+    assert out["route"] == "incident" and calls == [("get_service_status", "api"), ("search_runbooks", "sev2")]
+    assert "Reply yes" in out["messages"][-1].content
 
 
 # ── discovery ──────────────────────────────────────────────────
@@ -184,6 +193,16 @@ def test_discovery_captures_pydantic_schemas_and_edges():
     assert nodes["remediation_agent"]["tools"] == ["search_runbooks", "create_ticket", "page_oncall"]
     assert nodes["comms_agent"]["tools"] == ["post_status_update"] and nodes["status_agent"]["tools"] == ["get_service_status"]
     assert amap.graph["conditional_edges"][0]["targets"] == ["triage_agent", "status_agent", "decline"]
+    # inline skills: recorded, rendered into the prompts, linked to the nodes
+    skills = {s["name"]: s for s in amap.skills}
+    assert list(skills) == ["incident-comms", "incident-triage"] and amap.app["skills_dir"].endswith("examples/incident_desk/skills")
+    assert skills["incident-triage"]["used_by"] == ["triage_agent"] and skills["incident-comms"]["used_by"] == ["comms_agent"]
+    assert skills["incident-triage"]["allowed_tools"] == ["get_service_status", "search_runbooks"]
+    assert skills["incident-triage"]["references"][0]["path"] == "references/severity-matrix.md"
+    assert skills["incident-triage"]["tools_mentioned"] == ["get_service_status", "search_runbooks"]
+    assert nodes["triage_agent"]["skills"] == ["incident-triage"] and nodes["triage_agent"]["skills_source"] == "inline"
+    assert "Always call `get_service_status`" in nodes["triage_agent"]["prompt"]
+    assert "skills" not in nodes["remediation_agent"] and all(t["kind"] == "tool" for t in amap.tools)
 
 
 def test_live_enrichment_resolves_output_schemas():
@@ -228,7 +247,15 @@ def _run(tmp_path, per_tool_edge_cases):
     assert report["agent"]["tools"] == TOOL_NAMES
     assert report["stability"]["repeats"] == 2 and report["stability"]["unstable_cases"] == []
     assert report["simulation"]["details"]["stop_reasons"] == {"incident-confirmed": "success"}
+    # inline skills: in the map, exercised by scenarios (incl. a skill_misuse one), counted in coverage
+    assert report["agent"]["skills"] == ["incident-comms", "incident-triage"]
+    assert report["coverage"]["uncovered_skills"] == [] and report["coverage"]["skills"]["incident-triage"]["cases"] >= 2
+    assert "skill_misuse" in report["stages"]["map"]["details"]["failure_types"]
+    assert report["stages"]["map"]["details"]["skills"]["incident-triage"] == [
+        "scenario.incident-report.happy", "scenario.incident-report.skip-status-check"]
     ds = json.loads((tmp_path / f"out-{per_tool_edge_cases}" / "dataset.json").read_text())
+    misuse = [c for c in ds["cases"] if c["metadata"]["failure_mode"] == "skill_misuse"]
+    assert misuse and all("skill:incident-triage" in c["metadata"]["evidence"] for c in misuse)
     return report, ds["cases"]
 
 

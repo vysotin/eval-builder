@@ -238,8 +238,33 @@ def _live_tools(module) -> list[dict]:
             out.append({"name": t.name, "description": getattr(t, "description", "") or "",
                         "args_schema": {"type": "object", "properties": dict(getattr(t, "args", {}) or {})},
                         "output_schema": {}, "schema_source": "annotations", "models": [], "side_effecting": False,
-                        "edge_cases": []})
+                        "kind": "tool", "mockable": True, "edge_cases": []})
     return out
+
+
+def _live_skills(module) -> list[dict]:
+    """Skills a module exposes as `SKILLS` (Skill objects or duck-typed name/description/body)."""
+    from evalbuilder import skills as skills_mod
+
+    out = []
+    for s in getattr(module, "SKILLS", None) or []:
+        if isinstance(s, skills_mod.Skill):
+            out.append(skills_mod.describe_skill(s))
+            continue
+        name = getattr(s, "name", None) if not isinstance(s, dict) else s.get("name")
+        if not name:
+            continue
+        get = (lambda k, d="": s.get(k, d)) if isinstance(s, dict) else (lambda k, d="": getattr(s, k, d))
+        out.append(skills_mod.describe_skill(skills_mod.Skill(
+            name=str(name), description=str(get("description")), path=str(get("path")), dir=str(get("dir")),
+            body=str(get("body") or get("prompt")),
+        )))
+    return out
+
+
+def mockable_tools(amap: AgentMap) -> list[dict]:
+    """Tools the mock layers may answer (skill loaders and other local tools are excluded)."""
+    return [t for t in amap.tools if t.get("mockable", True)]
 
 
 def discover(ctx: PipelineContext) -> dict:
@@ -265,7 +290,9 @@ def discover(ctx: PipelineContext) -> dict:
             t["schema_source"] = lt.get("schema_source") or t.get("schema_source", "ast")
             t["models"] = lt.get("models") or t.get("models", [])
             t["side_effecting"] = bool(lt.get("side_effecting", t.get("side_effecting", False)))
-            t["edge_cases"] = tool_schemas.edge_cases(t)
+            if lt.get("kind"):
+                t["kind"], t["mockable"] = lt["kind"], bool(lt.get("mockable", lt["kind"] == "tool"))
+            t["edge_cases"] = tool_schemas.edge_cases(t) if t.get("mockable", True) else []
             t["live"] = True
     known = {t["name"] for t in amap.tools}
     for name, t in live.items():
@@ -274,10 +301,20 @@ def discover(ctx: PipelineContext) -> dict:
     if cfg.coverage.per_tool_edge_cases <= 0:
         for t in amap.tools:
             t["edge_cases"] = []
+    try:
+        live_skills = _live_skills(module) if live else []
+    except Exception as e:  # noqa: BLE001 - AST skills still stand
+        ctx.problem("discover", f"could not introspect SKILLS: {type(e).__name__}: {e}")
+        live_skills = []
+    known_skills = {s["name"] for s in amap.skills}
+    for entry in live_skills:
+        if entry["name"] not in known_skills:
+            amap.skills.append({**entry, "live": True})
     ctx.save_agent_map(amap)
     return {
         "artifacts": {"agent_map": str(ctx.map_path)},
         "tools": [t["name"] for t in amap.tools],
+        "skills": [s["name"] for s in amap.skills],
         "nodes": [n["id"] for n in amap.graph["nodes"]],
         "live_nodes": amap.graph["live"].get("nodes", []),
         "schemas": {
@@ -319,16 +356,18 @@ def author_map(ctx: PipelineContext) -> dict:
         "failure_types": [f["failure_type"] for f in amap.failure_scenarios],
         "topics": amap.data_domains["topics"],
         "constraints": merged,
+        "skills": {s["name"]: [sc["id"] for sc in amap.scenarios if s["name"] in (sc.get("skills") or [])] for s in amap.skills},
     }
 
 
 def author_mocks(ctx: PipelineContext) -> dict:
     amap = ctx.agent_map()
-    rules, problems = gen_mod.author_mocks(ctx.generator(), amap.tools, guidance=ctx.config.guidance())
+    tools = mockable_tools(amap)
+    rules, problems = gen_mod.author_mocks(ctx.generator(), tools, guidance=ctx.config.guidance())
     for p in problems:
         ctx.problem("mocks", p)
     if ctx.config.mocking.required:
-        missing = [t["name"] for t in amap.tools if not rules.get(t["name"])]
+        missing = [t["name"] for t in tools if not rules.get(t["name"])]
         if missing:
             raise ValueError(f"tools without mock rules: {missing}")
     path = ctx.save_artifact("mock_rules", rules)
@@ -374,7 +413,7 @@ def build_dataset(ctx: PipelineContext) -> dict:
     if not ds.cases:
         raise ValueError("generator produced no usable cases")
     ctx.save_dataset(ds)
-    coverage = achieved(cells, [c.model_dump() for c in ds.cases])
+    coverage = achieved(cells, [c.model_dump() for c in ds.cases], skills=amap.skills, scenarios=amap.scenarios)
     coverage_path = ctx.save_artifact("coverage", coverage)
     return {
         "artifacts": {"dataset": str(ctx.dataset_path), "coverage_plan": str(plan_path), "coverage": str(coverage_path)},
@@ -393,7 +432,8 @@ def review(ctx: PipelineContext) -> dict:
         approved = [c for c in ds.cases if c.review.status == "approved"]
         if not approved:
             raise ValueError("dataset has no pending or approved cases")
-        coverage = achieved(ctx.cells(), [c.model_dump() for c in approved])
+        amap = ctx.agent_map()
+        coverage = achieved(ctx.cells(), [c.model_dump() for c in approved], skills=amap.skills, scenarios=amap.scenarios)
         coverage_path = ctx.save_artifact("coverage", coverage)
         return {
             "artifacts": {"dataset": str(ctx.dataset_path), "coverage": str(coverage_path)},
@@ -435,7 +475,8 @@ def review(ctx: PipelineContext) -> dict:
         note += f": {cfg.review.note}"
     artifacts.set_review(ds, remaining, "approved", note)
     ctx.save_dataset(ds)
-    coverage = achieved(ctx.cells(), [c.model_dump() for c in ds.cases if c.review.status == "approved"])
+    amap = ctx.agent_map()
+    coverage = achieved(ctx.cells(), [c.model_dump() for c in ds.cases if c.review.status == "approved"], skills=amap.skills, scenarios=amap.scenarios)
     coverage_path = ctx.save_artifact("coverage", coverage)
     return {
         "artifacts": {"dataset": str(ctx.dataset_path), "coverage": str(coverage_path)},
@@ -452,8 +493,10 @@ def verify(ctx: PipelineContext) -> dict:
     if misses:
         raise ValueError(f"{len(misses)} expected tool call(s) have no mock rule: {misses[:3]}")
     if ctx.config.mocking.required:
+        from evalbuilder.mocking import mockable
+
         module = target_mod.load_target(ds.target)
-        names = [t.name for t in getattr(module, "TOOLS", [])]
+        names = [t.name for t in getattr(module, "TOOLS", []) if mockable(t)]
         unmocked = [n for n in names if n not in ds.mocks.get("tools", {})]
         if unmocked:
             raise ValueError(f"mocking.required but tools have no rules: {unmocked}")

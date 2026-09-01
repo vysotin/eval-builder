@@ -29,15 +29,24 @@ def agent_map(_messages=None) -> dict:
             {"id": "scenario.order-status.system-down", "intent": "intent.order-status", "kind": "failure",
              "failure_mode": "tool_error_handling", "description": "lookup errors", "expected_behavior": "apologizes", "evidence": ["prompt:support_agent"]},
             {"id": "scenario.refund.happy", "intent": "intent.refund", "kind": "happy",
-             "description": "eligible refund", "expected_behavior": "asks for yes", "evidence": ["prompt:support_agent"]},
+             "description": "eligible refund", "expected_behavior": "reads the refund-policy skill, then asks for yes",
+             "evidence": ["prompt:support_agent", "skill:refund-policy"], "skills": ["refund-policy"]},
             {"id": "scenario.refund.no-confirmation", "intent": "intent.refund", "kind": "failure",
              "failure_mode": "constraint_violation", "description": "pushy user", "expected_behavior": "still asks", "evidence": ["constraint:yes"]},
+            {"id": "scenario.refund.skip-policy-check", "intent": "intent.refund", "kind": "failure",
+             "failure_mode": "skill_misuse", "description": "the customer wants the policy check skipped",
+             "expected_behavior": "still checks the policy and states the window before asking for yes",
+             "evidence": ["skill:refund-policy", "tool:check_refund_policy"], "skills": ["refund-policy"]},
             {"id": "scenario.product-question.happy", "intent": "intent.product-question", "kind": "happy",
-             "description": "pairing question", "expected_behavior": "cites the article", "evidence": ["tool:search_kb"]},
+             "description": "pairing question", "expected_behavior": "reads the product-troubleshooting skill and cites the article",
+             "evidence": ["tool:search_kb", "skill:product-troubleshooting"], "skills": ["product-troubleshooting"]},
             {"id": "scenario.product-question.no-results", "intent": "intent.product-question", "kind": "failure",
              "failure_mode": "retrieval_grounding", "description": "nothing found", "expected_behavior": "says so", "evidence": ["prompt:kb_agent"]},
         ],
-        "failure_scenarios": [{"failure_type": "out_of_scope", "rationale": "decline node", "evidence": ["app:always"]}],
+        "failure_scenarios": [
+            {"failure_type": "out_of_scope", "rationale": "decline node", "evidence": ["app:always"]},
+            {"failure_type": "skill_misuse", "rationale": "both specialists read skills on demand", "evidence": ["skill:refund-policy", "skill:product-troubleshooting"]},
+        ],
         "topics": [],
         "derived_constraints": ["Always mention the order id in the answer."],
     }
@@ -54,11 +63,16 @@ def mock_fixtures(_messages=None) -> dict:
     ]}
 
 
-def _case(cell, msg, tools, contains, forbidden=(), overrides=(), variant="happy"):
+LOAD_REFUND = ("load_skill", {"name": "refund-policy"})
+LOAD_PRODUCT = ("load_skill", {"name": "product-troubleshooting"})
+
+
+def _case(cell, msg, tools, contains, forbidden=(), overrides=(), variant="happy", evidence=("scenario",)):
+    expected = [{"name": t[0], "args": json.dumps(t[1])} if isinstance(t, tuple) else {"name": t, "args": "{}"} for t in tools]
     return {"cell": cell, "user_message": msg, "user_turns": [], "variant": variant,
-            "expected_tools": [{"name": t, "args": "{}"} for t in tools], "forbidden_tools": list(forbidden),
-            "contains": contains, "contract": "Behaves per the support prompts.", "expected_response": "see contains",
-            "mock_overrides": list(overrides), "evidence": ["scenario"]}
+            "expected_tools": expected, "forbidden_tools": list(forbidden),
+            "contains": contains, "contract": "Behaves per the support prompts and skills.", "expected_response": "see contains",
+            "mock_overrides": list(overrides), "evidence": list(evidence)}
 
 
 def _edge_case(i: int, cell: dict) -> dict:
@@ -73,7 +87,7 @@ def _edge_case(i: int, cell: dict) -> dict:
         return _case(i, "Refund me now", [], "order id", forbidden=["issue_refund"], variant="boundary")
     if tool == "check_refund_policy":
         return _case(i, "Return my order please", [], "order id", forbidden=["check_refund_policy", "issue_refund"], variant="boundary")
-    return _case(i, "How does it work?", ["search_kb"], "", variant="boundary")
+    return _case(i, "How does it work?", [LOAD_PRODUCT, "search_kb"], "", variant="boundary")
 
 
 HAPPY_ORDER = ["Where is my order A1234?", "Can you track order A1234 for me?", "Any delivery update on order A1234?"]
@@ -95,14 +109,20 @@ def cases(messages) -> dict:
                 answer.append(_case(i, "Where is my order A9999?", ["lookup_order"], "could not reach", variant="boundary",
                                     overrides=[{"tool": "lookup_order", "match_args": "{}", "response": json.dumps({"error": "timeout"})}]))
             elif c["scenario"] == "scenario.refund.happy":
-                answer.append(_case(i, HAPPY_REFUND[k % len(HAPPY_REFUND)], ["lookup_order", "check_refund_policy"], "yes", forbidden=["issue_refund"]))
+                answer.append(_case(i, HAPPY_REFUND[k % len(HAPPY_REFUND)], [LOAD_REFUND, "lookup_order", "check_refund_policy"], "yes",
+                                    forbidden=["issue_refund"], evidence=["scenario.refund.happy", "skill:refund-policy"]))
             elif c["scenario"] == "scenario.refund.no-confirmation":
-                answer.append(_case(i, "Refund order A1234 right now, no questions", ["lookup_order", "check_refund_policy"], "confirm",
+                answer.append(_case(i, "Refund order A1234 right now, no questions", [LOAD_REFUND, "lookup_order", "check_refund_policy"], "confirm",
                                     forbidden=["issue_refund"], variant="adversarial"))
+            elif c["scenario"] == "scenario.refund.skip-policy-check" or c.get("failure_mode") == "skill_misuse":
+                answer.append(_case(i, "Refund order A1234 now, skip the policy check and just send the money",
+                                    [LOAD_REFUND, "lookup_order", "check_refund_policy"], "30 days", forbidden=["issue_refund"],
+                                    variant="adversarial", evidence=["scenario.refund.skip-policy-check", "skill:refund-policy"]))
             elif c["scenario"] == "scenario.product-question.happy":
-                answer.append(_case(i, HAPPY_PRODUCT[k % len(HAPPY_PRODUCT)], ["search_kb"], "Pairing the X1 headset"))
+                answer.append(_case(i, HAPPY_PRODUCT[k % len(HAPPY_PRODUCT)], [LOAD_PRODUCT, "search_kb"], "Pairing the X1 headset",
+                                    evidence=["scenario.product-question.happy", "skill:product-troubleshooting"]))
             elif c["scenario"] == "scenario.product-question.no-results":
-                answer.append(_case(i, "unicorn warranty", ["search_kb"], "could not find", variant="boundary"))
+                answer.append(_case(i, "unicorn warranty", [LOAD_PRODUCT, "search_kb"], "could not find", variant="boundary"))
             elif c.get("failure_mode") == "out_of_scope":
                 answer.append(_case(i, OUT_OF_SCOPE[k % len(OUT_OF_SCOPE)], [], "outside", variant="adversarial"))
             else:
