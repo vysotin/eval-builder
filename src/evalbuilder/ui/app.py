@@ -81,7 +81,8 @@ def sidebar() -> None:
                 s = bundle.summary()
                 if s["artifacts"]:
                     st.markdown(f"{len(s['artifacts'])}/{len(ARTIFACTS)} artifact kinds")
-                    st.caption(f"cases {s['cases']} · intents {s['intents']} · scenarios {s['scenarios']} · tools {s['tools']} · runs {s['runs']}")
+                    st.caption(f"cases {s['cases']} · intents {s['intents']} · scenarios {s['scenarios']} · tools {s['tools']}"
+                               + (f" · skills {s['skills']}" if s.get("skills") else "") + f" · runs {s['runs']}")
                 else:
                     st.caption("no artifacts yet")
                 for p in bundle.problems:

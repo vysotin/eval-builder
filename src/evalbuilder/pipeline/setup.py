@@ -98,6 +98,8 @@ def preview_target(source: str | Path, module: str, factory: str = "build_agent"
         "conditional_edges": amap.graph.get("conditional_edges", []),
         "live": live_graph,
         "tools": tools,
+        "skills": list(amap.skills),
+        "skills_dir": amap.app.get("skills_dir"),
         "models": amap.app.get("models", []),
         "edge_case_count": sum(len(t.get("edge_cases") or []) for t in tools),
     }
@@ -134,6 +136,9 @@ def default_form(target: dict | None = None) -> dict:
         "overall_pass": 0.8,
         "repeats": 2,
         "on_miss": "strict",
+        "mock_model": "",
+        "on_invalid": "fallback",
+        "strategies": True,
         "simulate": True,
         "auto_approve": False,
         "approved_by": "",
@@ -169,6 +174,9 @@ def form_from_config(cfg: PipelineConfig, output_dir: str | None = None, config_
         "overall_pass": cfg.thresholds.overall_pass,
         "repeats": cfg.runs.repeats,
         "on_miss": cfg.mocking.on_miss,
+        "mock_model": cfg.models.mock or "",
+        "on_invalid": cfg.mocking.on_invalid,
+        "strategies": cfg.mocking.strategies,
         "simulate": cfg.stages.simulate,
         "auto_approve": cfg.review.auto_approve,
         "approved_by": cfg.review.approved_by,
@@ -265,10 +273,12 @@ def build_config(form: dict) -> PipelineConfig:
             raise ValueError(f"{key} is required" + (" (pick a target agent)" if key != "name" else ""))
     evaluators = [{"type": t} for t in form.get("evaluators") or []] or [dict(e) for e in DEFAULT_EVALUATORS]
     agent_model = (form.get("agent_model") or "").strip() or None
+    mock_model = (form.get("mock_model") or "").strip() or None
     data: dict[str, Any] = {
         "name": form["name"].strip(),
         "target": {"source": form["source"].strip(), "module": form["module"].strip(), "factory": form.get("factory") or "build_agent"},
-        "models": {"agent": agent_model, "judge": form.get("judge_model") or DEFAULT_MODEL, "generator": form.get("generator_model") or DEFAULT_MODEL},
+        "models": {"agent": agent_model, "judge": form.get("judge_model") or DEFAULT_MODEL, "generator": form.get("generator_model") or DEFAULT_MODEL,
+                   "mock": mock_model},
         "constraints": _lines(form.get("constraints", "")),
         "instructions": (form.get("instructions") or "").strip(),
         "coverage": {
@@ -286,7 +296,8 @@ def build_config(form: dict) -> PipelineConfig:
             "overall_pass": float(form.get("overall_pass", 0.8)),
         },
         "runs": {"repeats": int(form.get("repeats", 2))},
-        "mocking": {"required": True, "on_miss": form.get("on_miss") or "strict"},
+        "mocking": {"required": True, "on_miss": form.get("on_miss") or "strict", "on_invalid": form.get("on_invalid") or "fallback",
+                    "strategies": bool(form.get("strategies", True))},
         "stages": {"simulate": bool(form.get("simulate", True)), "publish": "auto", "max_retries": 1},
         "review": {"auto_approve": bool(form.get("auto_approve", False)), "approved_by": (form.get("approved_by") or "").strip()},
         "output": {"dir": (form.get("output_dir") or "").strip() or None},
@@ -360,12 +371,19 @@ def dataset_summary(out_dir: Path) -> dict | None:
                 "input": str(((c.inputs.get("messages") or [{}])[0]).get("content", ""))[:120],
                 "mock_override": bool((c.metadata.get("mocks") or {}).get("tools")),
             })
+    strategies = (ds.mocks.get("strategies") or {}).get("strategies") or {}
     return {
         "cases": len(ds.cases),
         "by_status": by_status,
         "by_failure_mode": by_failure,
         "schema_edge_cases": edges,
         "mocked_tools": sorted((ds.mocks.get("tools") or {}).keys()),
+        "on_miss": ds.mocks.get("on_miss", "real"),
+        "mock_model": (ds.mocks.get("llm") or {}).get("model"),
+        "strategies": {sid: sorted((st.get("tools") or {}).keys()) for sid, st in strategies.items()},
+        "cases_by_strategy": {
+            sid: sum(1 for c in ds.cases if (c.metadata.get("mocks") or {}).get("strategy") == sid) for sid in strategies
+        },
         "case_ids": [c.id for c in ds.cases],
         "inputs": {c.id: str(((c.inputs.get("messages") or [{}])[0]).get("content", ""))[:90] for c in ds.cases},
     }

@@ -101,6 +101,7 @@ class Bundle:
             "intents": len(amap.get("intents", [])),
             "scenarios": len(amap.get("scenarios", [])),
             "tools": len(amap.get("tools", [])),
+            "skills": len(amap.get("skills", []) or []),
             "runs": len(self.run_ids),
         }
 

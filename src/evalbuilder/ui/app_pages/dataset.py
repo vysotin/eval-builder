@@ -26,6 +26,7 @@ def _case_rows(cases: list[dict]) -> list[dict]:
                 "source": md.get("source"),
                 "turns": 1 + len(md.get("user_turns") or []),
                 "edge": (md.get("edge") or {}).get("kind"),
+                "strategy": (md.get("mocks") or {}).get("strategy"),
                 "expected tools": ", ".join(t.get("name", "?") for t in ref.get("expected_tools") or []),
                 "input": case_input(c),
             }
@@ -43,10 +44,13 @@ def render() -> None:
     for c in cases:
         statuses[(c.get("review") or {}).get("status", "pending")] = statuses.get((c.get("review") or {}).get("status", "pending"), 0) + 1
 
+    mocks = ds.get("mocks") or {}
+    strategies = (mocks.get("strategies") or {}) if isinstance(mocks.get("strategies"), dict) else {}
     st.header("Dataset & mocks", anchor="dataset")
     st.markdown(
         f"**{ds.get('name')}** · schema `{ds.get('schema')}` · type `{ds.get('dataset_type')}` · "
-        f"target `{(ds.get('target') or {}).get('module')}` · mock miss policy `{(ds.get('mocks') or {}).get('on_miss', 'real')}`"
+        f"target `{(ds.get('target') or {}).get('module')}` · mock miss policy `{mocks.get('on_miss', 'real')}`"
+        + (f" · mock model `{(mocks.get('llm') or {}).get('model')}` · default strategy `{mocks.get('strategy', 'default')}`" if mocks.get("on_miss") == "llm" else "")
     )
     with st.container(horizontal=True):
         st.metric("Cases", len(cases), border=True)
@@ -121,6 +125,8 @@ def render() -> None:
                         st.markdown(f"`{key}`: {value}")
             if md.get("evidence"):
                 st.caption(f"evidence: {evidence_md(md.get('evidence'))}")
+            if (md.get("mocks") or {}).get("strategy"):
+                st.markdown(f":blue-badge[mock strategy {md['mocks']['strategy']}] the LLM mock engine follows this strategy for calls no rule answers")
             case_mocks = (md.get("mocks") or {}).get("tools") or {}
             if case_mocks:
                 st.markdown("**Per-case mock overrides**")
@@ -142,3 +148,28 @@ def render() -> None:
                     [{"matchArgs": json.dumps(r.get("matchArgs") or {}, ensure_ascii=False),
                       "response": json.dumps(r.get("response"), ensure_ascii=False)[:300]} for r in tool_rules]
                 )
+
+    strategies = bundle.get("mock_strategies") or strategies
+    if strategies and strategies.get("strategies"):
+        with st.container(border=True):
+            st.subheader("Mock strategies (LLM mock engine)", anchor="mock-strategies")
+            st.caption("Layer 2: when no rule matches and the policy is `llm`, the engine answers from the selected strategy — "
+                       "validated against the tool's output schema, one repair round, then the fallback response.")
+            if strategies.get("world"):
+                st.markdown(f"**World:** {strategies['world']}")
+            by_strategy = {sid: sum(1 for c in cases if ((c.get("metadata") or {}).get("mocks") or {}).get("strategy") == sid)
+                           for sid in strategies["strategies"]}
+            table([{"strategy": sid, "description": s_.get("description", ""), "tools": ", ".join(sorted((s_.get("tools") or {}).keys())),
+                    "cases selecting it": by_strategy.get(sid, 0)} for sid, s_ in strategies["strategies"].items()])
+            tabs = st.tabs(list(strategies["strategies"]))
+            for tab, (sid, s_) in zip(tabs, strategies["strategies"].items()):
+                with tab:
+                    for tool, t in (s_.get("tools") or {}).items():
+                        with st.expander(f"{tool}"):
+                            st.markdown(t.get("behavior") or "_no behaviour_")
+                            if t.get("examples"):
+                                st.markdown("**Examples**")
+                                table([{"args": json.dumps(e.get("args"), ensure_ascii=False), "response": json.dumps(e.get("response"), ensure_ascii=False)[:300]} for e in t["examples"]])
+                            if t.get("fallback_response") is not None:
+                                st.markdown("**Fallback response** (used when a generated answer stays invalid)")
+                                code_json(t["fallback_response"])

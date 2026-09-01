@@ -24,6 +24,10 @@ def test_discover_targets_finds_example_agents():
 def test_preview_target_reports_structure_without_llm():
     preview = s.preview_target("examples/support_bot/agent.py", "examples.support_bot.agent")
     assert preview["ok"] and preview["problems"] == []
+    assert [sk["name"] for sk in preview["skills"]] == ["product-troubleshooting", "refund-policy"] and preview["skills_dir"].endswith("support_bot/skills")
+    loader = next(t for t in preview["tools"] if t["name"] == "load_skill")
+    assert loader["kind"] == "skill_loader" and loader["mockable"] is False and loader["live"]
+    assert s.preview_target("examples/weather_bot/agent.py", "examples.weather_bot.agent")["skills"] == []
     assert {n["id"] for n in preview["nodes"]} >= {"classify", "support_agent", "kb_agent", "decline"}
     tools = {t["name"]: t for t in preview["tools"]}
     assert tools["issue_refund"]["side_effecting"] and tools["issue_refund"]["live"]
@@ -93,12 +97,15 @@ def test_default_form_without_target_selects_nothing():
 def test_form_from_config_round_trips_build_config():
     form = s.default_form({"name": "demo", "source": "examples/support_bot/agent.py", "module": "examples.support_bot.agent"})
     form.update(constraints="Never guess.\nAlways cite.", instructions="Be terse.", agent_model="", evaluators=["expected_tools", "contains"],
-                auto_approve=True, approved_by="me", per_tool_edge_cases=3, repeats=1, simulate=False, on_miss="fallback",
+                auto_approve=True, approved_by="me", per_tool_edge_cases=3, repeats=1, simulate=False, on_miss="llm",
+                mock_model="openai:gpt-5", on_invalid="strict", strategies=False,
                 total_cases=5, multi_turn_share=0.25, threshold_default=0.6)
     cfg = s.build_config(form)
     back = s.form_from_config(cfg, config_path="eval/pipeline/demo.yaml")
     assert back == {**form, "output_dir": "eval/pipeline/demo"}
     assert s.build_config(back) == cfg
+    assert cfg.mocking.on_miss == "llm" and cfg.models.mock == "openai:gpt-5" and cfg.mocking.on_invalid == "strict" and not cfg.mocking.strategies
+    assert s.default_form()["mock_model"] == "" and s.default_form()["on_invalid"] == "fallback" and s.default_form()["strategies"] is True
     # a folder overrides the config's output dir (the project is the folder)
     assert s.form_from_config(cfg, output_dir="docs/examples/demo")["output_dir"] == "docs/examples/demo"
     # unknown evaluators (with options) are kept out of the multiselect but survive in the YAML round trip only

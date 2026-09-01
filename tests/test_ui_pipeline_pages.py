@@ -441,3 +441,31 @@ def test_sidebar_job_widget_shows_badge_bar_and_stage(tmp_path):
         assert bars and "run" in str(getattr(bars[0], "text", ""))
     finally:
         jobs.stop_job(out)
+
+
+
+def test_setup_form_carries_the_mock_layer_and_skills_into_the_yaml(tmp_path):
+    at = _app("setup")
+    at.selectbox(key="setup_target").select(SUPPORT).run()
+    at.button(key="setup_discover").click().run()
+    assert _errors(at) == []
+    assert next(m for m in at.metric if m.label == "Skills").value == "2"
+    text = "\n".join(m.value for m in at.markdown)
+    assert "Agent skills" in text
+    at.selectbox(key="setup_on_miss").select("llm").run()
+    at.selectbox(key="setup_on_invalid").select("strict").run()
+    at.text_input(key="setup_mock_model").set_value("scripted:examples.support_bot.offline:mock_model").run()
+    at.checkbox(key="setup_strategies").uncheck().run()
+    at.text_input(key="setup_config_path").set_value(str(tmp_path / "cfg.yaml")).run()
+    at.button(key="setup_generate").click().run()
+    yaml_text = at.text_area(key="setup_yaml").value
+    assert "on_miss: llm" in yaml_text and "on_invalid: strict" in yaml_text and "strategies: false" in yaml_text
+    assert "mock: scripted:examples.support_bot.offline:mock_model" in yaml_text
+    at.button(key="setup_validate").click().run()
+    assert any("is valid" in s.value for s in at.success)
+    # the form survives navigation and comes back from the YAML
+    _goto(at, "run")
+    _goto(at, "setup")
+    assert at.selectbox(key="setup_on_miss").value == "llm" and at.selectbox(key="setup_on_invalid").value == "strict"
+    assert at.text_input(key="setup_mock_model").value == "scripted:examples.support_bot.offline:mock_model"
+    assert not at.checkbox(key="setup_strategies").value

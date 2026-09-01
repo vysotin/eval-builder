@@ -28,7 +28,7 @@ def merged_nodes(graph: dict) -> list[dict]:
         cur = merged.setdefault(n["id"], {"id": n["id"], "kind": "graph-node", "evidence": []})
         if n.get("kind") and n["kind"] != "graph-node":
             cur["kind"] = n["kind"]
-        for key in ("prompt", "tools", "tools_source"):
+        for key in ("prompt", "tools", "tools_source", "skills", "skills_source"):
             if n.get(key):
                 cur[key] = n[key]
         for e in n.get("evidence") or []:
@@ -86,6 +86,7 @@ def render() -> None:
     app = amap.get("app") or {}
     graph = amap.get("graph") or {}
     tools = amap.get("tools") or []
+    skills = amap.get("skills") or []
 
     st.header("Agent", anchor="agent")
     st.markdown(
@@ -96,6 +97,7 @@ def render() -> None:
         st.metric("Nodes", len(merged_nodes(graph)), border=True)
         st.metric("Edges", len(graph.get("edges", [])) + sum(len(c.get("targets", [])) for c in graph.get("conditional_edges", [])), border=True)
         st.metric("Tools", len(tools), border=True)
+        st.metric("Skills", len(skills), border=True)
         st.metric("Constraints", len(amap.get("constraints", [])), border=True)
         st.metric("Decisions needed", len(amap.get("decisions_needed", [])), border=True)
 
@@ -115,7 +117,12 @@ def render() -> None:
     with st.container(border=True):
         st.subheader("Nodes and prompts", anchor="agent-nodes")
         for n in merged_nodes(graph):
-            with st.expander(f"{n['id']} · {n.get('kind', '?')}" + (f" · tools: {', '.join(n['tools'])}" if n.get("tools") else "")):
+            title = f"{n['id']} · {n.get('kind', '?')}" + (f" · tools: {', '.join(n['tools'])}" if n.get("tools") else "")
+            if n.get("skills"):
+                title += f" · skills: {', '.join(n['skills'])}"
+            with st.expander(title):
+                if n.get("skills"):
+                    st.markdown(" ".join(f":violet-badge[skill {sk}]" for sk in n["skills"]) + f" · disclosure `{n.get('skills_source', '?')}`")
                 if n.get("prompt"):
                     st.markdown(f"> {n['prompt']}")
                 st.caption(f"evidence: {evidence_md(n.get('evidence'))}" + (f" · tools from {n.get('tools_source')}" if n.get("tools_source") else ""))
@@ -130,7 +137,7 @@ def render() -> None:
         st.subheader("Tools", anchor="agent-tools")
         table(
             [
-                {"tool": t["name"], "description": t.get("description", ""), "used by": ", ".join(t.get("used_by") or []),
+                {"tool": t["name"], "kind": t.get("kind", "tool"), "description": t.get("description", ""), "used by": ", ".join(t.get("used_by") or []),
                  "live": bool(t.get("live")), "args": ", ".join((t.get("args_schema") or {}).get("properties", {}).keys()),
                  "schema source": t.get("schema_source") or "—", "models": ", ".join(t.get("models") or []),
                  "output schema": bool(t.get("output_schema")), "side-effecting": bool(t.get("side_effecting")),
@@ -156,6 +163,23 @@ def render() -> None:
                          "detail": e.get("detail"), "expected behavior": e.get("expected_behavior")}
                         for e in t["edge_cases"]
                     ])
+
+    if skills:
+        with st.container(border=True):
+            st.subheader("Skills", anchor="agent-skills")
+            st.caption(f"Agent Skills (SKILL.md) from `{app.get('skills_dir', '?')}` — embedded in prompts (inline) or read on demand through a skill-loader tool.")
+            table([
+                {"skill": sk["name"], "description": sk.get("description", ""), "used by": ", ".join(sk.get("used_by") or []),
+                 "allowed tools": ", ".join(sk.get("allowed_tools") or []), "tools mentioned": ", ".join(sk.get("tools_mentioned") or []),
+                 "references": len(sk.get("references") or []), "scripts": len(sk.get("scripts") or [])}
+                for sk in skills
+            ])
+            for sk in skills:
+                with st.expander(f"{sk['name']} — instructions"):
+                    st.markdown(sk.get("prompt") or "_empty_")
+                    for r in sk.get("references") or []:
+                        st.markdown(f"- **{r.get('title')}** (`{r.get('path')}`, {r.get('chars')} chars): {r.get('excerpt', '')}")
+                    st.caption(f"path `{sk.get('path')}` · evidence: {evidence_md(sk.get('evidence'))}")
 
     with st.container(border=True):
         st.subheader("Constraints", anchor="agent-constraints")

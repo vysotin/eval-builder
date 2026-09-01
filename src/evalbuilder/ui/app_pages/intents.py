@@ -55,8 +55,8 @@ def render() -> None:
             st.markdown(f"**{intent['id']}** — {intent.get('description', '')}")
             for s in rows:
                 badge = ":green-badge[happy]" if s.get("kind") == "happy" else f":red-badge[{s.get('failure_mode') or 'failure'}]"
-                with st.expander(f"{s['id']}  ·  cases: {cases_by_scenario.get(s['id'], 0)}"):
-                    st.markdown(f"{badge} {s.get('description', '')}")
+                with st.expander(f"{s['id']}  ·  cases: {cases_by_scenario.get(s['id'], 0)}" + (f"  ·  skills: {', '.join(s['skills'])}" if s.get("skills") else "")):
+                    st.markdown(f"{badge} {s.get('description', '')}" + ("".join(f" :violet-badge[skill {sk}]" for sk in s.get("skills") or [])))
                     if s.get("expected_behavior"):
                         st.markdown(f"**Expected behavior:** {s['expected_behavior']}")
                     st.caption(f"evidence: {evidence_md(s.get('evidence'))} · status {s.get('status', '')}")

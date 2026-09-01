@@ -22,6 +22,31 @@ EXAMPLE = "docs/examples/support-bot"
 INCIDENT_EXAMPLE = "docs/examples/incident-desk"
 
 
+@pytest.fixture(scope="module")
+def llm_bundle_dir(tmp_path_factory):
+    """A support_bot pipeline output produced offline with agent skills (on-demand loader)
+    and the LLM mock layer (`on_miss: llm`, scripted mock model) — one run per module."""
+    from evalbuilder.config import Settings
+    from evalbuilder.pipeline import setup as setup_mod
+    from evalbuilder.pipeline.report import run_pipeline
+
+    root = tmp_path_factory.mktemp("llm")
+    form = setup_mod.default_form({"name": "support-llm", "source": "examples/support_bot/agent.py", "module": "examples.support_bot.agent"})
+    form.update(agent_model="scripted:examples.support_bot.agent:default_scripted_model",
+                judge_model="scripted:examples.support_bot.agent:default_scripted_model",
+                generator_model="scripted:examples.support_bot.offline:generator_model",
+                mock_model="scripted:examples.support_bot.offline:mock_model", on_miss="llm",
+                evaluators=["expected_tools", "contains"], total_cases=6, happy=1, failure=1, per_failure_category=1, out_of_intent=1,
+                multi_turn_share=0.0, per_tool_edge_cases=0, repeats=1, simulate=True, auto_approve=True, approved_by="tester",
+                output_dir=str(root / "out"), config_path=str(root / "support-llm.yaml"))
+    cfg = setup_mod.build_config(form)
+    cfg.stages.publish = "never"
+    cfg.save(root / "support-llm.yaml")
+    _, report = run_pipeline(root / "support-llm.yaml", settings=Settings())
+    assert report["stages"]["run"]["status"] == "ok", report["stages"]
+    return str(root / "out")
+
+
 def _page_script(page):
     import importlib
 
@@ -157,3 +182,39 @@ def test_uploaded_bundle_is_a_read_only_project():
     assert _errors(at) == [] and [h.value for h in at.header] == ["Summary"]
     at = _run("run", {"mode": "uploads", "bundle": bundle})
     assert any("read-only" in i.value for i in at.info)
+
+
+
+# ── skills + the LLM mock layer on every page ──────────────────
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_llm_and_skills_bundle_pages_render(page, llm_bundle_dir):
+    at = _run(page, _dir(llm_bundle_dir))
+    assert _errors(at) == []
+    text = "\n".join(m.value for m in at.markdown) + "\n".join(c.value for c in at.caption)
+    if page == "agent":
+        assert any(h.value == "Skills" for h in at.subheader)
+        assert "refund-policy" in text and "product-troubleshooting" in text and "skill_loader" in "\n".join(str(d.value) for d in at.dataframe)
+        assert any("skills: product-troubleshooting, refund-policy" in e.label for e in at.expander)
+    if page == "dataset":
+        assert any(h.value.startswith("Mock strategies") for h in at.subheader)
+        assert "mock miss policy `llm`" in text and "scripted:examples.support_bot.offline:mock_model" in text
+        assert "Acme Store" in text  # the world
+    if page == "results":
+        assert any("Mock calls" in e.label for e in at.expander)
+    if page == "summary":
+        assert any(h.value == "Mocking" for h in at.subheader) and "rules → llm_engine" in text
+    if page == "coverage":
+        assert any(h.value == "Skills" for h in at.subheader)
+    if page == "intents":
+        assert any("skills: refund-policy" in e.label for e in at.expander)
+
+
+def test_llm_bundle_loader_summary_counts_skills(llm_bundle_dir):
+    b = loader.load_dir(llm_bundle_dir)
+    assert b.problems == [] and b.summary()["skills"] == 2 and b.has("mock_strategies")
+    assert b.get("mock_strategies")["strategies"]["default"]["tools"]["lookup_order"]["behavior"]
+    assert b.agent_map["skills"][0]["name"] == "product-troubleshooting"
+    run = next(iter(b.runs.values()))
+    assert run["mocking"]["on_miss"] == "llm" and any(m["layer"] == "llm" for cr in run["case_runs"] for m in cr["mock_calls"])

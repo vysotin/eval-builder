@@ -130,6 +130,24 @@ def render() -> None:
             else:
                 st.caption("no stability data (needs ≥ 1 scored run)")
 
+    mocking = report.get("mocking") or {}
+    if mocking:
+        with st.container(border=True):
+            st.subheader("Mocking", anchor="mocking-summary")
+            calls = mocking.get("calls") or {}
+            layers = " → ".join(mocking.get("layers") or ["rules"])
+            line = f"layers **{layers}** · miss policy `{mocking.get('on_miss')}`"
+            if mocking.get("model"):
+                line += f" · mock model `{mocking['model']}` · strategy `{mocking.get('strategy')}` · on invalid `{mocking.get('on_invalid')}`"
+            if mocking.get("strategies"):
+                line += " · strategies " + " ".join(f":blue-badge[{sid}]" for sid in mocking["strategies"])
+            st.markdown(line)
+            if calls:
+                st.caption("tool calls answered by layer: " + " · ".join(f"`{k}` {v}" for k, v in calls.items()))
+            llm_unstable = (stability or {}).get("llm_mocked_unstable") or []
+            if llm_unstable:
+                st.warning(f"{len(llm_unstable)} unstable case(s) had LLM-mocked tool answers — attribute the instability to the mock layer before the agent.", icon=":material/warning:")
+
     analysis = bundle.get("analysis") or report.get("analysis")
     if analysis:
         with st.container(border=True):

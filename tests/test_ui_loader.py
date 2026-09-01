@@ -22,7 +22,7 @@ def test_load_dir_reads_every_artifact_kind(example_bundle):
     assert b.problems == []
     assert b.name == "support-bot" and b.verdict == "fail"
     present = {k for k in ARTIFACTS if b.has(k)}
-    transient = {"pipeline_job", "run_progress"}  # written live during a job; not part of a committed example
+    transient = {"pipeline_job", "run_progress", "mock_strategies"}  # job-time files, and a kind newer than the committed example
     assert present == set(ARTIFACTS) - transient, f"missing kinds: {set(ARTIFACTS) - present}"
     assert set(b.run_ids) == set(b.runs) == set(b.score_reports) and len(b.run_ids) == 2
     assert b.run_ids == [e["run_id"] for e in b.state["stages"]["run"]["artifacts"]["runs"]]
@@ -74,7 +74,7 @@ def test_load_files_identifies_by_schema_then_name():
     b = loader.load_files(files)
     assert b.problems == []
     assert b.name == "support-bot"
-    assert {k for k in ARTIFACTS if b.has(k)} == set(ARTIFACTS) - {"pipeline_job", "run_progress"}
+    assert {k for k in ARTIFACTS if b.has(k)} == set(ARTIFACTS) - {"pipeline_job", "run_progress", "mock_strategies"}
     assert set(b.run_ids) == {"093d879e", "8a6166d8"}  # run ids recovered from the payloads
     assert set(b.get("mock_rules")) == {"lookup_order", "check_refund_policy", "issue_refund", "search_kb"}
 

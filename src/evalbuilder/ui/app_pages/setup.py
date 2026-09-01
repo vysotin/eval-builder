@@ -118,6 +118,7 @@ def _render_preview(preview: dict) -> None:
     with st.container(horizontal=True):
         st.metric("Graph nodes", len(preview["nodes"]), border=True)
         st.metric("Tools", len(preview["tools"]), border=True)
+        st.metric("Skills", len(preview.get("skills") or []), border=True)
         st.metric("Pydantic models", len(preview["models"]), border=True)
         st.metric("Schema edge cases", preview.get("edge_case_count", 0), border=True)
     st.caption(
@@ -128,12 +129,21 @@ def _render_preview(preview: dict) -> None:
     st.markdown("**Tools and schemas**")
     table([
         {
-            "tool": t["name"], "schema source": t.get("schema_source"), "models": ", ".join(t.get("models") or []),
+            "tool": t["name"], "kind": t.get("kind", "tool"), "schema source": t.get("schema_source"), "models": ", ".join(t.get("models") or []),
             "output schema": "yes" if t.get("output_schema") else "—", "side-effecting": bool(t.get("side_effecting")),
-            "edge cases": len(t.get("edge_cases") or []), "used by": ", ".join(t.get("used_by") or []),
+            "mocked": bool(t.get("mockable", True)), "edge cases": len(t.get("edge_cases") or []), "used by": ", ".join(t.get("used_by") or []),
         }
         for t in preview["tools"]
-    ], column_config={"side-effecting": st.column_config.CheckboxColumn()})
+    ], column_config={"side-effecting": st.column_config.CheckboxColumn(),
+                      "mocked": st.column_config.CheckboxColumn(help="skill loaders are local and never mocked")})
+    if preview.get("skills"):
+        st.markdown(f"**Agent skills** — `{preview.get('skills_dir')}`")
+        table([
+            {"skill": sk["name"], "description": sk.get("description", ""), "used by": ", ".join(sk.get("used_by") or []),
+             "allowed tools": ", ".join(sk.get("allowed_tools") or []), "references": len(sk.get("references") or []),
+             "chars": len(sk.get("prompt") or "")}
+            for sk in preview["skills"]
+        ])
     for t in preview["tools"]:
         with st.expander(f"{t['name']} — schemas & edge cases"):
             c1, c2 = st.columns(2)
@@ -248,13 +258,16 @@ def render() -> None:
         with c2:
             st.text_input("Config file path", key="setup_config_path", placeholder="eval/pipeline/<name>.yaml")
         st.markdown("**Models** — `provider:model[@effort]`; default is Claude Sonnet 5 through the Claude Code CLI")
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4 = st.columns(4)
         with m1:
             st.text_input("Agent model (empty = target default)", key="setup_agent_model", help=f"e.g. {DEFAULT_MODEL} or scripted:module:factory")
         with m2:
             st.text_input("Judge model", key="setup_judge_model")
         with m3:
             st.text_input("Generator model", key="setup_generator_model")
+        with m4:
+            st.text_input("Mock model (empty = generator)", key="setup_mock_model",
+                          help="drives the LLM mock engine (layer 2) when the miss policy is llm")
         st.text_area("Constraints (one per line)", key="setup_constraints", height=100,
                      placeholder="Never call issue_refund before the customer explicitly confirms.")
         st.text_area("General rules & instructions for the generator (free text)", key="setup_instructions", height=120,
@@ -276,11 +289,17 @@ def render() -> None:
         with k7:
             st.number_input("Edge cases / tool", 0, 10, key="setup_per_tool_edge_cases",
                             help="schema-derived: missing / wrong / out-of-range input, malformed tool output")
-        e1, e2 = st.columns([2, 1])
+        e1, e2, e3, e4 = st.columns([2, 1, 1, 1])
         with e1:
             st.multiselect("Evaluators", list(setup_mod.EVALUATOR_CHOICES), key="setup_evaluators")
         with e2:
-            st.selectbox("Mock miss policy", ["strict", "fallback", "real"], key="setup_on_miss")
+            st.selectbox("Mock miss policy", ["strict", "llm", "fallback", "real"], key="setup_on_miss",
+                         help="layer 1 = deterministic rules; llm = an LLM mock engine answers calls no rule covers, from pre-generated strategies")
+        with e3:
+            st.selectbox("On invalid mock", ["fallback", "strict"], key="setup_on_invalid",
+                         help="an engine answer still violating the tool's output schema after one repair: fallback (schema sample) or error")
+        with e4:
+            st.checkbox("Generate strategies", key="setup_strategies", help="write mock-strategies.json in the mocks stage")
         t1, t2, t3, t4, t5 = st.columns(5)
         with t1:
             st.number_input("Metric threshold", 0.0, 1.0, step=0.05, key="setup_threshold_default")

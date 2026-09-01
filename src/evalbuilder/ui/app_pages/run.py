@@ -84,6 +84,14 @@ def _review_section(out_dir: Path, status: dict, config_path: str | None) -> Non
         st.metric("Schema-edge cases", len(summary["schema_edge_cases"]), border=True)
         st.metric("Mocked tools", len(summary["mocked_tools"]), border=True)
     st.caption("failure modes: " + ", ".join(f"`{k}` {v}" for k, v in sorted(summary["by_failure_mode"].items())))
+    mock_line = f"mock miss policy `{summary.get('on_miss', 'real')}`"
+    if summary.get("mock_model"):
+        mock_line += f" · mock model `{summary['mock_model']}`"
+    if summary.get("strategies"):
+        mock_line += " · strategies " + " ".join(
+            f":blue-badge[{sid} · {len(tools)} tool(s) · {summary['cases_by_strategy'].get(sid, 0)} case(s)]" for sid, tools in summary["strategies"].items()
+        )
+    st.caption(mock_line)
     if summary["schema_edge_cases"]:
         st.markdown("**Schema edge cases** (from tool input/output schemas)")
         table(summary["schema_edge_cases"], column_config={"mock_override": st.column_config.CheckboxColumn("mock override")})

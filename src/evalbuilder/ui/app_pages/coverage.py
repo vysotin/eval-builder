@@ -46,6 +46,16 @@ def render() -> None:
                   "related_intent": c.get("related_intent")} for c in cells]
             )
 
+    if coverage.get("skills"):
+        with st.container(border=True):
+            st.subheader("Skills", anchor="coverage-skills")
+            st.caption("Cases exercising each agent skill (scenario lists it, evidence cites `skill:<name>`, or an expected call loads it).")
+            uncovered = set(coverage.get("uncovered_skills") or [])
+            table([{"skill": name, "cases": v.get("cases", 0), "covered": name not in uncovered} for name, v in coverage["skills"].items()],
+                  column_config={"covered": st.column_config.CheckboxColumn()})
+            if uncovered:
+                st.warning("Skills without a single case: " + ", ".join(f"`{n}`" for n in sorted(uncovered)), icon=":material/warning:")
+
     with st.container(border=True):
         st.subheader("Gaps", anchor="coverage-gaps")
         gaps = coverage.get("gaps") or []

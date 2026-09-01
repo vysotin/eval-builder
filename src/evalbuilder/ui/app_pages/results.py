@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -166,6 +168,7 @@ def render() -> None:
             st.markdown(
                 ("✅ stable trajectory" if agg_row.get("stable") else ":red-badge[unstable trajectory]")
                 + " · means: " + ", ".join(f"`{m}`={num(v)}" for m, v in (agg_row.get("means") or {}).items())
+                + (f" · :blue-badge[{agg_row['llm_mock_calls']} LLM-mocked call(s)]" if agg_row.get("llm_mock_calls") else "")
             )
         run_tabs = st.tabs([f"run {r}" for r in bundle.run_ids] or ["runs"])
         for tab, run_id in zip(run_tabs, bundle.run_ids):
@@ -198,6 +201,16 @@ def render() -> None:
                         st.markdown(str((cr.get("outputs") or {}).get("response", "")))
                     else:
                         st.caption("no run record for this case")
+                if cr and cr.get("mock_calls"):
+                    with st.expander(f"Mock calls ({len(cr['mock_calls'])}) — which layer answered each tool call"):
+                        table([
+                            {"tool": m.get("tool"), "layer": m.get("layer"), "strategy": m.get("strategy"), "rule": m.get("rule"),
+                             "valid": m.get("valid"), "repairs": m.get("repairs"), "fallback": m.get("fallback"),
+                             "args": json.dumps(m.get("args"), ensure_ascii=False)[:120],
+                             "response": json.dumps(m.get("response"), ensure_ascii=False, default=str)[:160],
+                             "error": m.get("error") or ", ".join(m.get("problems") or [])[:120]}
+                            for m in cr["mock_calls"]
+                        ])
                 if cr and cr.get("trajectory"):
                     with st.expander("Trajectory transcript"):
                         transcript(cr["trajectory"], key=f"{run_id}-{selected}")
