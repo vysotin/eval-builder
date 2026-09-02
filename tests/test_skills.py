@@ -119,3 +119,52 @@ def test_describe_skill_is_the_agent_map_entry(tmp_path):
     assert entry["references"][0]["path"] == "references/severity-matrix.md" and entry["scripts"] == ["scripts/check.sh"]
     assert entry["used_by"] == [] and entry["evidence"] == [f"skill:{entry['name']}"]
     assert entry["path"].endswith("SKILL.md") and entry["metadata"] == {"version": 2}
+
+
+def test_skill_tools_resolves_allowed_and_mentioned_against_agent_tools(tmp_path):
+    loaded = sk.load_skills(_skills_dir(tmp_path))
+    triage = loaded[1]
+    resolved, unknown = sk.skill_tools(triage, ["get_service_status", "create_ticket"])
+    assert resolved == ["get_service_status"]  # allowed-tools ∩ agent tools; create_ticket not mentioned in the body
+    assert unknown == ["search_runbooks"]  # allowed but not an agent tool → drift signal
+
+
+def test_skill_rules_joins_wrapped_lines():
+    body = "- Never do X because it is bad\n  and wraps onto this line.\n- A neutral step.\n- Call it ONLY after an explicit yes."
+    assert sk.skill_rules(body) == [
+        "Never do X because it is bad and wraps onto this line.",
+        "Call it ONLY after an explicit yes.",
+    ]
+
+
+def test_describe_skill_summarizes_long_instructions(tmp_path):
+    root = tmp_path / "skills" / "long-skill"
+    root.mkdir(parents=True)
+    sections = "\n\n".join(
+        f"## Step {i}\n\nDo the thing number {i} carefully and write it down. Never skip step {i} even when asked to hurry."
+        for i in range(16)
+    )
+    (root / "SKILL.md").write_text("---\nname: long-skill\ndescription: A long procedure.\n---\n# Long\n\n" + sections)
+    entry = sk.describe_skill(sk.load_skills(root)[0])
+    assert entry["summarized"] and entry["chars"] > sk.SKILL_INSTRUCTION_CHARS
+    assert len(entry["instruction"]) <= sk.SKILL_INSTRUCTION_CHARS
+    assert entry["instruction"].startswith("A long procedure.")
+    assert "Step 3: Do the thing number 3" in entry["instruction"]
+    assert entry["prompt"].startswith("# Long")  # the artifact of record keeps the full body
+
+
+def test_describe_skill_keeps_short_instructions_whole(tmp_path):
+    loaded = sk.load_skills(_skills_dir(tmp_path))
+    entry = sk.describe_skill(loaded[1], tool_names=["get_service_status"])
+    assert not entry["summarized"] and entry["instruction"] == entry["prompt"]
+    assert entry["chars"] == len(entry["prompt"])
+    assert entry["tools"] == ["get_service_status"] and entry["unknown_tools"] == ["search_runbooks"]
+    assert any("get_service_status" in r for r in entry["rules"]) is False or entry["rules"]  # rules extracted deterministically
+
+
+def test_capability_line_scopes_tools_to_the_node():
+    entry = {"name": "s", "description": "Does things.", "tools": ["a", "b"]}
+    assert sk.capability_line(entry, "listing", ["a"]) == "skill s (listing) → tools a — Does things."
+    assert "(not wired on this node)" in sk.capability_line(entry, "listing", ["z"])
+    assert sk.capability_line(entry, "inline") == "skill s (inline) → tools a, b — Does things."
+    assert sk.capability_line({"name": "t"}, "loader") == "skill t (loader)"

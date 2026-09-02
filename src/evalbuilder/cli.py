@@ -1,4 +1,29 @@
-"""Typer CLI — the deterministic surface the agent-eval skills drive."""
+"""Typer CLI — the deterministic surface the agent-eval skills drive.
+
+Entry points
+------------
+- console script ``evalbuilder`` → ``app`` (declared in pyproject ``[project.scripts]``);
+- ``python -m evalbuilder.cli`` → the ``if __name__ == "__main__"`` guard at the bottom
+  (how the UI launches pipeline runs as background jobs);
+- the Streamlit UI and tests import the same functions/objects directly.
+
+Layout (in file order)
+----------------------
+- root ``app`` + sub-apps: ``dataset``, ``agent-map``, ``mock``, ``pipeline`` (Typer
+  groups registered with ``app.add_typer``); top-level commands sit on ``app`` itself;
+- shared helpers ``_emit`` / ``_read_json_arg`` / ``_load_ds`` / ``_save_valid``;
+- one function per command, named ``<group>_<command>`` and registered by decorator.
+
+Conventions every command follows
+---------------------------------
+- stdout carries exactly one JSON document (``_emit``) — the machine-readable result
+  the skills parse; progress and error text goes to stderr via ``typer.echo(err=True)``;
+- exit codes: 0 = success, 1 = invalid input / failed check / failed run
+  (``pipeline run`` uses 2 for unusable config or flags);
+- heavyweight modules (runner, discovery, simulation, LLM providers…) are imported
+  *inside* the command that needs them so ``evalbuilder --help`` stays fast and the
+  CLI works without optional extras installed.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +37,11 @@ from evalbuilder import artifacts, coverage
 from evalbuilder.config import Settings, capability_check
 from evalbuilder.schemas import AgentMap, Dataset, Target
 
+# ── Typer application wiring ────────────────────────────────────
+# `app` is the root CLI object the console script points at. Sub-apps become command
+# groups: `evalbuilder dataset …`, `evalbuilder agent-map …` (and, further down where
+# their commands live, `mock` and `pipeline`). `no_args_is_help` makes a bare
+# invocation print usage instead of erroring.
 app = typer.Typer(help="Build and run evals for LangGraph agents.", no_args_is_help=True)
 dataset_app = typer.Typer(help="Manage dataset artifacts.", no_args_is_help=True)
 app.add_typer(dataset_app, name="dataset")
@@ -19,22 +49,29 @@ agent_map_app = typer.Typer(help="Manage the agent-map artifact.", no_args_is_he
 app.add_typer(agent_map_app, name="agent-map")
 
 
+# ── shared helpers (used by every command) ──────────────────────
+
 def _emit(data) -> None:
+    """Print the command's single JSON result to stdout (the contract skills parse)."""
     typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 @app.callback()
 def _main() -> None:
     """Build and run evals for LangGraph agents."""
+    # Root callback: exists only to give the top-level `--help` its description and to
+    # force Typer into multi-command mode; it takes no global options and does nothing.
 
 
 def _read_json_arg(value: str):
+    """Parse a JSON option value; the `@file.json` convention reads it from a file."""
     if value.startswith("@"):
         return json.loads(Path(value[1:]).read_text())
     return json.loads(value)
 
 
 def _load_ds(path: Path) -> Dataset:
+    """Load a dataset artifact or exit 1 with a message — never a traceback."""
     try:
         return artifacts.load_dataset(path)
     except FileNotFoundError:
@@ -43,12 +80,18 @@ def _load_ds(path: Path) -> Dataset:
 
 
 def _save_valid(path: Path, ds: Dataset) -> None:
+    """Write-gate: validate first; on errors print them and exit 1 *without* saving,
+    so an invalid edit can never corrupt the artifact on disk."""
     errors = artifacts.validate_dataset(ds)
     if errors:
         _emit({"errors": errors})
         raise typer.Exit(1)
     artifacts.save_json(path, ds)
 
+
+# ── `evalbuilder dataset …` — dataset artifact management ───────
+# init / add / import / validate / list / gaps. Every mutation goes through
+# `_save_valid`; every new case lands with review.status=pending (humans approve).
 
 @dataset_app.command("init")
 def dataset_init(
@@ -76,6 +119,8 @@ def dataset_add(
     """Normalize and append one case (always lands as pending)."""
     ds = _load_ds(path)
     try:
+        # add_case owns normalization: content-hash id, defaults, pending review status,
+        # duplicate detection — the CLI never invents that logic itself.
         added = artifacts.add_case(ds, _read_json_arg(case))
     except ValueError as e:
         typer.echo(str(e), err=True)
@@ -142,7 +187,11 @@ def dataset_gaps(
     _emit(coverage.coverage_gaps(ds, amap, target_per_cell))
 
 
+# ── `evalbuilder agent-map …` — agent-map artifact management ───
+
 def _check_entries(kind: str, entries, required: tuple[str, ...]) -> list[str]:
+    """Shallow structural check for `agent-map update` payloads: each entry must carry
+    the required keys (id/evidence, failure_type/evidence, …)."""
     errors = []
     if not isinstance(entries, list):
         return [f"{kind} must be a JSON list"]
@@ -163,6 +212,8 @@ def agent_map_update(
     constraints: Optional[str] = typer.Option(None, "--constraints"),
 ) -> None:
     """Replace agent-map sections with validated, evidence-cited JSON."""
+    # Sections are replaced wholesale (not merged); the file is only written when every
+    # provided section passed its checks, so a bad flag leaves the map untouched.
     amap = AgentMap.model_validate(json.loads(path.read_text()))
     errors: list[str] = []
     updated: list[str] = []
@@ -202,6 +253,8 @@ def agent_map_update(
     _emit({"updated": updated})
 
 
+# ── `evalbuilder review` — the explicit human review gate ───────
+
 @app.command()
 def review(
     path: Path,
@@ -225,11 +278,17 @@ def review(
     _emit({"updated": n, "status": status})
 
 
+# ── `evalbuilder mock …` — the two tool-mock layers ─────────────
+# set (layer-1 rules) / verify (rule coverage) / strategies (layer-2 LLM engine setup)
+# / validate (one response vs the tool's output schema) / try (answer one call through
+# both layers). See docs/tool-mocking.md for the semantics.
 mock_app = typer.Typer(help="Manage tool mocks: layer 1 rules (matchArgs → response) and layer 2 LLM mock strategies.", no_args_is_help=True)
 app.add_typer(mock_app, name="mock")
 
 
 def _tool_specs(ds: Dataset) -> dict[str, dict]:
+    """Import the dataset's target module and describe its mockable tools (name →
+    schemas); what strategy validation and the LLM engine check responses against."""
     from evalbuilder import target as target_mod
     from evalbuilder.runner import tool_specs_of
 
@@ -237,6 +296,8 @@ def _tool_specs(ds: Dataset) -> dict[str, dict]:
 
 
 def _mock_model_for(ds: Dataset, spec: Optional[str]):
+    """Resolve the model driving the LLM mock engine: the --mock-model flag wins, else
+    the dataset's `mocks.llm.model`; exit 1 with a hint when neither is set."""
     from evalbuilder.claude_cli import model_from_spec
 
     chosen = spec or ((ds.mocks or {}).get("llm") or {}).get("model")
@@ -293,6 +354,12 @@ def mock_strategies(
     case: Optional[str] = typer.Option(None, "--case", help="with --strategy: select the strategy for this case only (metadata.mocks.strategy)"),
 ) -> None:
     """Show or update the dataset's LLM mock layer: strategies, model, policy (or one case's strategy)."""
+    # Three modes in one command:
+    #   --case ID --strategy S  → pin one case's strategy (metadata.mocks.strategy) and return;
+    #   any of --set/--model/--strategy/--on-miss/--on-invalid/--max-repairs
+    #                           → update those dataset-level fields (--set is validated
+    #                             against the tools' schemas before it is accepted);
+    #   no flags                → read-only: emit the current mock configuration.
     from evalbuilder.mock_engine import validate_strategies
 
     ds = _load_ds(path)
@@ -384,6 +451,9 @@ def mock_try(
 ) -> None:
     """Answer one tool call through both layers (rules, then the LLM mock engine) and show
     which layer answered, the response and its validation."""
+    # Rebuilds exactly what a mocked run would install — merged rules (+ the case's, when
+    # --case is given), optionally the LLM engine — wraps the target's TOOLS once, invokes
+    # the one tool, and reports the ledger entry (which layer answered, validity, repairs).
     from evalbuilder import target as target_mod
     from evalbuilder.mocking import merge_mock_rules, wrap_tools
     from evalbuilder.runner import build_engine, tool_specs_of
@@ -426,6 +496,8 @@ def mock_try(
         raise typer.Exit(1)
 
 
+# ── top-level workflow commands: discover → run → simulate → score → publish ──
+
 @app.command()
 def discover(
     module: str,
@@ -438,6 +510,7 @@ def discover(
 
     from evalbuilder import discover as discovery
 
+    # Make `examples.foo.agent`-style modules importable when run from the repo root.
     if str(Path.cwd()) not in sys.path:
         sys.path.insert(0, str(Path.cwd()))
     if source is None:
@@ -446,6 +519,8 @@ def discover(
             typer.echo(f"cannot locate source for module {module}", err=True)
             raise typer.Exit(1)
         source = Path(spec.origin)
+    # AST pass over the source (tools, prompts, skills, graph), then best-effort live
+    # introspection of the compiled graph; both land in one artifact.
     amap = discovery.discover_from_source(source)
     amap.app["module"] = module
     amap.graph["live"] = discovery.discover_live(module)
@@ -486,6 +561,8 @@ def run(
         from evalbuilder.claude_cli import model_from_spec
 
         agent_model = model_from_spec(model)
+    # Miss-policy resolution: explicit flag > the dataset's own policy (only when
+    # mocking) > `real`. The engine model is only resolved when layer 2 can fire.
     policy = on_miss or ((ds.mocks or {}).get("on_miss") if mock else None) or "real"
     engine_model, engine_spec = (None, None)
     if mock and policy == "llm":
@@ -546,6 +623,9 @@ def simulate(
         engine_model = _mock_model_for(ds, mock_model)[0] if policy == "llm" else None
         specs = tool_specs_of(module) if policy == "llm" else {}
 
+        # One graph per scenario: a fresh engine keeps the LLM mock's call history (and
+        # the scenario's own `mock_strategy`) scoped to that conversation, and a fresh
+        # ledger lets the result attribute every mocked call.
         def graph_factory(scenario):
             ledger: list[dict] = []
             engine = build_engine(engine_model, ds, specs, strategy=scenario.get("mock_strategy")) if policy == "llm" else None
@@ -625,6 +705,8 @@ def publish(
     _emit(result)
 
 
+# ── `evalbuilder check` — environment / capability probe ────────
+
 @app.command()
 def check(
     target_module: Optional[str] = typer.Option(None, "--target-module"),
@@ -634,6 +716,9 @@ def check(
     _emit(capability_check(Settings.load(env_file), target_module))
 
 
+# ── `evalbuilder pipeline …` — the autonomous 14-stage pipeline ─
+# init (starter config) / run (all stages → report.json; the UI shells out to this as a
+# background job) / report (human summary of an existing report).
 pipeline_app = typer.Typer(help="Autonomous end-to-end evaluation pipeline.", no_args_is_help=True)
 app.add_typer(pipeline_app, name="pipeline")
 
@@ -671,6 +756,9 @@ def pipeline_run(
     from evalbuilder.pipeline.config import STAGE_NAMES, load_config
     from evalbuilder.pipeline.report import run_pipeline, summary_text
 
+    # Exit-code contract: 2 = unusable config/flags (nothing ran), 1 = ran but the
+    # verdict is not pass (or an --until run left a stage failed), 0 = pass or a clean
+    # deliberate stop.
     try:
         cfg = load_config(config)
     except (ValueError, FileNotFoundError) as e:
@@ -701,6 +789,8 @@ def pipeline_run(
         raise typer.Exit(1)
 
 
+# ── `evalbuilder ui` — the Streamlit report/setup UI ────────────
+
 @app.command()
 def ui(
     path: Optional[Path] = typer.Argument(None, help="pipeline output directory to open as the project (default: choose on the Pipeline setup page)"),
@@ -718,6 +808,8 @@ def ui(
     if path is not None and not path.is_dir():
         typer.echo(f"not a directory: {path}", err=True)
         raise typer.Exit(1)
+    # Delegate to `streamlit run` on the bundled app; this process just forwards the
+    # exit code. Arguments after `--` reach the Streamlit script itself.
     app_path = Path(__file__).parent / "ui" / "app.py"
     argv = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)]
     if headless:
@@ -739,5 +831,8 @@ def pipeline_report(path: Path) -> None:
     typer.echo(summary_text(json.loads(report_path.read_text())))
 
 
-if __name__ == "__main__":  # `python -m evalbuilder.cli …` (background jobs)
+# Module entry point: `python -m evalbuilder.cli …` behaves exactly like the installed
+# `evalbuilder` console script (pyproject: evalbuilder = "evalbuilder.cli:app"). The UI's
+# background jobs launch pipeline runs this way so they work without an installed script.
+if __name__ == "__main__":
     app()

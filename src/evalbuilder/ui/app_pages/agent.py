@@ -28,7 +28,7 @@ def merged_nodes(graph: dict) -> list[dict]:
         cur = merged.setdefault(n["id"], {"id": n["id"], "kind": "graph-node", "evidence": []})
         if n.get("kind") and n["kind"] != "graph-node":
             cur["kind"] = n["kind"]
-        for key in ("prompt", "tools", "tools_source", "skills", "skills_source"):
+        for key in ("prompt", "tools", "tools_source", "skills", "skills_source", "capabilities"):
             if n.get(key):
                 cur[key] = n[key]
         for e in n.get("evidence") or []:
@@ -123,6 +123,8 @@ def render() -> None:
             with st.expander(title):
                 if n.get("skills"):
                     st.markdown(" ".join(f":violet-badge[skill {sk}]" for sk in n["skills"]) + f" · disclosure `{n.get('skills_source', '?')}`")
+                for line in n.get("capabilities") or []:
+                    st.markdown(f"- {line}")
                 if n.get("prompt"):
                     st.markdown(f"> {n['prompt']}")
                 st.caption(f"evidence: {evidence_md(n.get('evidence'))}" + (f" · tools from {n.get('tools_source')}" if n.get("tools_source") else ""))
@@ -141,7 +143,8 @@ def render() -> None:
                  "live": bool(t.get("live")), "args": ", ".join((t.get("args_schema") or {}).get("properties", {}).keys()),
                  "schema source": t.get("schema_source") or "—", "models": ", ".join(t.get("models") or []),
                  "output schema": bool(t.get("output_schema")), "side-effecting": bool(t.get("side_effecting")),
-                 "edge cases": len(t.get("edge_cases") or [])}
+                 "edge cases": len(t.get("edge_cases") or []),
+                 "failure scenarios": len(t.get("failure_scenarios") or [])}
                 for t in tools
             ],
             column_config={
@@ -163,6 +166,13 @@ def render() -> None:
                          "detail": e.get("detail"), "expected behavior": e.get("expected_behavior")}
                         for e in t["edge_cases"]
                     ])
+                if t.get("failure_scenarios"):
+                    st.markdown("**Failure scenarios** (map stage — how this tool can fail the agent)")
+                    table([
+                        {"failure mode": f.get("failure_mode") or "—", "description": f.get("description"),
+                         "expected behavior": f.get("expected_behavior"), "evidence": ", ".join(f.get("evidence") or [])}
+                        for f in t["failure_scenarios"]
+                    ])
 
     if skills:
         with st.container(border=True):
@@ -170,13 +180,31 @@ def render() -> None:
             st.caption(f"Agent Skills (SKILL.md) from `{app.get('skills_dir', '?')}` — embedded in prompts (inline) or read on demand through a skill-loader tool.")
             table([
                 {"skill": sk["name"], "description": sk.get("description", ""), "used by": ", ".join(sk.get("used_by") or []),
-                 "allowed tools": ", ".join(sk.get("allowed_tools") or []), "tools mentioned": ", ".join(sk.get("tools_mentioned") or []),
+                 "tools": ", ".join(sk.get("tools") or []), "allowed tools": ", ".join(sk.get("allowed_tools") or []),
+                 "summarized": bool(sk.get("summarized")), "failure cases": len(sk.get("failure_cases") or []),
                  "references": len(sk.get("references") or []), "scripts": len(sk.get("scripts") or [])}
                 for sk in skills
-            ])
+            ], column_config={"summarized": st.column_config.CheckboxColumn(help="instructions above the threshold are summarized in `instruction`")})
             for sk in skills:
                 with st.expander(f"{sk['name']} — instructions"):
+                    if sk.get("unknown_tools"):
+                        st.warning("allowed-tools not found among the agent's tools: " + ", ".join(sk["unknown_tools"]))
+                    if sk.get("summarized"):
+                        st.markdown(f"**Summary** (full instructions are {sk.get('chars')} chars)")
+                        st.markdown(sk.get("instruction") or "_empty_")
+                        st.markdown("**Full instructions**")
                     st.markdown(sk.get("prompt") or "_empty_")
+                    if sk.get("rules"):
+                        st.markdown("**Rules** (extracted from the instructions)")
+                        for r in sk["rules"]:
+                            st.markdown(f"- {r}")
+                    if sk.get("failure_cases"):
+                        st.markdown("**Failure cases beyond tool failure** (map stage)")
+                        table([
+                            {"failure mode": c.get("failure_mode") or "—", "description": c.get("description"),
+                             "expected behavior": c.get("expected_behavior"), "evidence": ", ".join(c.get("evidence") or [])}
+                            for c in sk["failure_cases"]
+                        ])
                     for r in sk.get("references") or []:
                         st.markdown(f"- **{r.get('title')}** (`{r.get('path')}`, {r.get('chars')} chars): {r.get('excerpt', '')}")
                     st.caption(f"path `{sk.get('path')}` · evidence: {evidence_md(sk.get('evidence'))}")

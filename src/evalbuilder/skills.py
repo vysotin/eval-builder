@@ -25,9 +25,12 @@ SKILL_FILE = "SKILL.md"
 SKILL_LOADER_KIND = "skill_loader"
 SKILL_LOADER_NAMES = ("load_skill", "read_skill", "get_skill", "use_skill")
 EXCERPT_CHARS = 300
+SKILL_INSTRUCTION_CHARS = 1500  # bodies above this are summarized into `instruction`
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---[ \t]*\n?", re.S)
 _HEADING = re.compile(r"^#{1,6}[ \t]*(.+?)[ \t]*$", re.M)
+_RULE_RX = re.compile(r"\b(?:never|must|always|only|do not|don'?t)\b", re.I)
+_LINE_PREFIX_RX = re.compile(r"^[\s>*+-]*(?:\d+\.\s*)?")
 
 
 @dataclass
@@ -197,16 +200,100 @@ def _allowed_tools(value: Any) -> list[str]:
     return []
 
 
+def _logical_lines(body: str) -> list[str]:
+    """Body lines with wrapped continuations joined back to their bullet or sentence."""
+    units: list[str] = [""]
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            units.append("")
+            continue
+        if re.match(r"^\s*(?:[-*+]|\d+\.)\s+", raw) or not units[-1]:
+            units.append(_LINE_PREFIX_RX.sub("", raw).strip())
+        else:
+            units[-1] += " " + stripped
+    return [u for u in units if u]
+
+
+def skill_rules(body: str) -> list[str]:
+    """Imperative lines of the body (never/must/always/only/don't) — deterministic
+    seeds for constraint and failure-case analysis."""
+    return [line for line in _logical_lines(body) if len(line) > 15 and _RULE_RX.search(line)]
+
+
+def skill_tools(skill: Skill, tool_names: Iterable[str]) -> tuple[list[str], list[str]]:
+    """(resolved, unknown): frontmatter `allowed-tools` resolved against the agent's
+    tools, then body-mentioned tools; unknown = allowed names matching no agent tool."""
+    names = list(tool_names)
+    allowed = _allowed_tools(skill.metadata.get("allowed-tools"))
+    resolved = [n for n in allowed if n in names]
+    unknown = [n for n in allowed if n not in names]
+    for n in names:
+        if n not in resolved and re.search(rf"\b{re.escape(n)}\b", skill.body):
+            resolved.append(n)
+    return resolved, unknown
+
+
+def summarize_skill(skill: Skill, limit: int = SKILL_INSTRUCTION_CHARS) -> str:
+    """Deterministic summary of a long body: the description, each section heading with
+    its first content line, then the rule lines — capped at `limit`."""
+    parts: list[str] = [skill.description] if skill.description else []
+    section: str | None = None
+    for raw in skill.body.splitlines():
+        heading = _HEADING.match(raw)
+        if heading:
+            section = heading.group(1).strip()
+            continue
+        line = _LINE_PREFIX_RX.sub("", raw).strip()
+        if section is not None and line:
+            parts.append(f"{section}: {line}")
+            section = None
+    joined = " ".join(parts)
+    parts += [f"rule: {r}" for r in skill_rules(skill.body) if r not in joined]
+    text = ""
+    for p in parts:
+        if text and len(text) + len(p) + 1 > limit:
+            break
+        text += ("\n" if text else "") + p
+    return text[:limit] if text else skill.body[:limit]
+
+
+def capability_line(entry: dict, disclosure: str, node_tools: Iterable[str] | None = None) -> str:
+    """One human line for an LLM node: which skill it can call, which tools that
+    reaches (scoped to the node's own tools) and the result it achieves."""
+    tools = list(entry.get("tools") or [])
+    if node_tools is not None and tools:
+        wired = [t for t in tools if t in set(node_tools)]
+        via = (f" → tools {', '.join(wired)}" if wired
+               else f" → tools {', '.join(tools)} (not wired on this node)")
+    elif tools:
+        via = f" → tools {', '.join(tools)}"
+    else:
+        via = ""
+    outcome = entry.get("description") or ""
+    return f"skill {entry.get('name')} ({disclosure}){via}" + (f" — {outcome}" if outcome else "")
+
+
 def describe_skill(skill: Skill, tool_names: Iterable[str] = ()) -> dict:
     """The `skills[]` entry of the agent map (links `used_by` are filled by discovery)."""
-    mentioned = [n for n in tool_names if re.search(rf"\b{re.escape(n)}\b", skill.body)]
+    names = list(tool_names)
+    mentioned = [n for n in names if re.search(rf"\b{re.escape(n)}\b", skill.body)]
+    resolved, unknown = skill_tools(skill, names)
+    chars = len(skill.body)
+    summarized = chars > SKILL_INSTRUCTION_CHARS
     return {
         "name": skill.name,
         "description": skill.description,
         "path": skill.path,
         "dir": skill.dir,
         "prompt": skill.body,
+        "chars": chars,
+        "instruction": summarize_skill(skill) if summarized else skill.body,
+        "summarized": summarized,
         "allowed_tools": _allowed_tools(skill.metadata.get("allowed-tools")),
+        "tools": resolved,
+        "unknown_tools": unknown,
+        "rules": skill_rules(skill.body),
         "metadata": dict(skill.metadata.get("metadata") or {}),
         "references": [dict(r) for r in skill.references],
         "scripts": list(skill.scripts),

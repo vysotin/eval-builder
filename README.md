@@ -527,10 +527,14 @@ An agent that uses Agent Skills — `skills/<name>/SKILL.md` folders with frontm
 declares them with `evalbuilder.skills` (`load_skills`, `skills_inline_prompt` to embed a
 skill in a prompt, `skills_prompt` + `skill_loader_tool` for on-demand disclosure through
 a `load_skill` tool). Discovery reads the folders, renders the composed prompts,
-records `skills[]` in the agent map (instructions, references, `used_by` nodes) and
-marks loader tools `kind: skill_loader`; the generator sees the skills, every scenario
-lists the skills it exercises (`skill:<name>` evidence), `skill_misuse` becomes an
-applicable failure type, and coverage reports cases per skill. `incident_desk` embeds
+records `skills[]` in the agent map (instructions — full, or a deterministic summary when
+longer than 1500 chars; references; the resolved `tools` the skill can use, with unknown
+`allowed-tools` flagged; extracted `rules`; `used_by` nodes), gives every LLM node
+`capabilities` lines (which skill it can call → which tools that reaches → what result it
+achieves) and marks loader tools `kind: skill_loader`; the generator sees the skills,
+every scenario lists the skills it exercises (`skill:<name>` evidence), the map stage adds
+per-skill `failure_cases` (beyond tool failure) and per-tool `failure_scenarios`,
+`skill_misuse` becomes an applicable failure type, and coverage reports cases per skill. `incident_desk` embeds
 its skills inline; `support_bot` reads them on demand.
 
 ### Target contract

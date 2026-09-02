@@ -610,6 +610,12 @@ def test_skills_and_llm_mock_layer_end_to_end(page, app_url, work):
     expect(page.locator("details").filter(has_text="skills: product-troubleshooting, refund-policy").first).to_be_visible()  # node expander label
     _expand(page, "refund-policy — instructions")
     expect(page.get_by_role("heading", name="Refund policy")).to_be_visible()  # the skill body (get_by_text would hit a hidden grid cell)
+    expect(page.get_by_test_id("stMarkdown").filter(has_text="full instructions are").first).to_be_visible()  # summarized skill
+    skill_exp = page.locator("details").filter(has_text="refund-policy — instructions").first
+    expect(skill_exp.get_by_test_id("stMarkdown").filter(has_text="Failure cases beyond tool failure").first).to_be_visible()
+    node = page.locator("details").filter(has_text="skills: product-troubleshooting, refund-policy").first
+    node.locator("summary").click()
+    expect(node.get_by_test_id("stMarkdown").filter(has_text="skill refund-policy (listing) → tools").first).to_be_visible()
     _nav(page, "Dataset & mocks", "dataset")
     expect(page.locator("h3#mock-strategies")).to_be_visible()
     expect(page.get_by_test_id("stMarkdown").filter(has_text="World:").first).to_be_visible()

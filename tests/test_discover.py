@@ -292,3 +292,57 @@ def test_live_tool_description_classifies_skill_loaders(tmp_path):
 
     plain = describe_tool(get_weather)
     assert plain["kind"] == "tool" and plain["mockable"] is True and plain["edge_cases"]
+
+
+def test_discover_support_bot_skill_analysis():
+    from pathlib import Path as _P
+
+    from evalbuilder.discover import discover_from_source as _discover
+
+    amap = _discover(_P("examples/support_bot/agent.py"))
+    by_name = {s["name"]: s for s in amap.skills}
+    refund = by_name["refund-policy"]
+    assert refund["tools"] == ["lookup_order", "check_refund_policy", "issue_refund"]
+    assert refund["unknown_tools"] == []
+    assert refund["summarized"] and refund["chars"] > 1500 and len(refund["instruction"]) <= 1500
+    assert any("ONLY after the customer confirms" in r for r in refund["rules"])
+    trouble = by_name["product-troubleshooting"]
+    assert not trouble["summarized"] and trouble["instruction"] == trouble["prompt"]
+    nodes = {n["id"]: n for n in amap.graph["nodes"] if n.get("kind") == "llm"}
+    support = nodes["support_agent"]
+    assert support["skills_source"] == "listing"
+    assert any(c.startswith("skill refund-policy (listing) → tools lookup_order, check_refund_policy, issue_refund —")
+               for c in support["capabilities"])
+    kb = nodes["kb_agent"]
+    assert any("→ tools search_kb —" in c for c in kb["capabilities"])
+    assert any("(not wired on this node)" in c for c in kb["capabilities"])  # refund tools are not on kb_agent
+
+
+def test_discover_links_skills_via_loader_tool_when_prompt_is_silent(tmp_path):
+    from evalbuilder.discover import discover_from_source as _discover
+
+    (tmp_path / "skills" / "alpha").mkdir(parents=True)
+    (tmp_path / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: Do alpha things.\n---\nUse the alpha procedure."
+    )
+    src = tmp_path / "agent.py"
+    src.write_text(
+        "from pathlib import Path\n"
+        "from langchain_core.tools import tool\n"
+        "from evalbuilder.skills import load_skills, skill_loader_tool\n\n"
+        'SKILLS = load_skills(Path(__file__).parent / "skills")\n'
+        "load_skill = skill_loader_tool(SKILLS)\n\n"
+        "@tool\n"
+        "def ping(x: str) -> str:\n"
+        '    """Ping."""\n'
+        "    return x\n\n"
+        "TOOLS = [ping, load_skill]\n\n"
+        "def build_agent(model=None):\n"
+        "    agent = create_agent(model, [ping, load_skill], system_prompt=\"You are a helper with a hidden skill library.\")\n"
+        "    return agent\n"
+    )
+    amap = _discover(src)
+    node = next(n for n in amap.graph["nodes"] if n.get("kind") == "llm")
+    # the prompt names no skill, but the node holds the loader → it might use any skill
+    assert node["skills"] == ["alpha"] and node["skills_source"] == "loader"
+    assert node["capabilities"] == ["skill alpha (loader) — Do alpha things."]

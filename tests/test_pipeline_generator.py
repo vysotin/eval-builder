@@ -423,3 +423,50 @@ def test_cases_and_scenarios_may_select_a_mock_strategy():
     scenarios, sproblems = g.author_scenarios(g.FakeGenerator({"simulation_scenarios": [scen]}), amap, [], {},
                                               strategies={"world": "w", "strategies": {"default": {}, "degraded": {}}})
     assert scenarios[0]["mock_strategy"] == "degraded" and "mock_strategy" not in scenarios[1] and any("unknown mock strategy" in p for p in sproblems)
+
+
+def test_validate_map_skill_and_tool_failure_sections():
+    answer = _good_map_answer()
+    answer["skill_failures"] = [
+        {"skill": "refund-policy", "failure_cases": [
+            {"description": "issues the refund without confirmation", "failure_mode": "constraint_violation",
+             "expected_behavior": "asks for an explicit yes", "evidence": ["skill:refund-policy"]},
+            {"description": "bad mode", "failure_mode": "branch_misrouting", "expected_behavior": "x", "evidence": []},
+            {"description": "no evidence given", "expected_behavior": "y", "evidence": []},
+        ]},
+        {"skill": "nope", "failure_cases": [{"description": "d", "expected_behavior": "e", "evidence": []}]},
+    ]
+    answer["tool_failures"] = [
+        {"tool": "lookup_order", "scenarios": [
+            {"description": "times out", "expected_behavior": "apologizes", "evidence": []},
+        ]},
+        {"tool": "ghost", "scenarios": [{"description": "d", "expected_behavior": "e", "evidence": []}]},
+    ]
+    applicable = {"out_of_scope": ["app:always"], "tool_error_handling": ["tool:lookup_order"],
+                  "constraint_violation": ["constraint:yes"]}
+    cleaned, errors = g._validate_map(
+        answer, applicable, ["refund-policy", "product-troubleshooting"], ["lookup_order"]
+    )
+    # valid cases kept; missing evidence defaulted to skill:<name>; invalid failure_mode dropped
+    cases = cleaned["skill_failures"]
+    assert [sf["skill"] for sf in cases] == ["refund-policy"]
+    assert [c["description"] for c in cases[0]["failure_cases"]] == [
+        "issues the refund without confirmation", "no evidence given"]
+    assert cases[0]["failure_cases"][1]["evidence"] == ["skill:refund-policy"]
+    # tool scenarios: failure_mode defaults to tool_error_handling, evidence to tool:<name>
+    tf = cleaned["tool_failures"]
+    assert [t["tool"] for t in tf] == ["lookup_order"]
+    assert tf[0]["scenarios"][0]["failure_mode"] == "tool_error_handling"
+    assert tf[0]["scenarios"][0]["evidence"] == ["tool:lookup_order"]
+    assert any("unknown skill 'nope'" in e for e in errors)
+    assert any("unknown tool 'ghost'" in e for e in errors)
+    assert any("non-applicable failure_mode 'branch_misrouting'" in e for e in errors)
+
+
+def test_skill_brief_uses_instruction_tools_and_rules():
+    brief = g.skill_brief({
+        "name": "s", "description": "d", "prompt": "FULL BODY", "instruction": "THE SUMMARY",
+        "summarized": True, "tools": ["a"], "rules": ["Never do X."], "used_by": ["n1"],
+    })
+    assert brief["instructions"] == "THE SUMMARY" and brief["instructions_summarized"] is True
+    assert brief["tools"] == ["a"] and brief["rules"] == ["Never do X."]

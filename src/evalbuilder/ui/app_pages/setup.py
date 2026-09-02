@@ -140,7 +140,8 @@ def _render_preview(preview: dict) -> None:
         st.markdown(f"**Agent skills** — `{preview.get('skills_dir')}`")
         table([
             {"skill": sk["name"], "description": sk.get("description", ""), "used by": ", ".join(sk.get("used_by") or []),
-             "allowed tools": ", ".join(sk.get("allowed_tools") or []), "references": len(sk.get("references") or []),
+             "tools": ", ".join(sk.get("tools") or []), "allowed tools": ", ".join(sk.get("allowed_tools") or []),
+             "summarized": bool(sk.get("summarized")), "references": len(sk.get("references") or []),
              "chars": len(sk.get("prompt") or "")}
             for sk in preview["skills"]
         ])

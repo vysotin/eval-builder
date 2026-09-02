@@ -66,7 +66,11 @@ Two complementary views of a LangGraph module:
    methods, module or factory-local assignments) are rendered — the skill helpers
    from the loaded skills — so the recorded prompt is what the model sees, and each
    node lists the skills it embeds or names (`skills`, `skills_source`: `inline` |
-   `listing` | `prompt`); `skill_loader_tool(...)` assignments and loader-named `@tool`
+   `listing` | `prompt`, or `loader` when the prompt names none but the node holds a
+   skill-loader tool — it can read, so might use, any skill) plus `capabilities`
+   lines (skill → reachable tools scoped to the node → result); each skill entry
+   resolves its usable `tools`/`unknown_tools`, extracts `rules` and carries
+   `instruction` (full body, or a deterministic summary above 1500 chars); `skill_loader_tool(...)` assignments and loader-named `@tool`
    functions become tools of `kind: skill_loader`, `mockable: false`. Tools are ordered
    as the module's `TOOLS` list orders them.
 2. **Live introspection** (`discover_live`) — imports the module, calls the factory,
@@ -103,7 +107,13 @@ and `scripts/`). The module is pure data plumbing:
   sections); `skills_prompt(skills)` lists names + descriptions for on-demand use;
   `skill_loader_tool(skills, name="load_skill")` builds the tool that returns a skill's
   body and reference list, tagged `metadata.kind = "skill_loader"`;
-  `is_skill_loader(tool)` recognises that tag or a loader-like name
+  `is_skill_loader(tool)` recognises that tag or a loader-like name;
+- analysis helpers: `skill_tools(skill, tool_names)` resolves the tools a skill can use
+  against the agent's tools (allowed-tools ∩ agent tools + body mentions, unknown
+  allowed names reported), `skill_rules(body)` extracts the imperative lines,
+  `summarize_skill(skill)` builds the deterministic summary used when the body exceeds
+  `SKILL_INSTRUCTION_CHARS` (1500), and `capability_line(entry, disclosure, node_tools)`
+  writes the per-node "skill → tools → result" line
   (`load_skill`, `read_skill`, `get_skill`, `use_skill`).
 - `describe_skill(skill, tool_names)` → the agent-map entry (`prompt` = body,
   `allowed_tools`, `tools_mentioned`, `references`, `used_by`, `evidence:

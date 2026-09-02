@@ -122,14 +122,28 @@ validates every generated answer against the same `output_schema`.
 ## Agent skills in the agent map
 
 `skills[]` entries: `{name, description, path, dir, prompt (the SKILL.md body),
-allowed_tools, metadata, references[{path, title, chars, excerpt}], scripts,
-tools_mentioned, used_by, evidence: ["skill:<name>"]}`; `app.skills_dir` names the
-folder. Nodes carry `skills` and `skills_source` (`inline` — the body is embedded in the
+chars, instruction, summarized, allowed_tools, tools, unknown_tools, rules, metadata,
+references[{path, title, chars, excerpt}], scripts, tools_mentioned, used_by,
+evidence: ["skill:<name>"]}`; `app.skills_dir` names the folder. `tools` are the tools
+the skill can use, resolved against the agent's tools (frontmatter `allowed-tools` ∩
+agent tools, then body-mentioned ones); `unknown_tools` flags allowed names no agent
+tool matches; `rules` are the extracted imperative lines (never/must/always/only);
+`instruction` is the full body when it is at most 1500 chars, else a deterministic
+summary (`summarized: true`, description + section headlines + rules) — `prompt` always
+keeps the full body. After the map stage each skill also carries `failure_cases`
+(generator-authored failure cases *beyond* tool failure, validated against the skill
+names and the applicable taxonomy) and each tool carries `failure_scenarios`
+(per-tool failure scenarios, `failure_mode` defaulting to `tool_error_handling`).
+Nodes carry `skills` and `skills_source` (`inline` — the body is embedded in the
 prompt; `listing` — names and descriptions are listed and read on demand; `prompt` —
-the prompt names the skill). Tools of kind `skill_loader` (`load_skill`, `read_skill`,
-…) are `mockable: false`. Discovery recognises `load_skills(...)`, `SKILLS_DIR`-style
-constants (`Path(__file__).parent / "skills"`), `skills=` factory keywords, the prompt
-helpers `skills_prompt` / `skills_inline_prompt` (rendered into the recorded prompt), and
+the prompt names the skill; `loader` — the prompt names none, but the node holds a
+skill-loader tool so it can read any skill) plus `capabilities`: one line per skill —
+which skill the node can call, which tools that reaches (scoped to the node's own
+tools) and the result it achieves. Tools of kind `skill_loader` (`load_skill`,
+`read_skill`, …) are `mockable: false` and get no failure analysis. Discovery
+recognises `load_skills(...)`, `SKILLS_DIR`-style constants
+(`Path(__file__).parent / "skills"`), `skills=` factory keywords, the prompt helpers
+`skills_prompt` / `skills_inline_prompt` (rendered into the recorded prompt), and
 `skill_loader_tool(...)` assignments (`evalbuilder.skills`).
 
 ## Two-layer mocking

@@ -6,11 +6,12 @@ target:
   module: examples.incident_desk.agent
   factory: build_agent
   root_node: null
-# provider:model[@effort] — claude-cli (Claude Code subscription), anthropic|claude, openai, gemini|google, scripted
+# provider:model[@effort] — claude-cli (Claude Code subscription), anthropic|claude, openai, gemini|google, scripted; mock drives LLM mock responses (null = generator)
 models:
   agent: claude-cli:claude-sonnet-5
   judge: claude-cli:claude-sonnet-5
   generator: claude-cli:claude-sonnet-5
+  mock: null
 # rules the agent must honor; every generation prompt sees them and judges check them
 constraints:
 - Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with
@@ -30,10 +31,10 @@ instructions: 'Ops domain: services are named like api, checkout, payments or au
 feedback: []
 # case counts: per intent, per failure category, out-of-intent, multi-turn share, schema edge cases per tool
 coverage:
-  total_cases: 10
+  total_cases: 50
   per_intent:
     happy: 1
-    failure: 1
+    failure: 2
   per_failure_category: 1
   out_of_intent: 2
   multi_turn_share: 0.15
@@ -45,6 +46,7 @@ evaluators:
 - type: contract
 - type: correctness
 - type: trajectory_match
+- type: json_valid
 # pass rate per metric / per slice / overall
 thresholds:
   metrics: {}
@@ -57,10 +59,14 @@ runs:
   parallel_intents: 4
   parallel_scoring: 4
   parallel_simulations: 4
-# every tool gets a fixture; on_miss strict = unmatched call is an error, never a real call
+# layer 1 = deterministic rules; on_miss strict = unmatched call is an error, llm = the LLM mock engine answers from pre-generated strategies (validated against the tool's output schema; on_invalid fallback|strict, max_repairs)
 mocking:
   required: true
   on_miss: strict
+  strategies: true
+  strategy: default
+  on_invalid: fallback
+  max_repairs: 1
 # skip list, retries, optional simulate/publish
 stages:
   skip: []

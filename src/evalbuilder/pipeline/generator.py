@@ -123,9 +123,15 @@ def skill_brief(s: dict) -> dict:
     out = {
         "name": s.get("name"),
         "description": s.get("description"),
-        "instructions": (s.get("prompt") or "")[:SKILL_PROMPT_CHARS],
+        "instructions": (s.get("instruction") or s.get("prompt") or "")[:SKILL_PROMPT_CHARS],
         "used_by": s.get("used_by") or [],
     }
+    if s.get("summarized"):
+        out["instructions_summarized"] = True
+    if s.get("tools"):
+        out["tools"] = s["tools"]
+    if s.get("rules"):
+        out["rules"] = s["rules"]
     if s.get("allowed_tools"):
         out["allowed_tools"] = s["allowed_tools"]
     if s.get("references"):
@@ -189,6 +195,54 @@ MAP_SCHEMA = {
                 "required": ["failure_type", "rationale", "evidence"],
             },
         },
+        "skill_failures": {
+            "type": "array",
+            "description": "per-skill failure cases beyond tool failure (a tool failing belongs in tool_failures)",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "skill": {"type": "string"},
+                    "failure_cases": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "failure_mode": {"type": "string", "description": "a taxonomy type from the applicable list (usually skill_misuse or constraint_violation)"},
+                                "expected_behavior": {"type": "string"},
+                                "evidence": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["description", "expected_behavior", "evidence"],
+                        },
+                    },
+                },
+                "required": ["skill", "failure_cases"],
+            },
+        },
+        "tool_failures": {
+            "type": "array",
+            "description": "per-tool failure scenarios the agent must survive (error payloads, timeouts, empty or malformed results, misuse)",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tool": {"type": "string"},
+                    "scenarios": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "failure_mode": {"type": "string", "description": "applicable taxonomy type; defaults to tool_error_handling"},
+                                "expected_behavior": {"type": "string"},
+                                "evidence": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["description", "expected_behavior", "evidence"],
+                        },
+                    },
+                },
+                "required": ["tool", "scenarios"],
+            },
+        },
         "topics": {"type": "array", "items": {"type": "string"}},
         "derived_constraints": {
             "type": "array",
@@ -196,7 +250,7 @@ MAP_SCHEMA = {
             "description": "behavioral rules stated in the agent's prompts",
         },
     },
-    "required": ["intents", "scenarios", "failure_scenarios", "topics", "derived_constraints"],
+    "required": ["intents", "scenarios", "failure_scenarios", "skill_failures", "tool_failures", "topics", "derived_constraints"],
 }
 
 MAP_SYSTEM = """You map a LangGraph agent's test surface for evaluation. Work only from the
@@ -219,6 +273,16 @@ Rules:
   with failure_mode `skill_misuse` (when applicable) where the user pushes the agent to
   skip or bend a step the skill mandates. Tools of kind `skill_loader` are how the
   agent reads a skill on demand — a correct agent calls them before acting on that skill.
+- skill_failures: for EVERY skill, the failure cases that are NOT caused by a tool
+  failing — skipping or reordering steps the skill mandates, misapplying its policy,
+  acting without reading it first (on-demand skills), exceeding its allowed tools,
+  answering from stale skill knowledge. Cite skill:<name> plus the violated rule line.
+  failure_mode, when set, must come from the applicable list (usually skill_misuse or
+  constraint_violation). A case whose only cause is a tool failure belongs in
+  tool_failures instead.
+- tool_failures: for EVERY tool, the failure scenarios the agent must survive — error
+  payloads, timeouts, empty results, malformed output, calling it with guessed args.
+  failure_mode defaults to tool_error_handling and must be applicable when set.
 - Use stable slugs: intent.<name>, scenario.<intent-name>.<short-name>."""
 
 
@@ -240,8 +304,9 @@ def author_map(
         guidance,
     )
     skill_names = [s.get("name") for s in (getattr(agent_map, "skills", None) or []) if s.get("name")]
+    tool_names = [t.get("name") for t in agent_map.tools if t.get("name")]
     result = gen.ask(MAP_SYSTEM, user, MAP_SCHEMA)
-    cleaned, errors = _validate_map(result, applicable, skill_names)
+    cleaned, errors = _validate_map(result, applicable, skill_names, tool_names)
     if errors:
         repair = (
             user
@@ -251,7 +316,7 @@ def author_map(
             + json.dumps(result, ensure_ascii=False)[:8000]
         )
         result = gen.ask(MAP_SYSTEM, repair, MAP_SCHEMA)
-        cleaned, errors = _validate_map(result, applicable, skill_names)
+        cleaned, errors = _validate_map(result, applicable, skill_names, tool_names)
     # An unexercised skill is a coverage gap, reported (also as coverage.uncovered_skills), not repaired.
     for name in skill_names:
         if not any(name in (s.get("skills") or []) for s in cleaned["scenarios"]):
@@ -259,9 +324,15 @@ def author_map(
     return cleaned, errors
 
 
-def _validate_map(result: dict, applicable: dict[str, list[str]], skill_names: list[str] | None = None) -> tuple[dict, list[str]]:
+def _validate_map(
+    result: dict,
+    applicable: dict[str, list[str]],
+    skill_names: list[str] | None = None,
+    tool_names: list[str] | None = None,
+) -> tuple[dict, list[str]]:
     errors: list[str] = []
     skill_names = list(skill_names or [])
+    tool_names = list(tool_names or [])
     intents = [i for i in result.get("intents", []) if isinstance(i, dict)]
     scenarios = [s for s in result.get("scenarios", []) if isinstance(s, dict)]
     failures = [f for f in result.get("failure_scenarios", []) if isinstance(f, dict)]
@@ -332,6 +403,45 @@ def _validate_map(result: dict, applicable: dict[str, list[str]], skill_names: l
         seen.add(ft)
         good_failures.append({**f, "evidence": f.get("evidence") or applicable[ft]})
 
+    good_skill_failures = []
+    for sf in [x for x in result.get("skill_failures", []) or [] if isinstance(x, dict)]:
+        name = sf.get("skill")
+        if name not in skill_names:
+            errors.append(f"skill_failures references unknown skill {name!r} (known: {skill_names})")
+            continue
+        cases = []
+        for c in [c for c in sf.get("failure_cases", []) or [] if isinstance(c, dict)]:
+            if not c.get("description"):
+                continue
+            fm = c.get("failure_mode")
+            if fm and fm not in applicable:
+                errors.append(f"skill_failures[{name}] uses non-applicable failure_mode {fm!r}")
+                continue
+            cases.append({**c, "evidence": c.get("evidence") or [f"skill:{name}"]})
+        if cases:
+            good_skill_failures.append({"skill": name, "failure_cases": cases})
+
+    good_tool_failures = []
+    for tf in [x for x in result.get("tool_failures", []) or [] if isinstance(x, dict)]:
+        name = tf.get("tool")
+        if name not in tool_names:
+            errors.append(f"tool_failures references unknown tool {name!r}")
+            continue
+        scenarios = []
+        for c in [c for c in tf.get("scenarios", []) or [] if isinstance(c, dict)]:
+            if not c.get("description"):
+                continue
+            fm = c.get("failure_mode") or ("tool_error_handling" if "tool_error_handling" in applicable else None)
+            if fm and fm not in applicable:
+                errors.append(f"tool_failures[{name}] uses non-applicable failure_mode {fm!r}")
+                continue
+            entry = {**c, "evidence": c.get("evidence") or [f"tool:{name}"]}
+            if fm:
+                entry["failure_mode"] = fm
+            scenarios.append(entry)
+        if scenarios:
+            good_tool_failures.append({"tool": name, "scenarios": scenarios})
+
     topics = [t for t in result.get("topics", []) if isinstance(t, str) and t.strip()]
     derived = [c for c in result.get("derived_constraints", []) if isinstance(c, str) and c.strip()]
     return (
@@ -339,6 +449,8 @@ def _validate_map(result: dict, applicable: dict[str, list[str]], skill_names: l
             "intents": good_intents,
             "scenarios": good_scenarios,
             "failure_scenarios": good_failures,
+            "skill_failures": good_skill_failures,
+            "tool_failures": good_tool_failures,
             "topics": topics,
             "derived_constraints": derived,
         },

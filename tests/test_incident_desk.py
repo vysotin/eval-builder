@@ -253,6 +253,15 @@ def _run(tmp_path, per_tool_edge_cases):
     assert "skill_misuse" in report["stages"]["map"]["details"]["failure_types"]
     assert report["stages"]["map"]["details"]["skills"]["incident-triage"] == [
         "scenario.incident-report.happy", "scenario.incident-report.skip-status-check"]
+    # inline path: the map stage merges skill failure cases and tool failure scenarios into the artifact
+    amap = json.loads((tmp_path / f"out-{per_tool_edge_cases}" / "agent-map.json").read_text())
+    triage = next(s for s in amap["skills"] if s["name"] == "incident-triage")
+    assert triage["tools"] and not triage["summarized"] and triage["instruction"] == triage["prompt"]
+    assert {c["failure_mode"] for c in triage["failure_cases"]} == {"skill_misuse", "input_validation"}
+    tools = {t["name"]: t for t in amap["tools"]}
+    assert tools["get_service_status"]["failure_scenarios"][0]["failure_mode"] == "tool_error_handling"
+    caps = [c for n in amap["graph"]["nodes"] for c in n.get("capabilities") or []]
+    assert any(c.startswith("skill incident-triage (inline)") for c in caps)
     ds = json.loads((tmp_path / f"out-{per_tool_edge_cases}" / "dataset.json").read_text())
     misuse = [c for c in ds["cases"] if c["metadata"]["failure_mode"] == "skill_misuse"]
     assert misuse and all("skill:incident-triage" in c["metadata"]["evidence"] for c in misuse)

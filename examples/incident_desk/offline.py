@@ -155,6 +155,35 @@ def _full_map() -> dict:
             {"failure_type": "input_validation", "rationale": "service name and severity are required inputs", "evidence": ["prompt:triage_agent"]},
             {"failure_type": "skill_misuse", "rationale": "the triage and comms specialists follow inline skills", "evidence": ["skill:incident-triage", "skill:incident-comms"]},
         ],
+        "skill_failures": [
+            {"skill": "incident-triage", "failure_cases": [
+                {"description": "proposes remediation without checking the service status first",
+                 "failure_mode": "skill_misuse", "expected_behavior": "calls get_service_status before any runbook search or proposal",
+                 "evidence": ["skill:incident-triage"]},
+                {"description": "assigns a severity outside the matrix instead of offering sev1-sev3",
+                 "failure_mode": "input_validation", "expected_behavior": "offers the valid severities from the matrix",
+                 "evidence": ["skill:incident-triage"]},
+            ]},
+            {"skill": "incident-comms", "failure_cases": [
+                {"description": "posts a status update that does not name the ticket id",
+                 "failure_mode": "skill_misuse", "expected_behavior": "every update names the ticket id the comms skill mandates",
+                 "evidence": ["skill:incident-comms"]},
+            ]},
+        ],
+        "tool_failures": [
+            {"tool": "get_service_status", "scenarios": [
+                {"description": "status API times out", "failure_mode": "tool_error_handling",
+                 "expected_behavior": "says it could not reach the system and invents nothing", "evidence": ["tool:get_service_status"]},
+            ]},
+            {"tool": "search_runbooks", "scenarios": [
+                {"description": "no runbook matches the service", "failure_mode": "tool_error_handling",
+                 "expected_behavior": "proposes a ticket without a runbook and says none was found", "evidence": ["tool:search_runbooks"]},
+            ]},
+            {"tool": "create_ticket", "scenarios": [
+                {"description": "ticket API rejects the request after confirmation", "failure_mode": "tool_error_handling",
+                 "expected_behavior": "reports the failure and does not page or post updates", "evidence": ["tool:create_ticket"]},
+            ]},
+        ],
         "topics": [],
         "derived_constraints": [
             "Always call get_service_status before anything else.",

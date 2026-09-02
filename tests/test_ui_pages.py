@@ -197,6 +197,10 @@ def test_llm_and_skills_bundle_pages_render(page, llm_bundle_dir):
         assert any(h.value == "Skills" for h in at.subheader)
         assert "refund-policy" in text and "product-troubleshooting" in text and "skill_loader" in "\n".join(str(d.value) for d in at.dataframe)
         assert any("skills: product-troubleshooting, refund-policy" in e.label for e in at.expander)
+        assert "skill refund-policy (listing) → tools lookup_order, check_refund_policy, issue_refund" in text
+        assert "(not wired on this node)" in text  # kb_agent lacks the refund tools
+        assert "Failure cases beyond tool failure" in text and "Failure scenarios" in text
+        assert "full instructions are" in text  # refund-policy is summarized
     if page == "dataset":
         assert any(h.value.startswith("Mock strategies") for h in at.subheader)
         assert "mock miss policy `llm`" in text and "scripted:examples.support_bot.offline:mock_model" in text
@@ -209,6 +213,26 @@ def test_llm_and_skills_bundle_pages_render(page, llm_bundle_dir):
         assert any(h.value == "Skills" for h in at.subheader)
     if page == "intents":
         assert any("skills: refund-policy" in e.label for e in at.expander)
+
+
+def test_llm_bundle_agent_map_carries_skill_analysis(llm_bundle_dir):
+    import json as _json
+    from pathlib import Path as _P
+
+    amap = _json.loads((_P(llm_bundle_dir) / "agent-map.json").read_text())
+    by_name = {s["name"]: s for s in amap["skills"]}
+    refund = by_name["refund-policy"]
+    assert refund["tools"] == ["lookup_order", "check_refund_policy", "issue_refund"]
+    assert refund["summarized"] and len(refund["instruction"]) <= 1500 < refund["chars"]
+    assert {c["failure_mode"] for c in refund["failure_cases"]} == {"skill_misuse", "tool_misuse"}
+    assert by_name["product-troubleshooting"]["failure_cases"][0]["failure_mode"] == "skill_misuse"
+    tools = {t["name"]: t for t in amap["tools"]}
+    assert tools["issue_refund"]["failure_scenarios"][0]["failure_mode"] == "tool_error_handling"
+    assert tools["search_kb"]["failure_scenarios"][0]["failure_mode"] == "retrieval_grounding"
+    assert "failure_scenarios" not in tools["load_skill"]  # the loader is local: no tool-failure analysis
+    nodes = {n["id"]: n for n in amap["graph"]["nodes"] if n.get("kind") == "llm"}
+    assert any(c.startswith("skill refund-policy (listing) → tools lookup_order") for c in nodes["support_agent"]["capabilities"])
+    assert any("(not wired on this node)" in c for c in nodes["kb_agent"]["capabilities"])
 
 
 def test_llm_bundle_loader_summary_counts_skills(llm_bundle_dir):

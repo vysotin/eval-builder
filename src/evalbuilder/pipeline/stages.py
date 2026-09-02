@@ -374,6 +374,14 @@ def author_map(ctx: PipelineContext) -> dict:
     amap.intents = cleaned["intents"]
     amap.scenarios = cleaned["scenarios"]
     amap.failure_scenarios = cleaned["failure_scenarios"]
+    by_skill = {sf["skill"]: sf["failure_cases"] for sf in cleaned.get("skill_failures", [])}
+    for sk in amap.skills:
+        if sk.get("name") in by_skill:
+            sk["failure_cases"] = by_skill[sk["name"]]
+    by_tool = {tf["tool"]: tf["scenarios"] for tf in cleaned.get("tool_failures", [])}
+    for t in amap.tools:
+        if t.get("name") in by_tool:
+            t["failure_scenarios"] = by_tool[t["name"]]
     amap.data_domains["topics"] = cleaned["topics"]
     merged = list(cfg.constraints)
     for c in cleaned["derived_constraints"]:
@@ -390,6 +398,8 @@ def author_map(ctx: PipelineContext) -> dict:
         "topics": amap.data_domains["topics"],
         "constraints": merged,
         "skills": {s["name"]: [sc["id"] for sc in amap.scenarios if s["name"] in (sc.get("skills") or [])] for s in amap.skills},
+        "skill_failure_cases": {k: len(v) for k, v in by_skill.items()},
+        "tool_failure_scenarios": {k: len(v) for k, v in by_tool.items()},
     }
 
 

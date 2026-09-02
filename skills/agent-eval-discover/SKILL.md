@@ -33,7 +33,12 @@ rather than derived from how this agent can actually break.
    references, `allowed_tools`, `tools_mentioned` and the nodes that use them
    (`used_by`, `skills_source`: `inline` = embedded in the prompt, `listing` /
    `prompt` = read on demand through a tool of kind `skill_loader`, e.g. `load_skill`).
-   A skill's instructions are behavioural rules exactly like a prompt's.
+   A skill's instructions are behavioural rules exactly like a prompt's. Each entry
+   resolves the `tools` the skill can use (with `unknown_tools` flagging drift), its
+   `rules` and an `instruction` (full body, or a deterministic summary when long);
+   LLM nodes carry `capabilities` lines — skill → reachable tools → result. The map
+   stage adds `failure_cases` per skill (beyond tool failure) and `failure_scenarios`
+   per tool.
 
 4. Draft intents and scenarios. **Every entry must cite evidence** the code supports:
    `source:<file>:<line>`, `prompt:<node>`, `tool:<name>`, `edge:<a>-><b>`,

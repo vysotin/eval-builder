@@ -599,6 +599,8 @@ def discover_from_source(source_path: Path) -> AgentMap:
     visit(tree, "")
 
     skill_entries = skills_mod.describe_skills(loaded_skills, [t["name"] for t in tools])
+    entry_by_name = {e["name"]: e for e in skill_entries}
+    loader_names = {t["name"] for t in tools if t.get("kind") == skills_mod.SKILL_LOADER_KIND}
     for n in nodes:
         info = n.pop("_skills", None) or {}
         if not n.get("tools") and n.get("prompt"):
@@ -618,9 +620,18 @@ def discover_from_source(source_path: Path) -> AgentMap:
                 if name not in linked and name in (n.get("prompt") or ""):
                     linked.append(name)
                     disclosure = disclosure or "prompt"
+            if not linked and loader_names & set(n.get("tools") or []):
+                # holding the loader tool means the node can read — so might use — any skill
+                linked = list(skill_names)
+                disclosure = "loader"
             if linked:
                 n["skills"] = linked
                 n["skills_source"] = disclosure or "prompt"
+                n["capabilities"] = [
+                    skills_mod.capability_line(entry_by_name[name], n["skills_source"], n.get("tools"))
+                    for name in linked
+                    if name in entry_by_name
+                ]
     for entry in skill_entries:
         entry["used_by"] = [n["id"] for n in nodes if entry["name"] in (n.get("skills") or [])]
 

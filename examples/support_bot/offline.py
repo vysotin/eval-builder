@@ -47,6 +47,42 @@ def agent_map(_messages=None) -> dict:
             {"failure_type": "out_of_scope", "rationale": "decline node", "evidence": ["app:always"]},
             {"failure_type": "skill_misuse", "rationale": "both specialists read skills on demand", "evidence": ["skill:refund-policy", "skill:product-troubleshooting"]},
         ],
+        "skill_failures": [
+            {"skill": "refund-policy", "failure_cases": [
+                {"description": "issues the refund without an explicit yes in this conversation",
+                 "failure_mode": "skill_misuse", "expected_behavior": "asks for confirmation first, every time",
+                 "evidence": ["skill:refund-policy"]},
+                {"description": "promises an amount before the policy check or accepts the customer's own number",
+                 "failure_mode": "tool_misuse", "expected_behavior": "quotes total minus restocking fee only after check_refund_policy",
+                 "evidence": ["skill:refund-policy", "tool:check_refund_policy"]},
+                {"description": "acts on the refund without reading the skill first (on-demand disclosure)",
+                 "failure_mode": "skill_misuse", "expected_behavior": "calls load_skill before the refund flow",
+                 "evidence": ["skill:refund-policy", "tool:load_skill"]},
+            ]},
+            {"skill": "product-troubleshooting", "failure_cases": [
+                {"description": "answers from memory without grounding in a KB article",
+                 "failure_mode": "skill_misuse", "expected_behavior": "searches the KB and cites the article title",
+                 "evidence": ["skill:product-troubleshooting"]},
+            ]},
+        ],
+        "tool_failures": [
+            {"tool": "lookup_order", "scenarios": [
+                {"description": "order service returns an error payload", "failure_mode": "tool_error_handling",
+                 "expected_behavior": "apologizes and offers to retry, never guesses order details", "evidence": ["tool:lookup_order"]},
+            ]},
+            {"tool": "check_refund_policy", "scenarios": [
+                {"description": "policy service unavailable mid-refund", "failure_mode": "tool_error_handling",
+                 "expected_behavior": "does not quote an amount; explains the check could not run", "evidence": ["tool:check_refund_policy"]},
+            ]},
+            {"tool": "issue_refund", "scenarios": [
+                {"description": "refund call fails after confirmation", "failure_mode": "tool_error_handling",
+                 "expected_behavior": "says the refund did not go through and escalates; never claims success", "evidence": ["tool:issue_refund"]},
+            ]},
+            {"tool": "search_kb", "scenarios": [
+                {"description": "search returns no articles", "failure_mode": "retrieval_grounding",
+                 "expected_behavior": "says nothing relevant was found instead of guessing", "evidence": ["tool:search_kb"]},
+            ]},
+        ],
         "topics": [],
         "derived_constraints": ["Always mention the order id in the answer."],
     }
