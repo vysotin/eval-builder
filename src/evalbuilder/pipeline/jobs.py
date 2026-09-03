@@ -1,6 +1,6 @@
 """Background pipeline jobs for the UI: spawn `evalbuilder pipeline run …` detached,
-track it through `<out_dir>/job.json` (`evalbuilder/pipeline-job/v1`) and
-`<out_dir>/pipeline.log`, and read progress back from `state.json`.
+track it through `<out_dir>/work/job.json` (`evalbuilder/pipeline-job/v1`) and
+`<out_dir>/pipeline.log`, and read progress back from `work/state.json`.
 
 The child is a tiny wrapper (`python -m evalbuilder.pipeline.jobs run <job.json>`) that
 executes the real command and finalises job.json with the exit code, so the status is
@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from evalbuilder.pipeline.config import STAGE_NAMES
-from evalbuilder.pipeline.layout import path_for
+from evalbuilder.pipeline.layout import existing_path, path_for
 
 JOB_SCHEMA = "evalbuilder/pipeline-job/v1"
 TERMINAL_STAGE_STATUSES = ("ok", "recovered", "failed", "skipped", "awaiting_review")
@@ -64,8 +64,8 @@ def log_path(out_dir: Path) -> Path:
 
 
 def read_job(out_dir: Path) -> dict | None:
-    path = job_path(out_dir)
-    if not path.exists():
+    path = existing_path(Path(out_dir), "pipeline_job")
+    if path is None:
         return None
     try:
         return json.loads(path.read_text())
@@ -159,9 +159,9 @@ def _run_wrapper(job_file: Path) -> int:
 
 
 def stage_statuses(out_dir: Path) -> dict[str, dict]:
-    """stage → {status, seconds, attempts, reason, error} from state.json ({} when absent)."""
-    path = path_for(Path(out_dir), "pipeline_state")
-    if not path.exists():
+    """stage → {status, seconds, attempts, reason, error} from the state file ({} when absent)."""
+    path = existing_path(Path(out_dir), "pipeline_state")
+    if path is None:
         return {}
     try:
         state = json.loads(path.read_text())
@@ -185,9 +185,9 @@ def stage_progress(stages: dict[str, dict]) -> dict:
 
 
 def run_progress(out_dir: Path) -> dict | None:
-    """The run stage's live progress (run-progress.json), or None."""
-    path = path_for(Path(out_dir), "run_progress")
-    if not path.exists():
+    """The run stage's live progress (work/run-progress.json), or None."""
+    path = existing_path(Path(out_dir), "run_progress")
+    if path is None:
         return None
     try:
         return json.loads(path.read_text())
@@ -277,8 +277,8 @@ def stop_job(out_dir: Path) -> dict:
 
 
 def _stopped_after(out_dir: Path) -> str | None:
-    path = path_for(Path(out_dir), "pipeline_state")
-    if not path.exists():
+    path = existing_path(Path(out_dir), "pipeline_state")
+    if path is None:
         return None
     try:
         return (json.loads(path.read_text()).get("data") or {}).get("stopped_after")

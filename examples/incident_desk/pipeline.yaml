@@ -31,7 +31,7 @@ instructions: 'Ops domain: services are named like api, checkout, payments or au
 feedback: []
 # case counts: per intent, per failure category, out-of-intent, multi-turn share, schema edge cases per tool
 coverage:
-  total_cases: 50
+  total_cases: 24
   per_intent:
     happy: 1
     failure: 2
@@ -80,7 +80,7 @@ review:
   note: ''
 # artifact directory (default eval/pipeline/<name>)
 output:
-  dir: eval/pipeline/incident-desk
+  dir: docs/examples/incident-desk
 # dataset name for publish (defaults to name)
 langsmith:
   dataset_name: null

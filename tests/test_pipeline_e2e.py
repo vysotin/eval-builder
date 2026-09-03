@@ -1,6 +1,7 @@
 """Offline end-to-end pipeline on support_bot: scripted agent model + fake generator."""
 
 import json
+import shutil
 
 import yaml
 from typer.testing import CliRunner
@@ -10,6 +11,7 @@ from evalbuilder.config import Settings
 from evalbuilder.pipeline.config import PIPELINE_CONFIG_SCHEMA, load_config
 from evalbuilder.pipeline.generator import FakeGenerator
 from evalbuilder.pipeline.report import run_pipeline
+from evalbuilder.ui.loader import load_dir
 
 SCRIPTED = "scripted:examples.support_bot.agent:default_scripted_model"
 
@@ -153,22 +155,51 @@ def test_full_offline_pipeline_passes(tmp_path):
     assert report["stages"]["review"]["details"]["approved_by"] == "tester"
     assert report["stages"]["score"]["details"]["parallel_scoring"] == 2
     assert report["stages"]["simulate"]["details"]["parallel_simulations"] == 2
-    # artifacts on disk
+    # ── artifacts on disk ────────────────────────────────────────
+    # The output root holds deliverables only: nothing there is a copy of part of
+    # another artifact. Everything the pipeline needs but no reader of the evaluation
+    # does — resume state, live progress, the mocks→dataset handoff — lives in work/.
     out = tmp_path / "out"
-    for name in ("agent-map.json", "mock-rules.json", "applicable-failures.json", "dataset.json", "coverage-plan.json", "coverage.json", "aggregate.json",
-                 "analysis.json", "scenarios.yaml", "simulation.json", "state.json", "report.json", "evaluators.yaml"):
-        assert (out / name).exists(), name
-    prog = json.loads((out / "run-progress.json").read_text())
+    assert sorted(p.name for p in out.iterdir()) == [
+        "agent-map.json", "aggregate.json", "analysis.json", "dataset.json", "evaluators.yaml",
+        "report.json", "results", "scenarios.yaml", "simulation.json", "work",
+    ]
+    assert sorted(p.name for p in (out / "work").iterdir()) == [
+        "mock-rules.json", "mock-strategies.json", "run-progress.json", "state.json",
+    ]
+    prog = json.loads((out / "work" / "run-progress.json").read_text())
     assert prog["schema"] == "evalbuilder/run-progress/v1"
     assert prog["repeat"] == 2 and prog["repeats"] == 2
     assert prog["overall_done"] == prog["overall_total"] == 10  # 5 cases x 2 repeats
     assert sum(v["total"] for v in prog["by_intent"].values()) == 5
     assert len(prog["runs"]) == 2
+
     ds = json.loads((out / "dataset.json").read_text())
     assert all(c["review"]["status"] == "approved" for c in ds["cases"])
     assert set(ds["mocks"]["tools"]) == set(report["agent"]["tools"]) - {"load_skill"} and ds["mocks"]["on_miss"] == "strict"
     error_case = next(c for c in ds["cases"] if c["metadata"]["failure_mode"] == "tool_error_handling")
     assert error_case["metadata"]["mocks"]["tools"]["lookup_order"][0]["response"] == {"error": "timeout"}
+
+    # the report says where the kinds with no file of their own can be read
+    assert report["folded_artifacts"]["coverage"] == "dataset.coverage.achieved"
+    assert set(report["artifacts"]) & {"coverage", "coverage_plan", "applicable_failures"} == set()
+
+    # the folded artifacts live inside their parents, and the work/ handoff matches
+    amap = json.loads((out / "agent-map.json").read_text())
+    assert amap["applicable_failures"]["out_of_scope"] == ["app:always"]
+    assert ds["coverage"]["plan"]["summary"]["cells"] == len(ds["coverage"]["plan"]["cells"])
+    assert ds["coverage"]["achieved"] == report["coverage"]
+    assert ds["mocks"]["tools"] == json.loads((out / "work" / "mock-rules.json").read_text())["tools"]
+    assert ds["mocks"]["strategies"] == {
+        k: v for k, v in json.loads((out / "work" / "mock-strategies.json").read_text()).items() if k != "schema"
+    }
+
+    # deleting work/ costs nothing a reader of the evaluation needs
+    shutil.rmtree(out / "work")
+    b = load_dir(out)
+    assert b.problems == [] and b.verdict == "pass"
+    for kind in ("coverage", "coverage_plan", "applicable_failures", "mock_rules", "mock_strategies"):
+        assert b.has(kind), kind  # derived from the dataset / agent map
     # CLI summary works on the output dir
     result = CliRunner().invoke(app, ["pipeline", "report", str(out)])
     assert result.exit_code == 0 and "verdict=pass" in result.stdout

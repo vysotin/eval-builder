@@ -38,7 +38,8 @@ your LangGraph agent ─►│ agent-eval-discover │ agent-eval-dataset │ ag
                                                       │  simulate → publish → analyze → report
                                                       ▼
                                    eval/pipeline/<name>/   (agent-map.json, dataset.json,
-                                   results/run-*.json, aggregate.json, report.json, …)
+                                   results/run-*.json, aggregate.json, report.json, …
+                                   + work/ — scratch you can delete)
                                                       │
                        evalbuilder ui  ◄──────────────┘  Streamlit: Pipeline setup → Run & review →
                                                          report pages (graph, intents, dataset, coverage,
@@ -162,7 +163,7 @@ src/evalbuilder/
   testing.py          ScriptedChatModel + SchemaScriptedModel (offline generators) for fully offline runs
   pipeline/
     config.py         evalbuilder/pipeline-config/v1 (pydantic), template, semantic checks
-    engine.py         stage runner: deps, retries, skip, awaiting_review, persisted state.json
+    engine.py         stage runner: deps, retries, skip, awaiting_review, persisted work/state.json
     stages.py         the 14 stage functions + PipelineContext (lazy, disk-backed artifacts)
     generator.py      structured-output LLM "author" for map/mocks/cases/review/scenarios/analysis
     planning.py       coverage cells planning and achieved coverage
@@ -170,7 +171,7 @@ src/evalbuilder/
     aggregate.py      repeat-aware aggregation: pass rates, thresholds, slices, stability
     report.py         report assembly + run_pipeline entry point
     layout.py         THE artifact naming convention (kinds, files, schema ids, legacy names)
-    jobs.py           background pipeline jobs for the UI (job.json + pipeline.log, wrapper entry point)
+    jobs.py           background pipeline jobs for the UI (work/job.json + pipeline.log, wrapper entry point)
     setup.py          interactive setup helpers: target discovery/preview, config from form, feedback/approval
   ui/
     app.py            Streamlit entry point (st.navigation, sidebar showing the project)
@@ -238,8 +239,8 @@ Every key, default and semantic check is documented in
 | preflight | – | config checks, target import, model readiness (`providers.provider_ready`) | blocking |
 | discover | preflight | AST + live introspection → `agent-map.json` (nodes, edges, tools with `kind`/`mockable`, prompts, skills) | blocking |
 | map | discover | generator authors intents, scenarios, failure scenarios, topics, derived constraints; taxonomy gates failure types | retry once; invalid entries dropped → `problems` |
-| mocks | discover | generator writes fixtures for every **mockable** tool → `mock-rules.json` (no wildcard under `on_miss: llm`), and the LLM mock strategies → `mock-strategies.json` | generic fixture / generic default strategy |
-| dataset | map, mocks | plan coverage cells → generator fills them → `dataset.json`, `coverage.json` | invalid cases dropped, gaps reported |
+| mocks | discover | generator writes fixtures for every **mockable** tool (no wildcard under `on_miss: llm`) and the LLM mock strategies → `work/`, then the dataset stage stores both in `dataset.mocks` | generic fixture / generic default strategy |
+| dataset | map, mocks | plan coverage cells → generator fills them → `dataset.json` (cases, `mocks`, `coverage.plan` + `coverage.achieved`) | invalid cases dropped, gaps reported |
 | review | dataset | self-review rejects bad cases; approves the rest **only** with `review.auto_approve` | stops with `awaiting_review` |
 | verify | review | every expected tool call has a rule; every tool is mocked (under `llm`: misses are counted as engine-answered, a tool is covered by a rule or the default strategy) | blocking |
 | run | verify | `runs.repeats` executions of all approved cases → `results/run-<id>.json` (per-case `mock_calls` ledger, `mocking` totals) | retry once |
@@ -263,7 +264,7 @@ stops at `awaiting_review`, writes the report, and you either approve by hand
 
 ### Resume, stop early, feedback loop
 
-`state.json` records every stage. `--resume` reuses completed stages (the report is
+`work/state.json` records every stage. `--resume` reuses completed stages (the report is
 always rebuilt); `--resume --from STAGE` regenerates from a stage on, e.g. after
 editing thresholds (`--from aggregate`) or the agent (`--from run`).
 
@@ -273,7 +274,7 @@ typical loop:
 
 ```bash
 evalbuilder pipeline run cfg.yaml --until dataset          # intents, mocks, cases — nothing runs yet
-# read dataset.json / mock-rules.json (or the UI), then add a comment to the config:
+# read dataset.json (cases + both mock layers) or the UI, then comment in the config:
 #   feedback:
 #     - {at: 2026-08-28T10:00:00, note: "more multi-turn refund cases; EU order ids", from_stage: dataset}
 evalbuilder pipeline run cfg.yaml --resume --from dataset --until dataset   # regenerate with the feedback
@@ -360,15 +361,29 @@ root artifacts are `<kind>.json` (or `.yaml`), per-run artifacts are
 `"schema": "evalbuilder/<kind>/v1"`, and kinds / files / schema ids are unique — so a
 file can be identified by name (directories) or by content (uploads).
 
+**No artifact is a copy of part of another one.** Each kind has a *tier* saying where —
+and whether — it is written:
+
+- **final** — a deliverable, at the root of the output dir (or under `results/`);
+- **work** — scratch in `<out_dir>/work/`: resume state, live progress, the UI job
+  record, and the mocks→dataset handoff. Nothing downstream of the pipeline reads it,
+  and deleting the whole directory loses nothing;
+- **derived** — data that is *part of* another artifact and so has no file at all.
+
+```
+eval/pipeline/support-bot/
+├── agent-map.json  dataset.json  evaluators.yaml  scenarios.yaml     ← deliverables
+├── aggregate.json  simulation.json  analysis.json  report.json
+├── results/run-<id>.json  results/score-report-<id>.json
+├── pipeline.log
+└── work/           state.json  run-progress.json  job.json           ← scratch
+                    mock-rules.json  mock-strategies.json
+```
+
 | file | schema | stage | contents |
 |---|---|---|---|
-| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph (AST + live), tools + arg schemas (`kind`, `mockable`), prompts, skills, intents, scenarios (`skills`), failure scenarios, constraints, topics |
-| `applicable-failures.json` | `evalbuilder/applicable-failures/v1` | map | `failure_types`: failure type → gating evidence |
-| `mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules (layer 1) |
-| `mock-strategies.json` | `evalbuilder/mock-strategies/v1` | mocks | `world` + `strategies`: per strategy, each tool's behaviour, examples, fallback response (layer 2) |
-| `coverage-plan.json` | `evalbuilder/coverage-plan/v1` | dataset | planned cells and summary |
-| `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases (inputs, references, metadata, mocks), review + publication state |
-| `coverage.json` | `evalbuilder/coverage/v1` | dataset, review | planned vs covered, by kind, multi-turn, gaps, `skills` / `uncovered_skills` |
+| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph (AST + live), tools + arg schemas (`kind`, `mockable`), prompts, skills, intents, scenarios (`skills`), failure scenarios, constraints, topics, `applicable_failures` |
+| `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases (inputs, references, metadata, mocks), review + publication state, `mocks` (both layers), `coverage` (plan + achieved) |
 | `evaluators.yaml` | – | score | evaluator specs |
 | `results/run-<id>.json` | `evalbuilder/run/v1` | run | per-case outputs, trajectory, tool calls, node path, errors, `mock_calls` ledger; `mocking` totals |
 | `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores/comments/errors/skips |
@@ -376,11 +391,37 @@ file can be identified by name (directories) or by content (uploads).
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |
 | `simulation.json` | `evalbuilder/simulation/v1` | simulate | transcripts, stop reasons, violations |
 | `analysis.json` | `evalbuilder/analysis/v1` | analyze | summary, failure patterns, weak slices, recommendations, evaluator issues |
-| `state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status/timing/details, problems |
 | `report.json` | `evalbuilder/pipeline-report/v1` | report | everything above, condensed, plus `artifacts` index |
 
-Directories written before this convention (`mocks.json`, `plan.json`,
-`results/report-*.json`, schema `evalbuilder/report/v1`) still load everywhere.
+Scratch (`work/`), and what holds the same data for good:
+
+| file | schema | stage | contents |
+|---|---|---|---|
+| `work/mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules (layer 1) — handed to the dataset stage, kept in `dataset.mocks.tools` |
+| `work/mock-strategies.json` | `evalbuilder/mock-strategies/v1` | mocks | `world` + `strategies`: per strategy, each tool's behaviour, examples, fallback response (layer 2) — kept in `dataset.mocks.strategies` |
+| `work/state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status/timing/details, problems; drives `--resume` |
+| `work/run-progress.json` | `evalbuilder/run-progress/v1` | run | live per-case/per-intent progress of the run stage |
+| `work/job.json` (+ `pipeline.log`) | `evalbuilder/pipeline-job/v1` | UI | background run: mode, argv, pid, timing, exit code |
+
+Derived — no file of their own, and the kind the UI still shows for them:
+
+| kind | lives in | contents |
+|---|---|---|
+| `applicable_failures` | `agent-map.json` → `applicable_failures` | failure type → gating evidence |
+| `coverage_plan` | `dataset.json` → `coverage.plan` | planned cells and summary |
+| `coverage` | `dataset.json` → `coverage.achieved` | planned vs covered, by kind, multi-turn, gaps, `skills` / `uncovered_skills` |
+
+Directories written before this layout still load everywhere — stand-alone
+`coverage.json` / `applicable-failures.json` / root `state.json`, the pre-convention
+names (`mocks.json`, `plan.json`, `results/report-*.json`, schema
+`evalbuilder/report/v1`), and single-file uploads of any of them. To bring one onto the
+current layout:
+
+```bash
+uv run evalbuilder pipeline compact eval/pipeline/support-bot --dry-run   # what would change
+uv run evalbuilder pipeline compact eval/pipeline/support-bot             # fold + move
+```
+
 The standalone commands write with the same names (`evalbuilder score` →
 `score-report-<id>.json`, `evalbuilder simulate` → `simulation-<id>.json`).
 
@@ -412,7 +453,7 @@ mock policy, review approval and paths; *Generate YAML* fills an editable YAML e
 *Validate* / *Save config* / *Generate dataset & mocks only* / *Run full pipeline*. When
 the config file changes on disk (review feedback, approval, a job) the form reloads it.
 
-**Run & review** follows the project's background job (`job.json` + `pipeline.log`,
+**Run & review** follows the project's background job (`work/job.json` + `pipeline.log`,
 stage table refreshed every 2 s), and after a dataset-only run shows the review loop:
 dataset summary (statuses, failure modes, schema-edge cases, mocked tools), a comment box
 whose text is appended to the config's `feedback`, *Save feedback & regenerate*

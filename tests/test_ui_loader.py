@@ -34,24 +34,63 @@ def test_load_dir_reads_every_artifact_kind(example_bundle):
     assert summary["cases"] == 21 and summary["tools"] == 4 and summary["runs"] == 2
 
 
-def test_load_dir_accepts_legacy_file_names_and_shapes(tmp_path):
-    """Output directories written before the naming convention still open."""
-    legacy = tmp_path / "legacy"
-    shutil.copytree(EXAMPLE, legacy)
-    (legacy / "mock-rules.json").rename(legacy / "mocks.json")
-    (legacy / "coverage-plan.json").rename(legacy / "plan.json")
-    rules = json.loads((legacy / "mocks.json").read_text())["tools"]
-    (legacy / "mocks.json").write_text(json.dumps(rules))  # unwrapped, unstamped
-    for p in (legacy / "results").glob("score-report-*.json"):
+def _unfold(example: Path, dest: Path) -> dict:
+    """Rewrite a current output dir the way older versions wrote it: stand-alone copies
+    of the folded artifacts at the root, scratch beside them, pre-convention names."""
+    shutil.copytree(example, dest)
+    amap = json.loads((dest / "agent-map.json").read_text())
+    ds = json.loads((dest / "dataset.json").read_text())
+    (dest / "applicable-failures.json").write_text(json.dumps(
+        {"schema": "evalbuilder/applicable-failures/v1", "failure_types": amap.pop("applicable_failures")}))
+    plan = ds["coverage"].pop("plan")
+    (dest / "plan.json").write_text(json.dumps(plan))  # pre-convention name
+    (dest / "coverage.json").write_text(json.dumps(
+        {"schema": "evalbuilder/coverage/v1", **ds["coverage"].pop("achieved")}))
+    (dest / "agent-map.json").write_text(json.dumps(amap))
+    (dest / "dataset.json").write_text(json.dumps(ds))
+    rules = json.loads((dest / "work" / "mock-rules.json").read_text())["tools"]
+    (dest / "mocks.json").write_text(json.dumps(rules))  # pre-convention name, unwrapped, unstamped
+    (dest / "work" / "state.json").rename(dest / "state.json")
+    shutil.rmtree(dest / "work")
+    for p in (dest / "results").glob("score-report-*.json"):
         data = json.loads(p.read_text())
         data["schema"] = "evalbuilder/report/v1"
         p.with_name(p.name.replace("score-report-", "report-")).write_text(json.dumps(data))
         p.unlink()
+    return {"rules": rules, "plan": plan}
+
+
+def test_load_dir_accepts_legacy_file_names_and_shapes(tmp_path):
+    """Output directories written before the naming convention — and before the fold —
+    still open, and their stand-alone files are what the pages read."""
+    legacy = tmp_path / "legacy"
+    old = _unfold(EXAMPLE, legacy)
     b = loader.load_dir(legacy)
     assert b.problems == []
-    assert set(b.get("mock_rules")) == set(rules)
+    assert set(b.get("mock_rules")) == set(old["rules"])
     assert b.get("coverage_plan")["summary"]["cells"] == 16
+    assert b.get("coverage")["planned"] and b.get("applicable_failures")
+    assert b.state["stages"]  # state.json still found beside the deliverables
     assert len(b.score_reports) == 2 and all(r["schema"] == "evalbuilder/report/v1" for r in b.score_reports.values())
+
+
+def test_folded_kinds_are_derived_from_their_parent_when_there_is_no_file(example_bundle, tmp_path):
+    """The bundle presents the same kinds either way, so pages never learn about the fold."""
+    folded = ("applicable_failures", "coverage_plan", "coverage", "mock_rules")
+    current = {k: example_bundle.get(k) for k in folded}
+    assert all(v for v in current.values())
+    assert "coverage.json" not in {Path(f).name for f in example_bundle.files.values() if isinstance(f, str)}
+
+    legacy = tmp_path / "legacy"
+    _unfold(EXAMPLE, legacy)
+    assert {k: loader.load_dir(legacy).get(k) for k in folded} == current
+
+    # and with work/ deleted the rules still come back — from dataset.mocks.tools
+    trimmed = tmp_path / "trimmed"
+    shutil.copytree(EXAMPLE, trimmed)
+    shutil.rmtree(trimmed / "work")
+    b = loader.load_dir(trimmed)
+    assert b.problems == [] and {k: b.get(k) for k in folded} == current
 
 
 def test_load_dir_reports_missing_and_broken_files(tmp_path):

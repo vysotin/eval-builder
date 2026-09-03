@@ -300,7 +300,7 @@ def render() -> None:
             st.selectbox("On invalid mock", ["fallback", "strict"], key="setup_on_invalid",
                          help="an engine answer still violating the tool's output schema after one repair: fallback (schema sample) or error")
         with e4:
-            st.checkbox("Generate strategies", key="setup_strategies", help="write mock-strategies.json in the mocks stage")
+            st.checkbox("Generate strategies", key="setup_strategies", help="pre-generate the LLM mock engine's strategies in the mocks stage (stored in dataset.mocks.strategies)")
         t1, t2, t3, t4, t5 = st.columns(5)
         with t1:
             st.number_input("Metric threshold", 0.0, 1.0, step=0.05, key="setup_threshold_default")

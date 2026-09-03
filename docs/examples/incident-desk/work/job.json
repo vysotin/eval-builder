@@ -1,0 +1,23 @@
+{
+  "schema": "evalbuilder/pipeline-job/v1",
+  "mode": "dataset",
+  "from_stage": null,
+  "until": "dataset",
+  "config_path": "examples/incident_desk/pipeline.yaml",
+  "output_dir": "docs/examples/incident-desk",
+  "argv": [
+    "/Users/vladimirz/Work/eval-builder/.venv/bin/python3",
+    "-m",
+    "evalbuilder.cli",
+    "pipeline",
+    "run",
+    "examples/incident_desk/pipeline.yaml",
+    "--until",
+    "dataset"
+  ],
+  "log": "docs/examples/incident-desk/pipeline.log",
+  "pid": 27495,
+  "started_at": "2026-09-03T05:29:24+00:00",
+  "finished_at": "2026-09-03T05:45:06+00:00",
+  "exit_code": 0
+}

@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from evalbuilder.pipeline.layout import WORK_DIR
+
 pytestmark = pytest.mark.ui
 
 playwright = pytest.importorskip("playwright.sync_api")
@@ -218,7 +220,7 @@ def _wait_job_finished(page, out_dir: Path, mode: str) -> dict:
     deadline = time.time() + JOB_TIMEOUT / 1000
     job: dict = {}
     while time.time() < deadline:
-        job_file = out_dir / "job.json"
+        job_file = out_dir / WORK_DIR / "job.json"
         if job_file.exists():
             try:
                 job = json.loads(job_file.read_text())
@@ -289,8 +291,9 @@ def test_dataset_only_run_review_feedback_regenerate_and_evaluate(page, app_url,
     _wait_job_finished(page, out_dir, "dataset")
     _shot(page, "run-dataset-done")
     expect(page.get_by_text("stopped after").first).to_be_visible()
-    assert (out_dir / "dataset.json").exists() and (out_dir / "mock-rules.json").exists()
-    state = json.loads((out_dir / "state.json").read_text())
+    assert (out_dir / "dataset.json").exists() and (out_dir / WORK_DIR / "mock-rules.json").exists()
+    assert not (out_dir / "coverage.json").exists()  # coverage is part of dataset.json
+    state = json.loads((out_dir / WORK_DIR / "state.json").read_text())
     assert state["stages"]["dataset"]["status"] == "ok" and state["stages"]["review"]["status"] == "skipped"
     assert state["data"]["stopped_after"] == "dataset"
     dataset = json.loads((out_dir / "dataset.json").read_text())
@@ -315,7 +318,7 @@ def test_dataset_only_run_review_feedback_regenerate_and_evaluate(page, app_url,
     saved = yaml.safe_load(cfg_path.read_text())
     assert saved["feedback"][0]["note"] == "Use European order ids and add a multi-turn refund case."
     assert saved["feedback"][0]["from_stage"] == "dataset"
-    state2 = json.loads((out_dir / "state.json").read_text())
+    state2 = json.loads((out_dir / WORK_DIR / "state.json").read_text())
     assert state2["updated_at"] > first_updated and state2["stages"]["dataset"]["status"] == "ok"
     assert state2["stages"]["map"]["status"] == "ok"  # cached, not regenerated
     log = (out_dir / "pipeline.log").read_text()
@@ -376,7 +379,7 @@ def test_full_autonomous_run_from_setup(page, app_url, work):
     assert report["stages"]["review"]["details"]["approved_by"] == "playwright"
     assert report["config"]["instructions"] == "Run everything end to end."
     assert "schema-edge" in report["coverage"]["by_kind"]
-    assert json.loads((out_dir / "job.json").read_text())["exit_code"] == 0
+    assert json.loads((out_dir / WORK_DIR / "job.json").read_text())["exit_code"] == 0
     _click(page, "Open results in the report pages")
     page.locator("h2#summary").wait_for(timeout=60_000)
     _settle(page)
@@ -427,7 +430,7 @@ def test_pydantic_agent_dataset_run_shows_schema_edge_cases(page, app_url, work)
     amap = json.loads((out_dir / "agent-map.json").read_text())
     tool = next(t for t in amap["tools"] if t["name"] == malformed[0]["metadata"]["tool"])
     assert set(tool["output_schema"]["required"]) - set(override)  # a required field was dropped
-    mocks = json.loads((out_dir / "mock-rules.json").read_text())["tools"]
+    mocks = json.loads((out_dir / WORK_DIR / "mock-rules.json").read_text())["tools"]
     assert set(mocks) == {t["name"] for t in amap["tools"]}
     review_metrics = page.locator("[data-testid='stMetric']")
     assert review_metrics.filter(has_text="Schema-edge cases").first.locator("[data-testid='stMetricValue']").inner_text() == str(len(edges))
@@ -604,7 +607,8 @@ def test_skills_and_llm_mock_layer_end_to_end(page, app_url, work):
     assert report["verdict"] == "pass" and report["mocking"]["layers"] == ["rules", "llm_engine"]
     assert report["mocking"]["calls"]["llm"] > 0 and report["mocking"]["calls"]["invalid"] == 0
     assert report["agent"]["skills"] == ["product-troubleshooting", "refund-policy"] and report["coverage"]["uncovered_skills"] == []
-    assert (out_dir / "mock-strategies.json").exists()
+    assert (out_dir / WORK_DIR / "mock-strategies.json").exists()
+    assert json.loads((out_dir / "dataset.json").read_text())["mocks"]["strategies"]["strategies"]
     _nav(page, "Agent graph & tools", "agent")
     expect(page.locator("h3#agent-skills")).to_be_visible()
     expect(page.locator("details").filter(has_text="skills: product-troubleshooting, refund-policy").first).to_be_visible()  # node expander label

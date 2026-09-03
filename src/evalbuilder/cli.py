@@ -345,7 +345,7 @@ def mock_verify(path: Path) -> None:
 @mock_app.command("strategies")
 def mock_strategies(
     path: Path,
-    set_from: Optional[str] = typer.Option(None, "--set", help="strategies JSON ({world, strategies}) or @file (mock-strategies.json accepted)"),
+    set_from: Optional[str] = typer.Option(None, "--set", help="strategies JSON ({world, strategies}) or @file (a mock-strategies.json artifact is accepted)"),
     model: Optional[str] = typer.Option(None, "--model", help="mock model spec for the LLM engine (mocks.llm.model)"),
     strategy: Optional[str] = typer.Option(None, "--strategy", help="dataset-level default strategy id"),
     on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy: real|fallback|strict|llm"),
@@ -745,7 +745,7 @@ def pipeline_init(
 @pipeline_app.command("run")
 def pipeline_run(
     config: Path,
-    resume: bool = typer.Option(False, "--resume", help="reuse completed stages from state.json"),
+    resume: bool = typer.Option(False, "--resume", help="reuse completed stages from work/state.json"),
     from_stage: Optional[str] = typer.Option(None, "--from", help="with --resume: rerun from this stage onward"),
     until: Optional[str] = typer.Option(None, "--until", help="stop after this stage (e.g. dataset: generate cases + mocks only)"),
     quiet: bool = typer.Option(False, "--quiet"),
@@ -829,6 +829,25 @@ def pipeline_report(path: Path) -> None:
         typer.echo(f"no report at {report_path}", err=True)
         raise typer.Exit(1)
     typer.echo(summary_text(json.loads(report_path.read_text())))
+
+
+@pipeline_app.command("compact")
+def pipeline_compact(
+    path: Path = typer.Argument(..., help="pipeline output directory"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="report what would change, touch nothing"),
+) -> None:
+    """Bring an output directory onto the current artifact layout.
+
+    Folds stand-alone copies back into the deliverable that holds them
+    (`coverage.json` → `dataset.coverage.achieved`, …), moves scratch into `work/`, and
+    refreshes the report's artifact index. Idempotent; a no-op on a current directory.
+    """
+    from evalbuilder.pipeline.layout import compact_dir
+
+    if not path.is_dir():
+        typer.echo(f"not a directory: {path}", err=True)
+        raise typer.Exit(1)
+    _emit({"path": str(path), "dry_run": dry_run, **compact_dir(path, dry_run=dry_run)})
 
 
 # Module entry point: `python -m evalbuilder.cli …` behaves exactly like the installed

@@ -9,7 +9,7 @@ from typing import Callable
 from evalbuilder.config import Settings
 from evalbuilder.pipeline.config import PipelineConfig, load_config
 from evalbuilder.pipeline.engine import OK_STATUSES, PipelineRunner, PipelineState
-from evalbuilder.pipeline.layout import artifact_index, path_for
+from evalbuilder.pipeline.layout import FOLDED, artifact_index, path_for
 from evalbuilder.pipeline.stages import REQUIRED_STAGES, PipelineContext, build_stages
 
 PIPELINE_REPORT_SCHEMA = "evalbuilder/pipeline-report/v1"
@@ -50,7 +50,7 @@ def _verdict(ctx: PipelineContext, agg: dict | None) -> tuple[str, list[str]]:
 def analysis_summary(ctx: PipelineContext) -> dict:
     """Compact, LLM-sized view of the evaluation for the analyze stage."""
     agg = ctx.optional_json("aggregate") or {}
-    coverage = ctx.optional_json("coverage") or {}
+    coverage = ctx.coverage()
     verdict, reasons = _verdict(ctx, agg or None)
     amap = ctx.optional_json("agent_map") or {}
     return {
@@ -85,7 +85,7 @@ def analysis_summary(ctx: PipelineContext) -> dict:
 def _mocking_summary(ctx: PipelineContext, stages: dict) -> dict:
     """Policy, model, strategies and per-layer call totals of the two mocking layers."""
     cfg = ctx.config
-    strategies = ctx.optional_json("mock_strategies") or {}
+    strategies = ctx.mock_strategies() or {}
     run_calls = ((stages.get("run", {}).get("details") or {}).get("mocking") or {}).get("calls") or {}
     sim_calls = (stages.get("simulate", {}).get("details") or {}).get("mock_calls") or {}
     return {
@@ -103,7 +103,7 @@ def _mocking_summary(ctx: PipelineContext, stages: dict) -> dict:
 
 def build_report(ctx: PipelineContext) -> dict:
     agg = ctx.optional_json("aggregate")
-    coverage = ctx.optional_json("coverage")
+    coverage = ctx.coverage() or None
     amap = ctx.optional_json("agent_map") or {}
     analysis = ctx.optional_json("analysis")
     simulation = ctx.optional_json("simulation")
@@ -130,6 +130,8 @@ def build_report(ctx: PipelineContext) -> dict:
         "config_path": str(ctx.config_path),
         "output_dir": str(ctx.out_dir),
         "artifacts": artifact_index(ctx.out_dir),
+        # kinds with no file of their own: where inside another artifact to read them
+        "folded_artifacts": dict(FOLDED),
         "config": ctx.config.model_dump(by_alias=True),
         "verdict": verdict,
         "verdict_reasons": reasons,

@@ -37,7 +37,8 @@ cfg["review"] = {"auto_approve": False, "approved_by": ""}; cfg["output"] = {"di
 p.write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
 step "pipeline run --until dataset"; run evalbuilder pipeline run "$W/weather.yaml" --until dataset >/dev/null
-run test -f "$W/out/dataset.json"; run test -f "$W/out/mock-rules.json"
+run test -f "$W/out/dataset.json"; run test -f "$W/out/work/mock-rules.json"
+run test ! -e "$W/out/coverage.json"   # folded into dataset.coverage.achieved
 step "dataset validate / list, mock verify"
 run evalbuilder dataset validate "$W/out/dataset.json" >/dev/null
 run evalbuilder dataset list "$W/out/dataset.json" >/dev/null
@@ -50,6 +51,22 @@ run evalbuilder review "$W/out/dataset.json" --approve "$rest" --note "approved 
 step "pipeline run --resume"; run evalbuilder pipeline run "$W/weather.yaml" --resume >/dev/null
 step "pipeline report"; run evalbuilder pipeline report "$W/out"
 run python -c "import json; r=json.load(open('$W/out/report.json')); assert r['verdict']=='pass', r['verdict_reasons']"
+step "artifact layout: deliverables at the root, scratch in work/, nothing duplicated"
+run python - "$W/out" <<'PY2'
+import json, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+names = {p.name for p in out.iterdir()} - {"pipeline.log"}  # only UI-launched jobs write the log
+assert names == {
+    "agent-map.json", "aggregate.json", "analysis.json", "dataset.json", "evaluators.yaml",
+    "report.json", "results", "scenarios.yaml", "simulation.json", "work",
+}, sorted(names)
+ds = json.loads((out / "dataset.json").read_text())
+amap = json.loads((out / "agent-map.json").read_text())
+assert ds["coverage"]["plan"]["cells"] and ds["coverage"]["achieved"]["planned"] and amap["applicable_failures"]
+assert ds["mocks"]["tools"] == json.loads((out / "work" / "mock-rules.json").read_text())["tools"]
+PY2
+step "pipeline compact is a no-op on a current directory"
+run python -c "from evalbuilder.pipeline.layout import compact_dir; r=compact_dir('$W/out'); assert r=={'folded':[],'moved':[],'removed':[]}, r"
 step "standalone run / score / simulate on the pipeline's dataset"
 run evalbuilder run "$W/out/dataset.json" --mock --out "$W/results" >/dev/null
 runfile=$(ls "$W"/results/run-*.json 2>/dev/null | head -1); run test -n "$runfile"

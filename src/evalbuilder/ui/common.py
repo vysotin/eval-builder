@@ -50,8 +50,9 @@ def require(bundle: Bundle | None, *kinds: str) -> bool:
     if missing:
         for k in missing:
             a = ARTIFACTS[k]
+            where = a.folded_into or a.file  # derived kinds live inside another artifact
             st.warning(
-                f"Missing artifact **{a.file}** (`{k}`, written by stage *{a.stage}*): {a.description}",
+                f"Missing artifact **{where}** (`{k}`, written by stage *{a.stage}*): {a.description}",
                 icon=":material/inventory_2:",
             )
         return False

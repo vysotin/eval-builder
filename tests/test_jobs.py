@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from evalbuilder.pipeline import jobs
+from evalbuilder.pipeline.layout import WORK_DIR
 
 
 def test_job_argv_per_mode():
@@ -37,11 +38,13 @@ def test_start_job_runs_wrapper_and_finalises(tmp_path):
     assert jobs.job_status(out)["status"] == "none"
     job = jobs.start_job(tmp_path / "cfg.yaml", out, mode="full",
                          argv=[sys.executable, "-c", "import sys; print('hello from job'); sys.exit(3)"])
-    assert job["pid"] and job["mode"] == "full" and (out / "job.json").exists()
+    # the job record is scratch: it lives under work/, never beside the deliverables
+    assert job["pid"] and job["mode"] == "full" and (out / WORK_DIR / "job.json").exists()
+    assert not (out / "job.json").exists()
     st = _wait(out, "finished")
     assert st["exit_code"] == 3 and st["job"]["finished_at"]
     assert "hello from job" in jobs.tail_log(out)
-    assert json.loads((out / "job.json").read_text())["schema"] == jobs.JOB_SCHEMA
+    assert json.loads((out / WORK_DIR / "job.json").read_text())["schema"] == jobs.JOB_SCHEMA
 
 
 def test_running_job_blocks_a_second_start(tmp_path):
@@ -151,3 +154,26 @@ def test_job_status_includes_run_progress(tmp_path):
     assert st["run_progress"]["cases_done"] == 2 and st["run_progress"]["overall_total"] == 12
     (out / "run-progress.json").write_text("{broken")
     assert jobs.job_status(out)["run_progress"] is None
+
+
+def test_status_reads_work_tier_files_and_pre_move_ones(tmp_path):
+    """job/state/progress moved into work/; directories written before the move still read."""
+    state = {"schema": "evalbuilder/pipeline-state/v1", "name": "n",
+             "stages": {"run": {"status": "running"}}, "data": {"stopped_after": "dataset"}}
+    progress = {"schema": "evalbuilder/run-progress/v1", "repeat": 2, "repeats": 3}
+
+    new = tmp_path / "new" / WORK_DIR
+    new.mkdir(parents=True)
+    (new / "state.json").write_text(json.dumps(state))
+    (new / "run-progress.json").write_text(json.dumps(progress))
+    st = jobs.job_status(tmp_path / "new")
+    assert st["stages"]["run"]["status"] == "running"
+    assert st["run_progress"]["repeat"] == 2 and st["stopped_after"] == "dataset"
+
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "state.json").write_text(json.dumps(state))
+    (old / "run-progress.json").write_text(json.dumps(progress))
+    st = jobs.job_status(old)
+    assert st["stages"]["run"]["status"] == "running"
+    assert st["run_progress"]["repeat"] == 2 and st["stopped_after"] == "dataset"

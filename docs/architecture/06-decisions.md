@@ -164,7 +164,7 @@ place to look for "why does the dataset look like this".
 ## 16. UI runs the pipeline as a detached job with a wrapper (2026-08-28)
 
 **Decision.** `pipeline/jobs.py` spawns `python -m evalbuilder.pipeline.jobs run
-job.json`, which runs the CLI and finalises `job.json`; the page polls files.
+job.json`, which runs the CLI and finalises `work/job.json`; the page polls files.
 
 **Alternatives.** Threads inside Streamlit — rejected: reruns and reloads would lose
 the handle and the exit code, and a crashed page would orphan the run.
@@ -252,3 +252,35 @@ non-determinism are visible in the report.
 tail must reach the engine), verification counts misses instead of failing on them, an
 unfixable engine answer is an infrastructure error, and the run artifact carries a
 per-case ledger the UI shows.
+
+## 21. Artifact tiers: no file duplicates part of another artifact (2026-09-03)
+
+**Decision.** Every artifact kind declares a `tier` — `final` (a deliverable, at the
+output root or under `results/`), `work` (scratch under `<out_dir>/work/`), or `derived`
+(no file at all) — and, independently, a `folded_into` path naming the place inside
+another artifact that durably holds its data. Five stand-alone files that were copies of
+data already in a deliverable stopped being written at the root: `applicable-failures.json`
+and `coverage-plan.json` / `coverage.json` are folded into `agent-map.json`
+(`applicable_failures`) and `dataset.json` (`coverage.plan` / `coverage.achieved`), while
+`mock-rules.json` and `mock-strategies.json` stay on disk only as the mocks→dataset
+handoff in `work/`, their durable home being `dataset.mocks`. `state.json`,
+`run-progress.json` and `job.json` moved to `work/` as well. The output root went from
+15 files to 8, and `work/` can be deleted without losing anything.
+
+**Alternatives.** (a) Leave them — rejected: `mock-rules.json` was byte-identical to
+`dataset.mocks.tools` and `coverage.json` to `report.json`'s `coverage`, so two files
+could disagree after a hand edit and a reader had no rule for which one won.
+(b) Fold everything, including the mocks handoff, by having the `mocks` stage seed
+`dataset.json` early — rejected: it couples two stages through a half-built deliverable
+and leaves a case-less dataset behind whenever the dataset stage fails. (c) Move
+everything to `work/` without folding — rejected for `coverage`: the achieved coverage
+is a result of the evaluation, so it belongs in a deliverable, not in scratch.
+
+**Consequence.** `path_for` raises for derived kinds, so a stage cannot write a copy by
+accident. Folded kinds stay in the registry, so pre-fold directories and single-file
+uploads still resolve, and `fold_from` lets the UI's `Bundle` and `PipelineContext`
+present the same kind whichever way they got it — no page or stage knows about the fold.
+`dataset.mocks` is the single home of both mock layers from the dataset stage on, while
+the dataset stage itself reads the `work/` handoff so a stale `dataset.json` cannot
+shadow the rules the current run just authored. `evalbuilder pipeline compact <dir>`
+migrates an older output directory in place, idempotently.

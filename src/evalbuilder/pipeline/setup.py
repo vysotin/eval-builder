@@ -12,7 +12,7 @@ from typing import Any
 
 from evalbuilder import artifacts, discover as discovery, tool_schemas
 from evalbuilder.pipeline.config import DEFAULT_EVALUATORS, DEFAULT_MODEL, PipelineConfig, load_config
-from evalbuilder.pipeline.layout import artifact_index, path_for
+from evalbuilder.pipeline.layout import artifact_index, existing_path, path_for
 from evalbuilder.schemas import Target
 
 EVALUATOR_CHOICES = ("expected_tools", "contains", "contract", "correctness", "trajectory_llm", "json_valid", "trajectory_match")
@@ -202,8 +202,8 @@ def project_config(out_dir: Path) -> tuple[PipelineConfig | None, str | None]:
     then by the report (falling back to the config embedded in it), then a sibling
     `<dir>.yaml`. `config_path` is None when the config only exists inside report.json."""
     out_dir = Path(out_dir)
-    job_path = path_for(out_dir, "pipeline_job")
-    if job_path.exists():
+    job_path = existing_path(out_dir, "pipeline_job")
+    if job_path is not None:
         try:
             recorded = (json.loads(job_path.read_text()) or {}).get("config_path")
         except ValueError:
@@ -211,8 +211,8 @@ def project_config(out_dir: Path) -> tuple[PipelineConfig | None, str | None]:
         cfg = _try_load(recorded)
         if cfg is not None:
             return cfg, str(recorded)
-    report_path = path_for(out_dir, "pipeline_report")
-    if report_path.exists():
+    report_path = existing_path(out_dir, "pipeline_report")
+    if report_path is not None:
         try:
             report = json.loads(report_path.read_text()) or {}
         except ValueError:
@@ -245,7 +245,7 @@ def discover_projects(roots: tuple[str, ...] | list[str] = DEFAULT_PROJECT_ROOTS
         if not root_path.is_dir():
             continue
         for child in sorted(root_path.iterdir()):
-            if child.is_dir() and (artifact_index(child) or path_for(child, "pipeline_job").exists()):
+            if child.is_dir() and (artifact_index(child) or existing_path(child, "pipeline_job")):
                 key = str(child if cwd else child.relative_to(base))
                 cfg, cfg_path = project_config(child)
                 found[key] = {"name": cfg.name if cfg else child.name, "dir": key, "config_path": cfg_path, "has_artifacts": True}

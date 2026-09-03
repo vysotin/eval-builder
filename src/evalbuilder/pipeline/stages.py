@@ -25,7 +25,7 @@ from evalbuilder.pipeline import generator as gen_mod
 from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
 from evalbuilder.pipeline.config import PipelineConfig
 from evalbuilder.pipeline.engine import Stage, StageStop
-from evalbuilder.pipeline.layout import artifact_index, path_for, stamp, unwrap
+from evalbuilder.pipeline.layout import ARTIFACTS, existing_path, path_for, stamp, unwrap
 from evalbuilder.pipeline.planning import Cell, achieved, plan_cells, summarize_plan
 from evalbuilder.pipeline.taxonomy import applicable_failure_types
 from evalbuilder.runner import build_engine, run_dataset, tool_specs_of
@@ -72,7 +72,11 @@ class PipelineContext:
         return path_for(self.out_dir, kind, run_id)
 
     def save_artifact(self, kind: str, payload, run_id: str | None = None) -> Path:
-        """Write a JSON artifact with its schema id embedded; returns the path."""
+        """Write a JSON artifact with its schema id embedded; returns the path.
+
+        Derived kinds (`tier="derived"`) have no file — `path_for` refuses them, so a
+        stage that folds its output into a parent cannot accidentally write a copy.
+        """
         path = self.artifact(kind, run_id)
         artifacts.save_json(path, stamp(kind, payload))
         return path
@@ -142,11 +146,7 @@ class PipelineContext:
 
     def _artifact_json(self, key: str, kind: str):
         """Load a root artifact by kind, falling back to its legacy file name."""
-        path = self.artifact(kind)
-        if not path.exists():
-            legacy = artifact_index(self.out_dir).get(kind)
-            if isinstance(legacy, str):
-                path = Path(legacy)
+        path = existing_path(self.out_dir, kind) or Path(self.out_dir) / ARTIFACTS[kind].file
         return self._json(key, path, lambda data: unwrap(kind, data))
 
     def set(self, key: str, value: Any) -> None:
@@ -174,21 +174,43 @@ class PipelineContext:
         artifacts.save_json(self.dataset_path, ds)
         self._cache["dataset"] = ds
 
-    def mock_rules(self) -> dict[str, list[dict]]:
+    # The mocks stage runs before the dataset exists, so it hands its output to the
+    # dataset stage through `work/`. From the dataset stage on, `dataset.mocks` is the
+    # single home of both layers — that is what every later stage reads.
+    def staged_mock_rules(self) -> dict[str, list[dict]]:
+        """Layer-1 rules straight from the mocks stage's handoff file."""
         return self._artifact_json("mock_rules", "mock_rules")
 
-    def mock_strategies(self) -> dict | None:
-        """`mock-strategies.json` without its schema stamp, or None when the stage did not write it."""
+    def staged_mock_strategies(self) -> dict | None:
+        """Layer-2 strategies straight from the handoff file, or None when there are none."""
         data = self.optional_json("mock_strategies")
         if not isinstance(data, dict):
             return None
         return {k: v for k, v in data.items() if k != "schema"}
 
+    def mock_rules(self) -> dict[str, list[dict]]:
+        """Layer-1 rules: `dataset.mocks.tools` once the dataset exists, else the handoff."""
+        ds = self.optional_dataset()
+        if ds is not None and isinstance(ds.mocks.get("tools"), dict):
+            return ds.mocks["tools"]
+        return self.staged_mock_rules()
+
+    def mock_strategies(self) -> dict | None:
+        """Layer-2 strategies (`{world, strategies}`): `dataset.mocks.strategies`, else the handoff."""
+        ds = self.optional_dataset()
+        if ds is not None and isinstance(ds.mocks.get("strategies"), dict):
+            return ds.mocks["strategies"]
+        return self.staged_mock_strategies()
+
     def mock_block(self) -> dict:
-        """The dataset's `mocks` block: rules, policy, the LLM engine settings and strategies."""
+        """The dataset's `mocks` block: rules, policy, the LLM engine settings and strategies.
+
+        Built from the handoff files, so a stale `dataset.json` from an earlier run can
+        never shadow the rules this run's mocks stage just authored.
+        """
         cfg = self.config.mocking
-        block: dict[str, Any] = {"tools": self.mock_rules(), "on_miss": cfg.on_miss, "strategy": cfg.strategy}
-        strategies = self.mock_strategies()
+        block: dict[str, Any] = {"tools": self.staged_mock_rules(), "on_miss": cfg.on_miss, "strategy": cfg.strategy}
+        strategies = self.staged_mock_strategies()
         if strategies:
             block["strategies"] = strategies
         if self.config.llm_mocking:
@@ -196,11 +218,27 @@ class PipelineContext:
         return block
 
     def applicable(self) -> dict[str, list[str]]:
-        return self._artifact_json("applicable", "applicable_failures")
+        """Structurally applicable failure types — part of the agent map since the fold."""
+        folded = self.agent_map().applicable_failures
+        if folded:
+            return folded
+        return self._artifact_json("applicable", "applicable_failures")  # pre-fold output dir
+
+    def coverage(self) -> dict:
+        """Achieved coverage — part of the dataset since the fold ({} when not computed)."""
+        ds = self.optional_dataset()
+        achieved = (ds.coverage.get("achieved") if ds is not None else None) or {}
+        if achieved:
+            return achieved
+        return self.optional_json("coverage") or {}  # pre-fold output dir
 
     def cells(self) -> list[Cell]:
+        """The planned coverage cells — part of the dataset since the fold."""
         if "cells" not in self._cache:
-            data = self._artifact_json("plan", "coverage_plan")
+            ds = self.optional_dataset()
+            data = (ds.coverage.get("plan") if ds is not None else None) or None
+            if not data:
+                data = self._artifact_json("plan", "coverage_plan")  # pre-fold output dir
             self._cache["cells"] = [
                 Cell(**{k: v for k, v in row.items() if k in Cell.__dataclass_fields__})
                 for row in data["cells"]
@@ -228,6 +266,14 @@ class PipelineContext:
             return self._artifact_json(f"optional:{kind}", kind)
         except FileNotFoundError:
             return None
+
+    def optional_dataset(self) -> Dataset | None:
+        """The dataset when the dataset stage has written it, else None."""
+        if "dataset" in self._cache:
+            return self._cache["dataset"]
+        if not self.dataset_path.exists():
+            return None
+        return self.dataset()
 
 
 # ── stage functions ────────────────────────────────────────────
@@ -364,8 +410,8 @@ def author_map(ctx: PipelineContext) -> dict:
     applicable = applicable_failure_types(
         amap, ctx.source_text(), cfg.constraints, multi_turn=cfg.coverage.multi_turn_share > 0
     )
-    ctx.save_artifact("applicable_failures", applicable)
-    ctx.set("applicable", applicable)
+    amap.applicable_failures = applicable
+    ctx.save_agent_map(amap)  # persist the gating before the generator runs, so a failure keeps it
     cleaned, errors = gen_mod.author_map(ctx.generator(), amap, ctx.source_text(), cfg.constraints, applicable, guidance=cfg.guidance())
     if not cleaned["intents"] or not cleaned["scenarios"]:
         raise ValueError("generator produced no valid intents/scenarios: " + "; ".join(errors[:5]))
@@ -392,6 +438,7 @@ def author_map(ctx: PipelineContext) -> dict:
     ctx.save_agent_map(amap)
     return {
         "artifacts": {"agent_map": str(ctx.map_path)},
+        "applicable_failures": sorted(applicable),
         "intents": [i["id"] for i in amap.intents],
         "scenarios": len(amap.scenarios),
         "failure_types": [f["failure_type"] for f in amap.failure_scenarios],
@@ -413,7 +460,7 @@ def author_mocks(ctx: PipelineContext) -> dict:
     rules, problems = gen_mod.author_mocks(ctx.generator(), tools, guidance=ctx.config.guidance(), wildcard=not llm)
     for p in problems:
         ctx.problem("mocks", p)
-    path = ctx.save_artifact("mock_rules", rules)
+    path = ctx.save_artifact("mock_rules", rules)  # work/: handed to the dataset stage
     ctx.set("mock_rules", rules)
     details: dict[str, Any] = {
         "artifacts": {"mock_rules": str(path)},
@@ -441,10 +488,9 @@ def author_mocks(ctx: PipelineContext) -> dict:
 def build_dataset(ctx: PipelineContext) -> dict:
     cfg = ctx.config
     amap = ctx.agent_map()
-    rules = ctx.mock_rules()
+    rules = ctx.staged_mock_rules()
     failure_types = [f["failure_type"] for f in amap.failure_scenarios]
     cells = plan_cells(cfg.coverage, amap, failure_types)
-    plan_path = ctx.save_artifact("coverage_plan", {"cells": [c.to_dict() for c in cells], "summary": summarize_plan(cells)})
     ctx.set("cells", cells)
 
     ds = Dataset(
@@ -452,11 +498,12 @@ def build_dataset(ctx: PipelineContext) -> dict:
         dataset_type="final_response",
         target=Target(module=cfg.target.module, factory=cfg.target.factory),
         mocks=ctx.mock_block(),
+        coverage={"plan": {"cells": [c.to_dict() for c in cells], "summary": summarize_plan(cells)}},
     )
     scenario_index = {s["id"]: s for s in amap.scenarios}
     cases, problems = gen_mod.author_cases(
         ctx.generator(), cells, amap, amap.constraints, rules, scenario_index, guidance=cfg.guidance(),
-        strategies=ctx.mock_strategies(),
+        strategies=ctx.staged_mock_strategies(),
     )
     for p in problems:
         ctx.problem("dataset", p)
@@ -473,16 +520,25 @@ def build_dataset(ctx: PipelineContext) -> dict:
         ctx.problem("dataset", f"{duplicates} duplicate case(s) dropped")
     if not ds.cases:
         raise ValueError("generator produced no usable cases")
-    ctx.save_dataset(ds)
     coverage = achieved(cells, [c.model_dump() for c in ds.cases], skills=amap.skills, scenarios=amap.scenarios)
-    coverage_path = ctx.save_artifact("coverage", coverage)
+    ds.coverage["achieved"] = coverage
+    ctx.save_dataset(ds)
     return {
-        "artifacts": {"dataset": str(ctx.dataset_path), "coverage_plan": str(plan_path), "coverage": str(coverage_path)},
+        "artifacts": {"dataset": str(ctx.dataset_path)},
         "cases": len(ds.cases),
         "planned": coverage["planned"],
         "coverage_pct": coverage["coverage_pct"],
         "by_kind": coverage["by_kind"],
     }
+
+
+def _record_coverage(ctx: PipelineContext, ds: Dataset, cases: list) -> dict:
+    """Recompute achieved coverage over `cases` into `dataset.coverage.achieved` and save."""
+    amap = ctx.agent_map()
+    coverage = achieved(ctx.cells(), [c.model_dump() for c in cases], skills=amap.skills, scenarios=amap.scenarios)
+    ds.coverage["achieved"] = coverage
+    ctx.save_dataset(ds)
+    return coverage
 
 
 def review(ctx: PipelineContext) -> dict:
@@ -493,11 +549,9 @@ def review(ctx: PipelineContext) -> dict:
         approved = [c for c in ds.cases if c.review.status == "approved"]
         if not approved:
             raise ValueError("dataset has no pending or approved cases")
-        amap = ctx.agent_map()
-        coverage = achieved(ctx.cells(), [c.model_dump() for c in approved], skills=amap.skills, scenarios=amap.scenarios)
-        coverage_path = ctx.save_artifact("coverage", coverage)
+        coverage = _record_coverage(ctx, ds, approved)
         return {
-            "artifacts": {"dataset": str(ctx.dataset_path), "coverage": str(coverage_path)},
+            "artifacts": {"dataset": str(ctx.dataset_path)},
             "already_reviewed": True, "approved": len(approved), "rejected": {},
             "approved_by": "reviewed before this run", "coverage_pct": coverage["coverage_pct"],
         }
@@ -535,12 +589,9 @@ def review(ctx: PipelineContext) -> dict:
     if cfg.review.note:
         note += f": {cfg.review.note}"
     artifacts.set_review(ds, remaining, "approved", note)
-    ctx.save_dataset(ds)
-    amap = ctx.agent_map()
-    coverage = achieved(ctx.cells(), [c.model_dump() for c in ds.cases if c.review.status == "approved"], skills=amap.skills, scenarios=amap.scenarios)
-    coverage_path = ctx.save_artifact("coverage", coverage)
+    coverage = _record_coverage(ctx, ds, [c for c in ds.cases if c.review.status == "approved"])
     return {
-        "artifacts": {"dataset": str(ctx.dataset_path), "coverage": str(coverage_path)},
+        "artifacts": {"dataset": str(ctx.dataset_path)},
         "approved": len(remaining),
         "rejected": rejected,
         "approved_by": cfg.review.approved_by,

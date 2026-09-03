@@ -24,7 +24,7 @@ review:
 | `evaluators` | `expected_tools, contains, contract, correctness` | Same specs as `evaluators.yaml`: deterministic (`expected_tools`, `contains`, `json_valid`, `trajectory_match`), OpenEvals (`correctness`, `contract`, `openevals` + `prompt: NAME_PROMPT`, or any rubric name like `hallucination`), AgentEvals (`trajectory_llm`), `custom` |
 | `thresholds` | `default: 0.8`, `metrics: {}`, `slice_min: 0.5`, `overall_pass: 0.8` | Pass rate per metric, per slice (intent / failure_mode / variant), and overall (mean of metric pass rates) |
 | `runs` | `repeats: 3` | Repeats feed stability detection |
-| `mocking` | `required: true`, `on_miss: strict`, `strategies: true`, `strategy: default`, `on_invalid: fallback`, `max_repairs: 1` | Layer 1: every mockable tool from `TOOLS` gets a fixture (wildcard default unless `on_miss: llm`); per-case rules inject errors. `on_miss`: `strict` (unmatched call = error), `llm` (layer 2: the LLM mock engine answers from `mock-strategies.json` under `models.mock`), `fallback`, `real`. `strategies` writes the strategies artifact; `strategy` is the dataset default (cases / scenarios may select another); `on_invalid` decides what a still-invalid engine answer becomes after `max_repairs` repair rounds (`fallback` = the strategy's `fallback_response`, `strict` = an infrastructure error). Skill loaders are never mocked |
+| `mocking` | `required: true`, `on_miss: strict`, `strategies: true`, `strategy: default`, `on_invalid: fallback`, `max_repairs: 1` | Layer 1: every mockable tool from `TOOLS` gets a fixture (wildcard default unless `on_miss: llm`); per-case rules inject errors. `on_miss`: `strict` (unmatched call = error), `llm` (layer 2: the LLM mock engine answers from the strategies in `dataset.mocks.strategies` under `models.mock`), `fallback`, `real`. `strategies` pre-generates the strategies; `strategy` is the dataset default (cases / scenarios may select another); `on_invalid` decides what a still-invalid engine answer becomes after `max_repairs` repair rounds (`fallback` = the strategy's `fallback_response`, `strict` = an infrastructure error). Skill loaders are never mocked |
 | `stages` | `skip: []`, `max_retries: 1`, `simulate: true`, `publish: auto` | `publish: auto` runs only when `LANGSMITH_API_KEY` is set |
 | `review` | `auto_approve: false`, `approved_by: ""`, `note: ""` | Without `auto_approve` the pipeline stops at `awaiting_review`; cases already approved/rejected by hand or in the UI are kept (`already_reviewed`) |
 | `output` | `dir: eval/pipeline/<name>` | See "Artifacts" below |
@@ -47,18 +47,16 @@ review:
 
 One naming convention (`src/evalbuilder/pipeline/layout.py`): root artifacts are
 `<kind>.json`/`.yaml`, per-run artifacts are `results/<kind>-<run_id>.json`, every JSON
-artifact embeds `"schema": "evalbuilder/<kind>/v1"`. Older directories (`mocks.json`,
-`plan.json`, `results/report-*.json`) still load.
+artifact embeds `"schema": "evalbuilder/<kind>/v1"`. **No artifact duplicates part of
+another one** — each kind is `final` (a deliverable), `work` (scratch under
+`<out_dir>/work/`, deletable), or `derived` (no file: it lives inside a deliverable).
+
+### Deliverables
 
 | file | schema | written by | holds |
 |---|---|---|---|
-| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph, tools (`kind`, `mockable`), prompts, skills, intents, scenarios (`skills`), failure modes, constraints |
-| `applicable-failures.json` | `evalbuilder/applicable-failures/v1` | map | `failure_types`: type → gating evidence |
-| `mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules (layer 1) |
-| `mock-strategies.json` | `evalbuilder/mock-strategies/v1` | mocks | `world` + `strategies`: id → description, per-tool `behavior`, `examples`, `fallback_response` (layer 2) |
-| `coverage-plan.json` | `evalbuilder/coverage-plan/v1` | dataset | planned cells + summary |
-| `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases with review/publication state |
-| `coverage.json` | `evalbuilder/coverage/v1` | dataset, review | planned vs covered, by kind, gaps, `skills` / `uncovered_skills` |
+| `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph, tools (`kind`, `mockable`), prompts, skills, intents, scenarios (`skills`), failure modes, constraints, `applicable_failures` |
+| `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases with review/publication state, `mocks` (both layers), `coverage` (`plan` + `achieved`) |
 | `evaluators.yaml` | – | score | evaluator specs |
 | `results/run-<id>.json` | `evalbuilder/run/v1` | run | outputs, trajectories, tool calls, `mock_calls` ledger per case; `mocking` totals |
 | `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores |
@@ -66,12 +64,32 @@ artifact embeds `"schema": "evalbuilder/<kind>/v1"`. Older directories (`mocks.j
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |
 | `simulation.json` | `evalbuilder/simulation/v1` | simulate | transcripts, violations |
 | `analysis.json` | `evalbuilder/analysis/v1` | analyze | patterns, recommendations |
-| `state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status, problems, `data.stopped_after` (drives `--resume`) |
 | `report.json` | `evalbuilder/pipeline-report/v1` | report | the final report (also lists `artifacts`) |
-| `job.json` (+ `pipeline.log`) | `evalbuilder/pipeline-job/v1` | UI | background run launched from the UI: mode, argv, pid, timing, exit code |
 
-`evalbuilder ui <dir>` renders all of them; `evalbuilder ui` alone lets you pick a
-directory or upload files.
+### Scratch — `work/`, safe to delete
+
+| file | schema | written by | holds |
+|---|---|---|---|
+| `work/mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules (layer 1); handed to the dataset stage, kept for good in `dataset.mocks.tools` |
+| `work/mock-strategies.json` | `evalbuilder/mock-strategies/v1` | mocks | `world` + `strategies`: id → description, per-tool `behavior`, `examples`, `fallback_response` (layer 2); kept in `dataset.mocks.strategies` |
+| `work/state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status, problems, `data.stopped_after` (drives `--resume`) |
+| `work/run-progress.json` | `evalbuilder/run-progress/v1` | run | live per-case / per-intent progress of the run stage |
+| `work/job.json` (+ `pipeline.log`) | `evalbuilder/pipeline-job/v1` | UI | background run launched from the UI: mode, argv, pid, timing, exit code |
+
+### Derived — no file; read them out of their parent
+
+| kind | lives in |
+|---|---|
+| `applicable_failures` (type → gating evidence) | `agent-map.json` → `applicable_failures` |
+| `coverage_plan` (planned cells + summary) | `dataset.json` → `coverage.plan` |
+| `coverage` (planned vs covered, by kind, gaps, `skills` / `uncovered_skills`) | `dataset.json` → `coverage.achieved` |
+
+`evalbuilder ui <dir>` renders all of them — including the derived kinds, read out of
+their parent — and `evalbuilder ui` alone lets you pick a directory or upload files.
+Directories written before this layout still load (stand-alone `coverage.json`,
+`applicable-failures.json`, root `state.json`, and the pre-convention `mocks.json`,
+`plan.json`, `results/report-*.json`); `evalbuilder pipeline compact <dir>` folds and
+moves them onto the current one.
 
 ## Stage semantics
 
@@ -100,7 +118,7 @@ otherwise `pass`/`fail` from thresholds.
 | flag | effect |
 |---|---|
 | `--until STAGE` | stop deliberately after `STAGE`; later stages are `skipped` (`stopped after <stage> (--until)`), the report lands, exit code 0. `--until dataset` = intents + mocks + cases only |
-| `--resume` | reuse completed stages from `state.json` (the report is always rebuilt) |
+| `--resume` | reuse completed stages from `work/state.json` (the report is always rebuilt) |
 | `--resume --from STAGE` | invalidate `STAGE` and everything after it, then rerun |
 
 Feedback loop: `--until dataset` → append a `feedback` entry (or `instructions`) to the

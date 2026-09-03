@@ -15,7 +15,7 @@ taxonomy.py    failure types gated by agent structure
 aggregate.py   repeat-aware aggregation: pass rates, thresholds, slices, stability, verdict
 report.py      report assembly + run_pipeline entry point
 layout.py      THE artifact naming convention (kinds, files, schema ids, legacy names)
-jobs.py        background runs for the UI (job.json + pipeline.log, wrapper entry point)
+jobs.py        background runs for the UI (work/job.json + pipeline.log, wrapper entry point)
 setup.py       interactive setup helpers (target discovery/preview, config from form, review loop)
 ```
 
@@ -55,7 +55,7 @@ skip set, when the pipeline stopped earlier (`awaiting_review` or `stop_after`),
 when a dependency did not succeed (reason recorded); otherwise executed with retries
 and an optional recovery hook whose note is stored. Statuses: `ok`, `recovered`
 (succeeded on a retry), `failed`, `skipped`, `awaiting_review` (a deliberate
-`StageStop`). `PipelineState` (`state.json`, `evalbuilder/pipeline-state/v1`) is saved
+`StageStop`). `PipelineState` (`work/state.json`, `evalbuilder/pipeline-state/v1`) is saved
 after every stage and carries `data.problems` and `data.stopped_after`.
 
 **Reasoning.** Failures never raise out of the engine: the report must always land,
@@ -71,12 +71,12 @@ reported as a failure.
 |---|---|---|---|
 | preflight | – | `config.problems()`, `capability_check` (target importable), `provider_ready` for agent/generator/mock (blocking; mock only under `on_miss: llm`) and judge (degraded → problem) | none |
 | discover | preflight | AST discovery (tools, prompts, skills) + live graph + `tool_schemas.describe_tool` for every live tool (schemas, models, side effects, kind/mockable, edge cases; cleared when `per_tool_edge_cases: 0`) + live `SKILLS` merged by name → `agent-map.json` | none |
-| map | discover | `taxonomy.applicable_failure_types` (incl. `skill_misuse` when the map has skills) → `applicable-failures.json`; generator authors intents, scenarios (with the `skills` they exercise), failure scenarios, per-skill `skill_failures` (failure cases beyond tool failure, merged into `skills[].failure_cases`), per-tool `tool_failures` (merged into `tools[].failure_scenarios`), topics, derived constraints; `_validate_map` drops invalid entries (bad slugs, unknown intents, non-applicable failure types, missing evidence, unknown skill names) → problems; a skill no scenario exercises is reported; constraints merged with the config's | one repair prompt; retry once |
-| mocks | discover | generator writes a default fixture + variants per **mockable** tool; responses validated against `output_schema` (bad defaults replaced by a schema-conformant sample, bad variants dropped, all reported); every tool ends with a wildcard rule — except under `on_miss: llm` → `mock-rules.json`; then (`mocking.strategies`, always under `llm`) the strategies document → `mock-strategies.json` (validated: unknown tools dropped, invalid fallbacks replaced, invalid examples dropped, a `default` entry synthesised for every tool); fails when `mocking.required` and a tool has neither rules nor (under `llm`) a default-strategy behaviour | generic/schema fixtures, generic default strategy |
-| dataset | map, mocks | `planning.plan_cells` → `coverage-plan.json`; the dataset's `mocks` block embeds rules, policy, `llm` settings and strategies; generator fills cells in batches of 6 with one re-request for missing cells (it sees the strategies and may put a case under one — `mock_strategy`, validated); each case normalised via `artifacts.add_case` (duplicates dropped, reported); per-case mock overrides get dataset fallbacks; `malformed_output` cases get a corrupted fixture injected by code → `dataset.json`, `coverage.json` (with per-skill counts) | retry once |
+| map | discover | `taxonomy.applicable_failure_types` (incl. `skill_misuse` when the map has skills) → `agent-map.json` `applicable_failures` (saved before the generator runs, so a generator failure keeps it); generator authors intents, scenarios (with the `skills` they exercise), failure scenarios, per-skill `skill_failures` (failure cases beyond tool failure, merged into `skills[].failure_cases`), per-tool `tool_failures` (merged into `tools[].failure_scenarios`), topics, derived constraints; `_validate_map` drops invalid entries (bad slugs, unknown intents, non-applicable failure types, missing evidence, unknown skill names) → problems; a skill no scenario exercises is reported; constraints merged with the config's | one repair prompt; retry once |
+| mocks | discover | generator writes a default fixture + variants per **mockable** tool; responses validated against `output_schema` (bad defaults replaced by a schema-conformant sample, bad variants dropped, all reported); every tool ends with a wildcard rule — except under `on_miss: llm` → `work/mock-rules.json`; then (`mocking.strategies`, always under `llm`) the strategies document → `work/mock-strategies.json` (validated: unknown tools dropped, invalid fallbacks replaced, invalid examples dropped, a `default` entry synthesised for every tool); fails when `mocking.required` and a tool has neither rules nor (under `llm`) a default-strategy behaviour | generic/schema fixtures, generic default strategy |
+| dataset | map, mocks | `planning.plan_cells` → `dataset.coverage.plan`; the dataset's `mocks` block takes the `work/` handoff — rules, policy, `llm` settings and strategies — so a stale dataset can never shadow this run's rules; generator fills cells in batches of 6 with one re-request for missing cells (it sees the strategies and may put a case under one — `mock_strategy`, validated); each case normalised via `artifacts.add_case` (duplicates dropped, reported); per-case mock overrides get dataset fallbacks; `malformed_output` cases get a corrupted fixture injected by code → `dataset.json`, whose `coverage.achieved` (with per-skill counts) the review stage recomputes over the approved cases | retry once |
 | review | dataset | generator self-review rejects unanswerable / mismatched cases; `verify_summary` rejects cases whose expected calls no rule answers (not under `llm`); approves the rest **only with** `review.auto_approve` (note records `approved_by`); no pending cases + approved cases present → `already_reviewed` | without auto_approve → `awaiting_review` (pipeline stops, report still written) |
 | verify | review | approved cases' expected calls all mocked (under `llm`: counted as `llm_answered_calls`); every mockable `TOOLS` entry covered by a rule or, under `llm`, the default strategy; an `llm` dataset names a mock model; at least one approved case | none (blocking) |
-| run | verify | `runs.repeats` × `run_dataset(mocked=True, on_miss, model=agent, mock_model, strategy, max_workers=runs.parallel_intents)` — intent groups run concurrently within each repeat (cases inside one intent stay sequential, results keep dataset order); under `llm` one `LLMMockEngine` per case (the case's strategy, else the config's); live progress (current repeat, per-case completions, per-intent tallies, mock-call totals) is written to `run-progress.json` after every case; per-layer totals land in the stage details (`mocking.calls`) and invalid engine answers become a problem; a run where every case is an infrastructure error fails the stage | retry once |
+| run | verify | `runs.repeats` × `run_dataset(mocked=True, on_miss, model=agent, mock_model, strategy, max_workers=runs.parallel_intents)` — intent groups run concurrently within each repeat (cases inside one intent stay sequential, results keep dataset order); under `llm` one `LLMMockEngine` per case (the case's strategy, else the config's); live progress (current repeat, per-case completions, per-intent tallies, mock-call totals) is written to `work/run-progress.json` after every case; per-layer totals land in the stage details (`mocking.calls`) and invalid engine answers become a problem; a run where every case is an infrastructure error fails the stage | retry once |
 | score | run | `evaluators.yaml` written; `score_run(max_workers=runs.parallel_scoring)` per run — case runs scored concurrently in a thread pool, rows/metrics/slices aggregated in run order so the report is identical to a sequential pass → `results/score-report-<id>.json`; dead evaluators (all errors) reported; no scores at all → failure | retry once |
 | aggregate | score | `aggregate.aggregate` → `aggregate.json` | none |
 | simulate | review (optional) | generator writes scenarios (optionally `mock_strategy`) → `scenarios.yaml`; runs them with mocked tools (under `llm` an engine per scenario honouring its strategy; results carry `mock_calls`) and the generator model as the simulated user — scenarios run concurrently (`runs.parallel_simulations`, a fresh graph per scenario, results keep scenario order) → `simulation.json`; violations mined into pending cases | never blocks the verdict |
@@ -190,7 +190,7 @@ even if the report stage itself failed. `summary_text` is the terminal rendering
 
 ## Artifact naming convention (`layout.py`)
 
-One registry (`ARTIFACTS`) is the source of truth for kind → file → schema id →
+One registry (`ARTIFACTS`) is the source of truth for kind → tier → file → schema id →
 writing stage → description, with legacy names/ids kept readable: root artifacts are
 `<kind>.json`/`.yaml`, per-run artifacts `results/<kind>-<run_id>.json`, every JSON
 artifact embeds `"schema": "evalbuilder/<kind>/v1"`. Dict-shaped payloads are wrapped
@@ -201,16 +201,38 @@ files. Kinds: agent_map, applicable_failures, mock_rules, coverage_plan, dataset
 coverage, evaluators, run, score_report, aggregate, scenarios, simulation, analysis,
 pipeline_state, pipeline_report, pipeline_job.
 
+Two orthogonal fields keep the output directory free of duplicated JSON:
+
+- **`tier`** says where the file goes. `final` — a deliverable at the root (or under
+  `results/`). `work` — scratch in `<out_dir>/work/`: `state.json`, `run-progress.json`,
+  `job.json`, and the `mock-rules.json` / `mock-strategies.json` handoff the mocks stage
+  leaves for the dataset stage. Nothing downstream of the pipeline reads `work/`, so the
+  whole directory is deletable. `derived` — no file at all; `path_for` raises for these,
+  which is what stops a stage from writing a copy by accident.
+- **`folded_into`** is the dotted path inside another artifact that durably holds this
+  kind's data: `applicable_failures` → `agent_map.applicable_failures`, `coverage_plan` /
+  `coverage` → `dataset.coverage.plan` / `.achieved`, `mock_rules` / `mock_strategies` →
+  `dataset.mocks.tools` / `.strategies`. Every derived kind has one; a work kind may
+  too, and that is exactly why deleting `work/` loses nothing.
+
+Folded kinds stay in the registry so pre-fold directories and single-file uploads keep
+resolving. `fold_from(kind, parents)` reads one out of its parent — the UI's `Bundle`
+uses it so pages never learn about the fold, and `PipelineContext` uses the same idea
+for `applicable()`, `cells()`, `coverage()`, `mock_rules()` and `mock_strategies()`.
+`compact_dir(out_dir)` (CLI: `evalbuilder pipeline compact`) migrates an older directory:
+fold the copies in, move the scratch, re-index the report, keeping the recorded
+`output_dir` prefix because those paths are provenance. It is idempotent.
+
 ## Background jobs (`jobs.py`)
 
 The UI never runs the pipeline in the Streamlit process. `start_job(config, out_dir,
-mode, from_stage)` writes `job.json` (`evalbuilder/pipeline-job/v1`: mode, argv, pid,
+mode, from_stage)` writes `work/job.json` (`evalbuilder/pipeline-job/v1`: mode, argv, pid,
 timing, exit code, log path) and spawns a detached wrapper (`python -m
 evalbuilder.pipeline.jobs run job.json`, `start_new_session=True`) which runs
 `python -m evalbuilder.cli pipeline run …` with stdout/stderr appended to
 `pipeline.log` and then finalises `job.json` with the exit code. Modes: `full`,
 `dataset` (`--until dataset`), `resume`, `regenerate` (`--resume --from STAGE --until
-dataset`). `job_status` merges `job.json`, process liveness and `state.json` into
+dataset`). `job_status` merges `work/job.json`, process liveness and `work/state.json` into
 `running | finished | lost | none`, plus the stage table and `stopped_after`. A second
 start on a running job is refused.
 

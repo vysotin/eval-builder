@@ -137,7 +137,8 @@ named for a failure mode (`degraded`, `empty`). Validation mirrors the fixtures'
 unknown tools and id-less strategies are dropped, invalid fallbacks are replaced by a
 schema sample, invalid examples dropped, and a missing default behaviour is
 synthesised from the tool's description — all reported as problems. The result is
-`mock-strategies.json` (`evalbuilder/mock-strategies/v1`).
+`dataset.mocks.strategies` (`evalbuilder/mock-strategies/v1`; the mocks stage also leaves a
+copy in `work/mock-strategies.json` on its way to the dataset stage).
 
 The **dataset stage** embeds everything into `dataset.json → mocks: {tools, on_miss,
 strategy, llm: {model, on_invalid, max_repairs}, strategies}` — the dataset is

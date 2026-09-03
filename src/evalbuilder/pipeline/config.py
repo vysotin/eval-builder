@@ -74,7 +74,7 @@ class RunsConfig(BaseModel):
 class MockingConfig(BaseModel):
     required: bool = True
     on_miss: Literal["real", "fallback", "strict", "llm"] = "strict"
-    strategies: bool = True  # generate mock-strategies.json (the LLM mock engine's backend behaviours) in the mocks stage
+    strategies: bool = True  # pre-generate the LLM mock engine's backend behaviours (dataset.mocks.strategies) in the mocks stage
     strategy: str = "default"  # dataset-level strategy id; cases / scenarios may select another
     on_invalid: Literal["fallback", "strict"] = "fallback"  # after the repair round: schema-conformant fallback, or an error
     max_repairs: int = 1
@@ -315,7 +315,7 @@ runs:
 mocking:
   required: true              # every mockable tool gets a fixture (skill loaders are never mocked)
   on_miss: strict             # layer 1 rules miss -> strict: error | llm: the LLM mock engine answers | fallback | real
-  strategies: true            # pre-generate mock-strategies.json (backend world + per-tool behaviours for the engine)
+  strategies: true            # pre-generate the engine's strategies (backend world + per-tool behaviours) into dataset.mocks
   strategy: default           # dataset-level strategy; cases and simulation scenarios may pick another id
   on_invalid: fallback        # engine answer still invalid after the repair round -> fallback (schema sample) | strict (error)
   max_repairs: 1              # repair rounds against the tool's output schema

@@ -2173,11 +2173,8 @@
   "output_dir": "docs/examples/support-bot",
   "artifacts": {
     "agent_map": "docs/examples/support-bot/agent-map.json",
-    "applicable_failures": "docs/examples/support-bot/applicable-failures.json",
-    "mock_rules": "docs/examples/support-bot/mock-rules.json",
-    "coverage_plan": "docs/examples/support-bot/coverage-plan.json",
+    "mock_rules": "docs/examples/support-bot/work/mock-rules.json",
     "dataset": "docs/examples/support-bot/dataset.json",
-    "coverage": "docs/examples/support-bot/coverage.json",
     "evaluators": "docs/examples/support-bot/evaluators.yaml",
     "run": {
       "093d879e": "docs/examples/support-bot/results/run-093d879e.json",
@@ -2191,7 +2188,14 @@
     "scenarios": "docs/examples/support-bot/scenarios.yaml",
     "simulation": "docs/examples/support-bot/simulation.json",
     "analysis": "docs/examples/support-bot/analysis.json",
-    "pipeline_state": "docs/examples/support-bot/state.json",
+    "pipeline_state": "docs/examples/support-bot/work/state.json",
     "pipeline_report": "docs/examples/support-bot/report.json"
+  },
+  "folded_artifacts": {
+    "applicable_failures": "agent_map.applicable_failures",
+    "mock_rules": "dataset.mocks.tools",
+    "mock_strategies": "dataset.mocks.strategies",
+    "coverage_plan": "dataset.coverage.plan",
+    "coverage": "dataset.coverage.achieved"
   }
 }

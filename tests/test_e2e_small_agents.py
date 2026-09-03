@@ -71,7 +71,7 @@ def test_weather_bot_review_loop_until_dataset_feedback_regenerate_approve(tmp_p
     _, report = run_pipeline(cfg_path, until="dataset", settings=Settings())
     stages = report["stages"]
     assert stages["dataset"]["status"] == "ok" and stages["review"]["status"] == "skipped" and stages["run"]["status"] == "skipped"
-    assert json.loads((out / "state.json").read_text())["data"]["stopped_after"] == "dataset"
+    assert json.loads((out / "work" / "state.json").read_text())["data"]["stopped_after"] == "dataset"
     ds = json.loads((out / "dataset.json").read_text())
     assert ds["cases"] and all(c["review"]["status"] == "pending" for c in ds["cases"])
     summary = setup_mod.dataset_summary(out)
@@ -150,7 +150,7 @@ def test_weather_bot_llm_mocking_layer_answers_the_long_tail(tmp_path):
     assert report["verdict"] == "pass", report["verdict_reasons"]
     # the mocks stage wrote strategies and kept the wildcard out; the dataset embeds both layers
     out = tmp_path / "out"
-    strategies = json.loads((out / "mock-strategies.json").read_text())
+    strategies = json.loads((out / "work" / "mock-strategies.json").read_text())
     assert strategies["schema"] == "evalbuilder/mock-strategies/v1" and list(strategies["strategies"]) == ["default", "stormy"]
     assert set(strategies["strategies"]["default"]["tools"]) == {"get_weather", "get_alerts"}
     assert report["stages"]["mocks"]["details"]["strategies"] == {"default": ["get_alerts", "get_weather"], "stormy": ["get_alerts"]}

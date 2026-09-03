@@ -38,8 +38,8 @@ when they want a verdict.
    - `mocking.required: true` (default) means every mockable tool gets a fixture (skill
      loaders are never mocked); `on_miss: strict` means an unmatched call is an error,
      never a real call. `on_miss: llm` adds the second layer: the `mocks` stage also
-     writes `mock-strategies.json` (a described backend world + per-tool behaviours),
-     keeps the wildcard defaults out of the rules, and at run time an LLM mock engine
+     writes mock strategies (a described backend world + per-tool behaviours, stored in
+     `dataset.mocks.strategies`), keeps the wildcard defaults out of the rules, and an LLM mock engine
      driven by `models.mock` (default: the generator) answers the calls no rule
      covers — validated against the tool's `output_schema`, one repair round, then
      `mocking.on_invalid` (`fallback` | `strict`). Cases and simulation scenarios may
@@ -47,7 +47,7 @@ when they want a verdict.
    - Agent Skills (`SKILL.md` folders the agent embeds or loads on demand) are part of
      the map (`skills[]`): the generator sees their instructions, scenarios list the
      skills they exercise, `skill_misuse` becomes an applicable failure type, and
-     `coverage.json` counts cases per skill (`uncovered_skills`).
+     `dataset.coverage.achieved` counts cases per skill (`uncovered_skills`).
    - `instructions` (free text) and `feedback` entries reach every generation prompt;
      `coverage.per_tool_edge_cases` adds schema-derived edge cases per tool (missing /
      wrong / out-of-enum / boundary input, malformed tool output) from the tools'
@@ -68,7 +68,8 @@ when they want a verdict.
    ```
 
    When the user wants to look at the generated dataset before anything runs: `--until
-   dataset`, read `dataset.json` / `mock-rules.json` with them, add their comments as
+   dataset`, read `dataset.json` with them (cases, both mock layers and coverage all
+   live in it), add their comments as
    `feedback` entries in the config (`{at, note, from_stage}`), regenerate with
    `--resume --from dataset --until dataset`, then `--resume` once they approve. The UI's
    **Run & review** page does the same loop with buttons.

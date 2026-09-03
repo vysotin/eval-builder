@@ -10,7 +10,7 @@ a structured answer, validates it against the tool's `output_schema`
 returns the strategy's `fallback_response` or raises `MockEngineError`
 (`on_invalid: fallback | strict`). Every call lands in `engine.ledger`.
 
-Strategies are pre-generated in the pipeline's `mocks` stage (`mock-strategies.json`) and
+Strategies are pre-generated in the pipeline's `mocks` stage (into `dataset.mocks.strategies`) and
 embedded in the dataset; a case or a simulation scenario may select a strategy by id.
 The shape mirrors ADK's user simulator (a described plan + a model named in config), applied
 to tools instead of users.

@@ -5,6 +5,11 @@ The naming convention lives in `evalbuilder.pipeline.layout`; this module only a
 it: every artifact kind becomes one attribute of the bundle (None when absent), per-run
 kinds become `{run_id: data}` dicts, and dict-shaped artifacts are unwrapped so pages
 see the same shapes the pipeline stages work with.
+
+Kinds the pipeline folded into a parent artifact (coverage into the dataset, applicable
+failure types into the agent map, …) are *derived* here from that parent when no
+stand-alone file is present, so a page asking for `coverage_plan` gets the same shape
+whether it is reading a current output directory or one written before the fold.
 """
 
 from __future__ import annotations
@@ -16,7 +21,15 @@ from typing import Any
 
 import yaml
 
-from evalbuilder.pipeline.layout import ARTIFACTS, ArtifactKind, artifact_index, identify, unwrap
+from evalbuilder.pipeline.layout import (
+    ARTIFACTS,
+    FOLDED,
+    ArtifactKind,
+    artifact_index,
+    fold_from,
+    identify,
+    unwrap,
+)
 
 DEFAULT_SCAN_ROOTS = ("eval/pipeline", "docs/examples")
 
@@ -172,7 +185,28 @@ def load_files(files: list[tuple[str, bytes | str]]) -> Bundle:
     return bundle
 
 
+def _derive_folded(bundle: Bundle) -> None:
+    """Present every kind that now lives inside another artifact (see layout.FOLDED) in
+    one shape, whichever way this bundle got it.
+
+    A stand-alone file, when one exists, still wins — an output directory written before
+    the fold keeps rendering from its own files — but it sheds the `schema` stamp, which
+    names a file this data no longer has. Otherwise the kind is read out of its parent.
+    """
+    for kind, target in FOLDED.items():
+        if bundle.has(kind):
+            data = bundle.artifacts[kind]
+            if isinstance(data, dict) and "schema" in data:
+                bundle.artifacts[kind] = {k: v for k, v in data.items() if k != "schema"}
+            continue
+        data = fold_from(kind, bundle.artifacts)
+        if data not in (None, {}, []):
+            bundle.artifacts[kind] = data
+            bundle.files[kind] = f"{bundle.files.get(target.split('.')[0], '?')}#{target}"
+
+
 def _finish(bundle: Bundle) -> None:
+    _derive_folded(bundle)
     report = bundle.report or {}
     ds = bundle.dataset or {}
     bundle.name = report.get("name") or ds.get("name") or bundle.name

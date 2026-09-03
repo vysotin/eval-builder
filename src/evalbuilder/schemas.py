@@ -62,6 +62,8 @@ class AgentMap(BaseModel):
     intents: list[dict] = Field(default_factory=list)
     scenarios: list[dict] = Field(default_factory=list)
     failure_scenarios: list[dict] = Field(default_factory=list)
+    # failure_type -> evidence tokens that structurally gate it (see pipeline/taxonomy.py)
+    applicable_failures: dict[str, list[str]] = Field(default_factory=dict)
     decisions_needed: list[str] = Field(default_factory=list)
 
 
@@ -109,6 +111,8 @@ class Dataset(BaseModel):
     dataset_type: Literal["final_response", "trajectory"]
     target: Target
     mocks: dict = Field(default_factory=dict)
+    # {"plan": {cells, summary}, "achieved": {planned, covered, coverage_pct, by_kind, gaps, …}}
+    coverage: dict = Field(default_factory=dict)
     cases: list[Case] = Field(default_factory=list)
     langsmith: dict = Field(
         default_factory=lambda: {"dataset_id": None, "dataset_name": None}

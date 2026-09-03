@@ -32,8 +32,8 @@ map, two-layer mocking); file paths are relative to the repository root.
                          │
                          ▼
               eval/agent-map.json · eval/datasets/*.json · eval/results/*   (skills)
-              eval/pipeline/<name>/  agent-map.json, mock-rules.json, dataset.json,
-                                     results/run-*.json, aggregate.json, report.json … (pipeline)
+              eval/pipeline/<name>/  agent-map.json, dataset.json, results/run-*.json,
+                                     aggregate.json, report.json … + work/ (scratch) (pipeline)
                          │
                          ▼
               evalbuilder ui  — Pipeline setup → Run & review → report pages
