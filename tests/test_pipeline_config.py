@@ -2,7 +2,9 @@ import pytest
 import yaml
 
 from evalbuilder.pipeline.config import (
+    DEFAULT_MODEL,
     PIPELINE_CONFIG_SCHEMA,
+    STAGE_NAMES,
     PipelineConfig,
     load_config,
     template,
@@ -97,34 +99,81 @@ def test_new_fields_defaults_and_yaml_round_trip(tmp_path):
     assert "coverage.per_tool_edge_cases must be >= 0" in cfg.problems()
 
 
-def test_runs_parallel_intents_default_and_validation():
-    from evalbuilder.pipeline.config import PipelineConfig
-
-    cfg = PipelineConfig(name="x", target={"source": "examples/weather_bot/agent.py",
-                                           "module": "examples.weather_bot.agent"})
-    assert cfg.runs.parallel_intents == 4
-    cfg.runs.parallel_intents = 0
-    assert any("parallel_intents" in p for p in cfg.problems())
-
-
-def test_runs_parallel_scoring_and_simulations_default_and_validation():
-    from evalbuilder.pipeline.config import PipelineConfig
-
-    cfg = PipelineConfig(name="x", target={"source": "examples/weather_bot/agent.py",
-                                           "module": "examples.weather_bot.agent"})
-    assert cfg.runs.parallel_scoring == 4
-    assert cfg.runs.parallel_simulations == 4
-    cfg.runs.parallel_scoring = 0
-    cfg.runs.parallel_simulations = 0
+def test_runs_keeps_only_repeats_and_parallelism_moved_to_phases():
+    cfg = PipelineConfig.model_validate(MINIMAL)
+    assert cfg.runs.repeats == 3
+    assert cfg.inference.workers == 4 and cfg.inference.backend == "threads" and cfg.inference.timeout == 120
+    assert cfg.evaluation.workers == 4 and cfg.evaluation.backend == "threads"
+    cfg.inference.workers = 0
+    cfg.evaluation.workers = 0
     problems = cfg.problems()
-    assert any("parallel_scoring must be >= 1" in p for p in problems)
-    assert any("parallel_simulations must be >= 1" in p for p in problems)
+    assert any("inference.workers must be >= 1" in p for p in problems)
+    assert any("evaluation.workers must be >= 1" in p for p in problems)
+    with pytest.raises(Exception):
+        PipelineConfig.model_validate({**MINIMAL, "inference": {"backend": "gpu"}})
 
 
-def test_template_spells_out_parallel_scoring_and_simulations():
+def test_old_parallel_keys_migrate_into_the_phase_sections():
+    cfg = PipelineConfig.model_validate({**MINIMAL, "runs": {"repeats": 2, "parallel_intents": 6, "parallel_scoring": 3, "parallel_simulations": 5}})
+    assert cfg.runs.repeats == 2
+    assert cfg.inference.workers == 6 and cfg.evaluation.workers == 3
+    assert any("runs.parallel_intents" in note for note in cfg.migrated)
+    assert any("runs.parallel_simulations" in note for note in cfg.migrated)
+    assert "migrated" not in cfg.to_yaml() and "parallel_intents" not in cfg.to_yaml()
+    # an explicit new section wins over the legacy key
+    cfg2 = PipelineConfig.model_validate({**MINIMAL, "runs": {"parallel_scoring": 9}, "evaluation": {"workers": 2}})
+    assert cfg2.evaluation.workers == 2 and cfg2.migrated == ["runs.parallel_scoring ignored: evaluation.workers is set"]
+
+
+# ── deployment ─────────────────────────────────────────────────
+
+
+def test_deploy_defaults_and_image_ref():
+    cfg = PipelineConfig.model_validate(MINIMAL)
+    d = cfg.deploy
+    assert d.target == "local" and not cfg.container_target
+    assert (d.port, d.namespace, d.replicas, d.expose, d.keep, d.timeout, d.context) == (8080, "default", 1, "port-forward", False, 240, None)
+    assert d.image.name is None and d.image.tag == "latest" and d.image.registry is None and d.image.push == "auto" and d.image.extras == []
+    assert d.build.context == "." and d.build.dockerfile is None and d.build.include == [] and d.build.requirements is None
+    assert cfg.image_ref == "evalbuilder-support-bot:latest"
+    docker = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "docker", "image": {"name": "acme/bot", "tag": "v2"}}})
+    assert docker.container_target and docker.image_ref == "acme/bot:v2"
+    reg = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "kubernetes", "image": {"registry": "quay.io/team"}}})
+    assert reg.image_ref == "quay.io/team/evalbuilder-support-bot:latest"
+    with pytest.raises(Exception):
+        PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "heroku"}})
+
+
+def test_deploy_problems():
+    bad = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "kubernetes", "port": 70000, "replicas": 0, "timeout": 0}})
+    problems = "\n".join(bad.problems())
+    for needle in ("deploy.port", "deploy.replicas", "deploy.timeout"):
+        assert needle in problems
+    ocp = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "openshift"}})
+    assert any("image.registry" in p for p in ocp.problems())
+    push = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "kubernetes", "image": {"push": "registry"}}})
+    assert any("image.registry" in p for p in push.problems())
+    route = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "kubernetes", "expose": "route"}})
+    assert any("expose: route" in p for p in route.problems())
+    cli = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "docker"}, "models": {"agent": "claude-cli:sonnet"}})
+    assert any("claude-cli" in p and "container" in p for p in cli.problems())
+    ok = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "docker"}, "models": {"agent": "scripted:examples.support_bot.agent:default_scripted_model"}})
+    assert ok.problems() == []
+
+
+def test_template_spells_out_deploy_inference_evaluation():
     text = template("demo", "examples/weather_bot/agent.py", "examples.weather_bot.agent")
-    assert "parallel_scoring: 4" in text
-    assert "parallel_simulations: 4" in text
+    for needle in ("deploy:", "target: local", "| docker (compose)", "inference:", "workers: 4", "backend: threads", "evaluation:", "expose: port-forward"):
+        assert needle in text, needle
+    assert "parallel_scoring" not in text
+    cfg = load_config_text(text)
+    assert cfg.deploy.target == "local" and cfg.inference.workers == 4 and cfg.problems() == []
+    docker = load_config_text(text.replace("target: local ", "target: docker").replace(f"agent: {DEFAULT_MODEL}", "agent: null"))
+    assert docker.deploy.target == "docker" and docker.problems() == []
+    back = load_config_text(cfg.to_yaml())
+    assert back.deploy == cfg.deploy and back.inference == cfg.inference and back.evaluation == cfg.evaluation
+    assert STAGE_NAMES.index("deploy") < STAGE_NAMES.index("infer") < STAGE_NAMES.index("simulate") < STAGE_NAMES.index("teardown") < STAGE_NAMES.index("score")
+    assert "run" not in STAGE_NAMES
 
 
 # ── two-layer mocking config ───────────────────────────────────

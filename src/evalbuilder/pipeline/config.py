@@ -8,15 +8,19 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 PIPELINE_CONFIG_SCHEMA = "evalbuilder/pipeline-config/v1"
 DEFAULT_MODEL = "claude-cli:claude-sonnet-5"  # Claude Sonnet 5 through the Claude Code subscription CLI
 
 STAGE_NAMES = (
     "preflight", "discover", "map", "mocks", "dataset", "review", "verify",
-    "run", "score", "aggregate", "simulate", "publish", "analyze", "report",
+    "deploy", "infer", "simulate", "teardown", "score", "aggregate", "publish", "analyze", "report",
 )
+
+DEPLOY_TARGETS = ("local", "docker", "kubernetes", "openshift")
+PARALLEL_BACKENDS = ("threads", "processes")
+CONTAINER_BOUND_PROVIDERS = ("claude-cli",)  # model providers that cannot run inside the agent image
 
 DEFAULT_EVALUATORS: list[dict] = [
     {"type": "expected_tools"},
@@ -24,6 +28,15 @@ DEFAULT_EVALUATORS: list[dict] = [
     {"type": "contract"},
     {"type": "correctness"},
 ]
+
+
+# legacy `runs.*` parallelism keys → (section, key); None = dropped
+LEGACY_PARALLEL_KEYS_MAP = (
+    ("parallel_intents", "inference", "workers"),
+    ("parallel_simulations", None, None),
+    ("parallel_scoring", "evaluation", "workers"),
+)
+LEGACY_PARALLEL_KEYS = tuple(k for k, _, _ in LEGACY_PARALLEL_KEYS_MAP)
 
 
 class TargetConfig(BaseModel):
@@ -66,9 +79,46 @@ class ThresholdsConfig(BaseModel):
 
 class RunsConfig(BaseModel):
     repeats: int = 3
-    parallel_intents: int = 4  # intent groups executed concurrently within each repeat (1 = sequential)
-    parallel_scoring: int = 4  # case runs scored concurrently within each run report (1 = sequential)
-    parallel_simulations: int = 4  # simulation scenarios executed concurrently (1 = sequential)
+
+
+class ImageConfig(BaseModel):
+    name: str | None = None  # default evalbuilder-<pipeline name>
+    tag: str = "latest"
+    registry: str | None = None  # e.g. docker.io/me, quay.io/team, the OpenShift internal registry
+    push: Literal["auto", "registry", "load", "none"] = "auto"  # how a kubernetes/openshift cluster gets the image
+    extras: list[str] = Field(default_factory=list)  # evalbuilder extras installed in the image, e.g. [llm]
+
+
+class BuildConfig(BaseModel):
+    context: str = "."  # docker build context (the project root by default)
+    dockerfile: str | None = None  # your own Dockerfile; null = the generated one
+    include: list[str] = Field(default_factory=list)  # extra paths copied into the image (the target's package always is)
+    requirements: str | None = None  # a requirements.txt installed in the image
+
+
+class DeployConfig(BaseModel):
+    target: Literal["local", "docker", "kubernetes", "openshift"] = "local"
+    image: ImageConfig = Field(default_factory=ImageConfig)
+    build: BuildConfig = Field(default_factory=BuildConfig)
+    port: int = 8080  # container port of the agent server
+    namespace: str = "default"  # kubernetes / openshift
+    replicas: int = 1
+    expose: Literal["port-forward", "nodeport", "route"] = "port-forward"  # how the pipeline reaches the service
+    env: dict[str, str | None] = Field(default_factory=dict)  # container environment; null = copy from the host (API keys)
+    keep: bool = False  # leave the deployment running after the pipeline (teardown skipped)
+    timeout: int = 240  # seconds to wait for readiness
+    context: str | None = None  # kubectl / oc context (null = current)
+
+
+class InferenceConfig(BaseModel):
+    workers: int = 4  # cases / scenarios executed concurrently (1 = sequential)
+    backend: Literal["threads", "processes"] = "threads"  # joblib backend
+    timeout: int = 120  # seconds per agent request
+
+
+class EvaluationConfig(BaseModel):
+    workers: int = 4  # case-run splits scored concurrently (1 = sequential)
+    backend: Literal["threads", "processes"] = "threads"
 
 
 class MockingConfig(BaseModel):
@@ -112,7 +162,10 @@ SECTION_COMMENTS = {
     "coverage": "case counts: per intent, per failure category, out-of-intent, multi-turn share, schema edge cases per tool",
     "evaluators": "deterministic first (expected_tools, contains), then judges (contract, correctness, openevals, trajectory_llm)",
     "thresholds": "pass rate per metric / per slice / overall",
-    "runs": "repeats detect unstable cases and evaluators; parallel_intents / parallel_scoring / parallel_simulations size the run, scoring and simulation thread pools (1 = sequential)",
+    "runs": "repeats detect unstable cases and evaluators",
+    "deploy": "where the agent (with both mock layers) runs during inference: local (subprocess), docker (compose), kubernetes (kubectl; image loaded into the nodes or pushed to image.registry), openshift (oc; prototype)",
+    "inference": "joblib parallelism for cases and simulation scenarios against the deployed agent (workers, threads|processes, per-request timeout)",
+    "evaluation": "joblib parallelism for scoring stored runs (case-run splits)",
     "mocking": "layer 1 = deterministic rules; on_miss strict = unmatched call is an error, llm = the LLM mock engine answers from pre-generated strategies (validated against the tool's output schema; on_invalid fallback|strict, max_repairs)",
     "stages": "skip list, retries, optional simulate/publish",
     "review": "auto_approve + approved_by is the explicit human authorization to approve generated cases",
@@ -135,11 +188,45 @@ class PipelineConfig(BaseModel):
     evaluators: list[dict] = Field(default_factory=lambda: [dict(e) for e in DEFAULT_EVALUATORS])
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
     runs: RunsConfig = Field(default_factory=RunsConfig)
+    deploy: DeployConfig = Field(default_factory=DeployConfig)
+    inference: InferenceConfig = Field(default_factory=InferenceConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     mocking: MockingConfig = Field(default_factory=MockingConfig)
     stages: StagesConfig = Field(default_factory=StagesConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     langsmith: dict = Field(default_factory=lambda: {"dataset_name": None})
+    # notes about legacy keys rewritten on load (never written back)
+    migrated: list[str] = Field(default_factory=list, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_keys(cls, data):
+        """`runs.parallel_*` (2026-08) → `inference.workers` / `evaluation.workers`."""
+        if not isinstance(data, dict):
+            return data
+        runs = data.get("runs")
+        if not isinstance(runs, dict) or not any(k in runs for k in LEGACY_PARALLEL_KEYS):
+            return data
+        data = dict(data)
+        runs = dict(runs)
+        notes = list(data.get("migrated") or [])
+        for old, section, key in LEGACY_PARALLEL_KEYS_MAP:
+            if old not in runs:
+                continue
+            value = runs.pop(old)
+            target = data.get(section)
+            if section is None:
+                notes.append(f"runs.{old} is obsolete (cases and scenarios share inference.workers); dropped")
+                continue
+            if isinstance(target, dict) and key in target:
+                notes.append(f"runs.{old} ignored: {section}.{key} is set")
+                continue
+            data[section] = {**(target if isinstance(target, dict) else {}), key: value}
+            notes.append(f"runs.{old} moved to {section}.{key}")
+        data["runs"] = runs
+        data["migrated"] = notes
+        return data
 
     @property
     def output_dir(self) -> Path:
@@ -153,6 +240,19 @@ class PipelineConfig(BaseModel):
     @property
     def llm_mocking(self) -> bool:
         return self.mocking.on_miss == "llm"
+
+    @property
+    def container_target(self) -> bool:
+        """Whether the agent runs in a container image (every target but `local`)."""
+        return self.deploy.target != "local"
+
+    @property
+    def image_ref(self) -> str:
+        """`[registry/]name:tag` of the agent image (name defaults to `evalbuilder-<name>`)."""
+        name = self.deploy.image.name or f"evalbuilder-{self.name}"
+        ref = f"{name}:{self.deploy.image.tag}"
+        registry = (self.deploy.image.registry or "").rstrip("/")
+        return f"{registry}/{ref}" if registry else ref
 
     def add_feedback(self, note: str, from_stage: str = "dataset") -> FeedbackEntry:
         entry = FeedbackEntry(at=datetime.now(timezone.utc).isoformat(timespec="seconds"), note=note.strip(), from_stage=from_stage)
@@ -196,12 +296,13 @@ class PipelineConfig(BaseModel):
             errors.append(f"target.source not found: {self.target.source}")
         if self.runs.repeats < 1:
             errors.append("runs.repeats must be >= 1")
-        if self.runs.parallel_intents < 1:
-            errors.append("runs.parallel_intents must be >= 1")
-        if self.runs.parallel_scoring < 1:
-            errors.append("runs.parallel_scoring must be >= 1")
-        if self.runs.parallel_simulations < 1:
-            errors.append("runs.parallel_simulations must be >= 1")
+        if self.inference.workers < 1:
+            errors.append("inference.workers must be >= 1")
+        if self.inference.timeout < 1:
+            errors.append("inference.timeout must be >= 1")
+        if self.evaluation.workers < 1:
+            errors.append("evaluation.workers must be >= 1")
+        errors += self._deploy_problems()
         if self.coverage.total_cases < 1:
             errors.append("coverage.total_cases must be >= 1")
         if not 0 <= self.coverage.multi_turn_share <= 1:
@@ -240,6 +341,37 @@ class PipelineConfig(BaseModel):
             errors.append("mocking.strategy must be a non-empty strategy id")
         if self.review.auto_approve and not self.review.approved_by:
             errors.append("review.auto_approve requires review.approved_by")
+        return errors
+
+    def _deploy_problems(self) -> list[str]:
+        d = self.deploy
+        errors: list[str] = []
+        if not 1 <= d.port <= 65535:
+            errors.append("deploy.port must be within [1, 65535]")
+        if d.replicas < 1:
+            errors.append("deploy.replicas must be >= 1")
+        if d.timeout < 1:
+            errors.append("deploy.timeout must be >= 1")
+        if d.target == "openshift" and not d.image.registry:
+            errors.append("deploy.target openshift needs deploy.image.registry (a registry the cluster pulls from)")
+        if d.target == "kubernetes" and d.image.push == "registry" and not d.image.registry:
+            errors.append("deploy.image.push registry needs deploy.image.registry")
+        if d.expose == "route" and d.target != "openshift":
+            errors.append("deploy.expose: route is only available on openshift (use port-forward or nodeport)")
+        if d.target in ("local", "docker") and d.expose != "port-forward":
+            errors.append(f"deploy.expose is only meaningful for kubernetes / openshift (target {d.target})")
+        if self.container_target:
+            for role, spec in (("agent", self.models.agent), ("mock", self.models.mock if self.llm_mocking else None)):
+                if spec and spec.split(":", 1)[0] in CONTAINER_BOUND_PROVIDERS:
+                    errors.append(
+                        f"models.{role} {spec!r} cannot run inside the agent container (deploy.target {d.target}): "
+                        "use an API-key provider with the key in deploy.env, or a scripted model"
+                    )
+            if self.llm_mocking and not self.models.mock and self.models.generator.split(":", 1)[0] in CONTAINER_BOUND_PROVIDERS:
+                errors.append(
+                    f"the LLM mock engine would use the generator model {self.models.generator!r}, which cannot run inside "
+                    f"the agent container (deploy.target {d.target}): set models.mock to an API-key or scripted model"
+                )
         return errors
 
 
@@ -309,9 +441,36 @@ thresholds:
   overall_pass: 0.8           # mean of metric pass rates
 runs:
   repeats: 3                  # repeated runs to detect unstable cases/evaluators
-  parallel_intents: 4         # intent groups run concurrently within each repeat (1 = sequential)
-  parallel_scoring: 4         # case runs scored concurrently within each run report (1 = sequential)
-  parallel_simulations: 4     # simulation scenarios run concurrently (1 = sequential)
+deploy:                       # where the agent (with both mock layers) runs during inference
+  target: local               # local (subprocess, no Docker) | docker (compose) | kubernetes (kubectl) | openshift (oc, prototype)
+                              # container targets need an agent model that runs inside the image: an API-key provider
+                              # (key passed through env) or a scripted model — not claude-cli
+  image:
+    name: null                # image name (default evalbuilder-{name})
+    tag: latest
+    registry: null            # registry to push to, e.g. docker.io/me; required for openshift
+    push: auto                # kubernetes/openshift: auto (registry when set, else load into the nodes) | registry | load | none
+    extras: []                # evalbuilder extras installed in the image, e.g. [llm] for API-key providers
+  build:
+    context: "."              # docker build context
+    dockerfile: null          # your own Dockerfile (null = generated into work/deploy/Dockerfile)
+    include: []               # extra paths copied into the image (the target's package always is)
+    requirements: null        # requirements.txt installed in the image
+  port: 8080                  # container port of the agent server
+  namespace: default          # kubernetes / openshift namespace (project)
+  replicas: 1
+  expose: port-forward        # kubernetes: port-forward | nodeport; openshift: route
+  env: {{}}                    # container environment; a null value copies the variable from the host (API keys)
+  keep: false                 # leave the deployment running after the pipeline (skips teardown)
+  timeout: 240                # seconds to wait for readiness
+  context: null               # kubectl / oc context (null = current)
+inference:                    # cases and simulation scenarios against the deployed agent
+  workers: 4                  # concurrent cases / scenarios (1 = sequential)
+  backend: threads            # joblib backend: threads | processes
+  timeout: 120                # seconds per agent request
+evaluation:                   # scoring stored runs locally
+  workers: 4                  # case-run splits scored concurrently (1 = sequential)
+  backend: threads            # threads | processes
 mocking:
   required: true              # every mockable tool gets a fixture (skill loaders are never mocked)
   on_miss: strict             # layer 1 rules miss -> strict: error | llm: the LLM mock engine answers | fallback | real
