@@ -89,8 +89,8 @@ STAGE_NAMES = ("preflight","discover","map","mocks","dataset","review","verify",
 migrate_config(data: dict) -> tuple[dict, list[str]]   # old keys → new sections, notes
 ```
 
-- [ ] Write tests: defaults (`deploy.target == "local"`, `inference.workers == 4`), `image_ref` with/without registry, migration of `runs.parallel_*` (notes returned, `runs.repeats` kept), `problems()` rejects `inference.workers < 1`, `deploy.replicas < 1`, `deploy.port` out of range, `openshift` without `image.registry` under `push: registry`; template contains `deploy:` and `inference:`; `to_yaml` round-trips `deploy`.
-- [ ] Run tests → fail. Implement. Run → pass. Commit.
+- [x] Write tests: defaults (`deploy.target == "local"`, `inference.workers == 4`), `image_ref` with/without registry, migration of `runs.parallel_*` (notes returned, `runs.repeats` kept), `problems()` rejects `inference.workers < 1`, `deploy.replicas < 1`, `deploy.port` out of range, `openshift` without `image.registry` under `push: registry`; template contains `deploy:` and `inference:`; `to_yaml` round-trips `deploy`.
+- [x] Run tests → fail. Implement. Run → pass. Commit.
 
 ### Task 2: Schemas and artifact layout
 
@@ -98,7 +98,7 @@ migrate_config(data: dict) -> tuple[dict, list[str]]   # old keys → new sectio
 
 **Produces:** `CaseRun.log: list[dict]`, `RunArtifact.execution: dict | None`; `ARTIFACTS["deployment"]` = `ArtifactKind("deployment", "deployment.json", "evalbuilder/deployment/v1", "deploy, teardown", …)`; `DEPLOYMENT_SCHEMA` constant in `deploy/spec.py` (Task 7) equals that id.
 
-- [ ] Tests: `kind_of_file("deployment.json")`, schema lookup, `convention_table` row, `artifact_index` finds it. Implement, commit.
+- [x] Tests: `kind_of_file("deployment.json")`, schema lookup, `convention_table` row, `artifact_index` finds it. Implement, commit.
 
 ### Task 3: Agent clients
 
@@ -124,7 +124,7 @@ def mocks_for_case(ds_mocks: dict, case_meta: dict, *, on_miss=None, strategy=No
 ```
 `mocks` block keys: `tools` (merged rules), `on_miss`, `strategy`, `strategies`, `llm` (model, on_invalid, max_repairs). `LocalAgent.invoke` builds rules → engine (if `on_miss == "llm"`; mock model from `mocks.llm.model` spec, else the instance's) → `wrap_tools` → `build_graph` → `invoke_messages` → `InvokeResult`; exceptions become `error`/`error_class` (`infrastructure` for factory/mock-engine failures, else `agent`).
 
-- [ ] Tests: local invoke with rules on weather_bot returns tool call + response; multi-turn by re-sending `result.messages + [user]`; strict miss → `error_class == "agent"`; llm policy with `scripted:examples.weather_bot.offline:mock_model` answers via engine and ledger layer `llm`; `mocks_for_case` merges case rules over dataset rules and picks case strategy; pickling `LocalAgent`/`RemoteAgent` works (`pickle.dumps`).
+- [x] Tests: local invoke with rules on weather_bot returns tool call + response; multi-turn by re-sending `result.messages + [user]`; strict miss → `error_class == "agent"`; llm policy with `scripted:examples.weather_bot.offline:mock_model` answers via engine and ledger layer `llm`; `mocks_for_case` merges case rules over dataset rules and picks case strategy; pickling `LocalAgent`/`RemoteAgent` works (`pickle.dumps`).
 
 ### Task 4: Agent server + `evalbuilder serve`
 
@@ -138,7 +138,7 @@ SERVER_VERSION = "evalbuilder/serve/v1"
 ```
 Routes: `GET /health` → `agent.health()` + `{"ok": True, "server": SERVER_VERSION}`; `POST /invoke` → JSON body `{messages, mocks, mocked}` → `InvokeResult.to_dict()`; 400 on bad JSON / missing messages; 404 otherwise. CLI: `evalbuilder serve --module M [--factory F] [--host H] [--port P] [--agent-model S] [--mock-model S]` (env fallbacks `EVALBUILDER_AGENT_MODEL`, `EVALBUILDER_MOCK_MODEL`).
 
-- [ ] Tests: start `make_server` in a daemon thread; `/health` lists tools; `/invoke` with rules; multi-turn via returned messages; `RemoteAgent` against it equals `LocalAgent` result fields (tool_calls, response); bad body → 400; CLI `serve --help` mentions `--module`.
+- [x] Tests: start `make_server` in a daemon thread; `/health` lists tools; `/invoke` with rules; multi-turn via returned messages; `RemoteAgent` against it equals `LocalAgent` result fields (tool_calls, response); bad body → 400; CLI `serve --help` mentions `--module`.
 
 ### Task 5: Inference engine (joblib) + runner/simulate refactor
 
@@ -156,7 +156,7 @@ def graph_step(graph) -> Callable
 ```
 `CaseRun.log` entries: `{"turn": i, "seconds": s, "tool_calls": n, "error": e, "mode": agent.mode, "endpoint": agent.endpoint}`. Scenario results gain `"log"` (same shape) and keep `mock_calls`, `mock_strategy`. `RunArtifact.execution = {"mode", "endpoint", "workers", "backend", "seconds"}`. `runner.run_dataset(...)` keeps its signature (`max_workers` → `workers`), builds a `LocalAgent(module, factory, agent_model=model, mock_model=mock_model)` and calls `infer_dataset` — existing tests must pass unchanged except `max_workers` semantics (per case now).
 
-- [ ] Tests: threads and processes backends produce identical artifacts to sequential (weather_bot scripted; loky needs `scripted:` specs, so use `LocalAgent(agent_model_spec=…)` for the processes test); dataset order kept; progress events count; per-case errors isolated; multi-turn (`user_turns`) replays 2 user messages; `log` has one entry per turn; scenarios through `LocalAgent` reach `success` with followups; `simulate_scenario(graph_step(graph), …)` still works.
+- [x] Tests: threads and processes backends produce identical artifacts to sequential (weather_bot scripted; loky needs `scripted:` specs, so use `LocalAgent(agent_model_spec=…)` for the processes test); dataset order kept; progress events count; per-case errors isolated; multi-turn (`user_turns`) replays 2 user messages; `log` has one entry per turn; scenarios through `LocalAgent` reach `success` with followups; `simulate_scenario(graph_step(graph), …)` still works.
 
 ### Task 6: Parallel scoring, `eval` and `infer` commands
 
@@ -166,7 +166,7 @@ def graph_step(graph) -> Callable
 - `evalbuilder infer DATASET [--endpoint URL] [--deployment DIR] [--local/--no-local] [--scenarios F] [--repeats N] [--workers N] [--backend B] [--out D] [--ids] [--mock/--no-mock] [--model S] [--on-miss P] [--mock-model S] [--strategy S] [--mine/--no-mine]` → JSON `{runs: [{run_id, path, cases, errors}], simulation: {sim_id, path, …} | null, endpoint, mode}`; `run` = hidden alias.
 - `evalbuilder eval RUN... --dataset D --evaluators F [--out D] [--workers N] [--backend B] [--aggregate/--no-aggregate] [--config CFG] [--env-file F]` → score reports + `aggregate.json`; `score` = alias for one run printing the report.
 
-- [ ] Tests: parallel scores == sequential (threads, processes) on a 5-case run; CLI `infer` local with scenarios writes run + simulation files; CLI `eval` with two runs writes aggregate with verdict; `run`/`score` aliases still work.
+- [x] Tests: parallel scores == sequential (threads, processes) on a 5-case run; CLI `infer` local with scenarios writes run + simulation files; CLI `eval` with two runs writes aggregate with verdict; `run`/`score` aliases still work.
 
 ### Task 7: Deployment package
 
@@ -196,14 +196,14 @@ def deploy_status(cfg_or_dir, …) -> dict; def deploy_down(cfg_or_dir, …) -> 
 ```
 Kubernetes: names `evalbuilder-<name>`; `load` streams `docker save` (bytes from `runner.run(["docker","save",image])`) into `kubectl exec -i <pod> -- nsenter -t 1 -m -u -i -n -- ctr -n k8s.io images import -` per loader pod; port-forward = detached `subprocess.Popen` via `runner.spawn(argv, log_path) -> pid` (so the fake can stub it); record `resources = {namespace, deployment, service, loader, port_forward: {pid, local_port}}`. OpenShift: `cli="oc"`, `push` default `registry`, `expose` default `route`, `available()` = `oc whoami`.
 
-- [ ] Tests (FakeRunner records argv and returns canned stdout per prefix): renderers (Dockerfile has `evalbuilder serve --module …`, compose ports/env, manifests have probe + policy, route only for openshift); docker target argv sequence and endpoint; kubernetes `load` path (loader apply, save→import per pod, apply, rollout, port-forward spawned, record); `registry` path (`docker tag`/`push`, policy Always); nodeport endpoint from `kubectl get nodes` json; `down` argv; openshift route endpoint and missing-registry error; `LocalTarget` real: up → health ok → status ready → down kills.
+- [x] Tests (FakeRunner records argv and returns canned stdout per prefix): renderers (Dockerfile has `evalbuilder serve --module …`, compose ports/env, manifests have probe + policy, route only for openshift); docker target argv sequence and endpoint; kubernetes `load` path (loader apply, save→import per pod, apply, rollout, port-forward spawned, record); `registry` path (`docker tag`/`push`, policy Always); nodeport endpoint from `kubectl get nodes` json; `down` argv; openshift route endpoint and missing-registry error; `LocalTarget` real: up → health ok → status ready → down kills.
 
 ### Task 8: `evalbuilder deploy` commands
 
 **Files:** `src/evalbuilder/cli.py`; tests in `tests/test_cli_phases.py`.
 
 - `deploy up CONFIG [--target T] [--keep] [--env-file F]`, `deploy status CONFIG|DIR`, `deploy down CONFIG|DIR`, `deploy build CONFIG`, `deploy render CONFIG [--write]`. JSON out; exit 1 when the target is unavailable or readiness times out.
-- [ ] Tests with the local target: up writes `deployment.json` with endpoint; status ready; down; render prints file names and contents.
+- [x] Tests with the local target: up writes `deployment.json` with endpoint; status ready; down; render prints file names and contents.
 
 ### Task 9: Pipeline stages, report, jobs, examples
 
@@ -216,7 +216,7 @@ Kubernetes: names `evalbuilder-<name>`; `load` streams `docker save` (bytes from
 - `teardown`: skipped by config when `deploy.keep`; else `deploy_down`; optional stage, deps `("deploy",)`, runs after `simulate`.
 - `REQUIRED_STAGES` = preflight … verify, deploy, infer, score, aggregate. `report._mocking_summary` reads `infer` (fallback `run`); report adds `"deployment": record dict | None`.
 - Stage order in `build_stages()`: … verify, deploy(deps verify), infer(deps deploy), simulate(deps infer? no — deps deploy+review; optional), teardown(deps deploy, optional, after simulate), score(deps infer), aggregate, publish, analyze, report.
-- [ ] Tests: offline e2e statuses include `deploy/infer/teardown: ok`, `deployment.json` at root with `status: down`, `execution.mode == "remote"`; `--until deploy` leaves the server up (health ok) and `deploy down` stops it; `deploy.keep: true` skips teardown then explicit down; migration of an old config with `runs.parallel_intents` loads with a recorded problem.
+- [x] Tests: offline e2e statuses include `deploy/infer/teardown: ok`, `deployment.json` at root with `status: down`, `execution.mode == "remote"`; `--until deploy` leaves the server up (health ok) and `deploy down` stops it; `deploy.keep: true` skips teardown then explicit down; migration of an old config with `runs.parallel_intents` loads with a recorded problem.
 
 ### Task 10: UI
 
@@ -225,19 +225,29 @@ Kubernetes: names `evalbuilder-<name>`; `load` streams `docker save` (bytes from
 - Setup: *Deployment* block (`setup_deploy_target` selectbox local/docker/kubernetes/openshift, `setup_image_name`, `setup_image_registry`, `setup_namespace`, `setup_expose`, `setup_keep`), *Parallelism* (`setup_infer_workers`, `setup_infer_backend`, `setup_eval_workers`). `default_form`/`form_from_config`/`build_config` round-trip.
 - Run & review: `_deployment_section(out_dir)` — record summary, `deploy_status` (cached per render), *Tear down* button (`run_teardown`), rendered files path; stage progress follows `infer`.
 - Stages page: artifacts list shows deployment; Summary: one line "deployed to <target> at <endpoint>".
-- [ ] Tests: AppTest setup form has the new widgets and YAML contains `deploy:`; Run page with a fabricated `deployment.json` shows the endpoint and a Tear down button; Playwright: setup shows the Deployment target select and after a local-target full run the Run page shows "Deployment" with `status down`.
+- [x] Tests: AppTest setup form has the new widgets and YAML contains `deploy:`; Run page with a fabricated `deployment.json` shows the endpoint and a Tear down button; Playwright: setup shows the Deployment target select and after a local-target full run the Run page shows "Deployment" with `status down`.
 
 ### Task 11: Docs and smoke script
 
 **Files:** `README.md`, `docs/deployment.md` (new), `docs/architecture/02-cli.md`, `03-core-modules.md`, `04-pipeline.md`, `05-ui.md`, `06-decisions.md` (decisions 22–24), `07-limitations.md`, `docs/architecture/README.md`, `skills/agent-eval-pipeline/SKILL.md`, `skills/agent-eval-pipeline/references/config-reference.md`, `skills/agent-eval-run/SKILL.md`, `scripts/cli-smoke.sh`.
 
-- [ ] Update every stage table, config block, CLI reference, repository layout, testing section, troubleshooting rows; write `docs/deployment.md` (targets, image distribution, endpoints, OpenShift prototype, env/keys, troubleshooting). Smoke script: `deploy up/status/down` local, `infer`, `eval`, artifact list with `deployment.json`.
+- [x] Update every stage table, config block, CLI reference, repository layout, testing section, troubleshooting rows; write `docs/deployment.md` (targets, image distribution, endpoints, OpenShift prototype, env/keys, troubleshooting). Smoke script: `deploy up/status/down` local, `infer`, `eval`, artifact list with `deployment.json`.
 
 ### Task 12: Integration on Docker Desktop + memory
 
 **Files:** `tests/test_deploy_integration.py` (marker `docker`), `pyproject.toml` markers.
 
-- [ ] Compose: `deploy up` on `examples/weather_bot/pipeline.yaml` (target docker, scripted models) → health → `infer` 2 cases → `down`. Kubernetes: same with `--target kubernetes` (load + port-forward). Run both locally; fix what breaks. Save memory notes.
+- [x] Compose: `deploy up` on `examples/weather_bot/pipeline.yaml` (target docker, scripted models) → health → `infer` 2 cases → `down`. Kubernetes: same with `--target kubernetes` (load + port-forward). Run both locally; fix what breaks. Save memory notes.
+
+## Execution notes (2026-09-06)
+
+Executed inline in the same session, task by task, on branch `feat/deploy-infer-eval`. Verified for
+real on Docker Desktop (Docker 29.4, kind-based Kubernetes 1.36): `evalbuilder pipeline run
+examples/weather_bot/pipeline.yaml` (target docker) → verdict pass with deploy / infer / simulate /
+teardown ok; `deploy up --target kubernetes` → loader import, port-forward, `infer --deployment`,
+`deploy down`, cluster clean. The OpenShift target has no live cluster here (fake `oc` only). The
+committed `docs/examples/incident-desk/report.json` is a `--until dataset` run (verdict
+`incomplete`); the UI test now asserts what the loader promises rather than a pass/fail verdict.
 
 ## Self-review
 
