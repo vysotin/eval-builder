@@ -705,6 +705,34 @@ def publish(
     _emit(result)
 
 
+# ── `evalbuilder serve` — the agent server (container entry point) ──
+
+@app.command()
+def serve(
+    module: str = typer.Option(..., "--module", help="importable module exposing TOOLS + build_agent"),
+    factory: str = typer.Option("build_agent", "--factory"),
+    host: str = typer.Option("0.0.0.0", "--host"),
+    port: int = typer.Option(8080, "--port"),
+    agent_model: Optional[str] = typer.Option(None, "--agent-model", help="agent model spec (default: EVALBUILDER_AGENT_MODEL, else the target's own)"),
+    mock_model: Optional[str] = typer.Option(None, "--mock-model", help="LLM mock engine model spec (default: EVALBUILDER_MOCK_MODEL, else the request's mocks.llm.model)"),
+    quiet: bool = typer.Option(False, "--quiet", help="no access log"),
+) -> None:
+    """Serve the target agent, with both mock layers, over HTTP (GET /health, POST /invoke).
+    The entry point of the agent image and of the `local` deployment target."""
+    import os
+    import sys
+
+    from evalbuilder import serve as serve_mod
+
+    if str(Path.cwd()) not in sys.path:
+        sys.path.insert(0, str(Path.cwd()))
+    serve_mod.serve(
+        module=module, factory=factory, host=host, port=port,
+        agent_model=agent_model or os.environ.get("EVALBUILDER_AGENT_MODEL") or None,
+        mock_model=mock_model or os.environ.get("EVALBUILDER_MOCK_MODEL") or None, quiet=quiet,
+    )
+
+
 # ── `evalbuilder check` — environment / capability probe ────────
 
 @app.command()
