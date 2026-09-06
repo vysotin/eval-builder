@@ -13,8 +13,9 @@ from __future__ import annotations
 import importlib
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
+
+from joblib import Parallel, delayed
 
 from evalbuilder.config import provider_ready
 from evalbuilder.mocking import args_subset
@@ -268,51 +269,70 @@ def is_judge_spec(spec: dict) -> bool:
     return kind in JUDGE_TYPES or (kind not in DETERMINISTIC_TYPES and kind != "custom")
 
 
-def score_run(
-    run: RunArtifact, ds: Dataset, specs: list[dict], judge_model: str,
-    max_workers: int = 1,
-) -> Report:
-    """Score one run. With `max_workers > 1` the case runs are scored concurrently
-    (each case still runs its evaluators in order); rows, metrics and slices are
-    aggregated in run order afterwards, so the report is identical to a sequential
-    scoring pass."""
+def _chunks(items: list, n: int) -> list[list]:
+    """`n` contiguous, near-equal splits of `items` (empty splits dropped)."""
+    n = max(1, min(int(n), len(items)))
+    size, extra = divmod(len(items), n)
+    out, start = [], 0
+    for i in range(n):
+        end = start + size + (1 if i < extra else 0)
+        if end > start:
+            out.append(items[start:end])
+        start = end
+    return out
+
+
+def score_rows(run: RunArtifact, ds: Dataset, specs: list[dict], judge_model: str, case_ids: list[str] | None = None) -> list[dict]:
+    """Score the case runs whose ids are listed (all when None), in run order — the unit
+    of work of a scoring split; evaluators are built here so a process worker can run it."""
     evaluators = build_evaluators(specs, judge_model)
     cases_by_id = {c.id: c for c in ds.cases}
-    scored = [
-        (case_run, cases_by_id[case_run.case_id])
-        for case_run in run.case_runs
-        if case_run.case_id in cases_by_id
-    ]
-
-    def _score_case(pair) -> dict:
-        case_run, case = pair
+    wanted = set(case_ids) if case_ids is not None else None
+    rows = []
+    for case_run in run.case_runs:
+        case = cases_by_id.get(case_run.case_id)
+        if case is None or (wanted is not None and case_run.case_id not in wanted):
+            continue
         row = {"case_id": case_run.case_id, "scores": {}, "errors": {}, "skipped": {}}
         for key, fn in evaluators:
             if case_run.error:
-                row["scores"][key] = {
-                    "score": 0.0,
-                    "comment": f"agent error: {case_run.error}",
-                }
+                row["scores"][key] = {"score": 0.0, "comment": f"agent error: {case_run.error}"}
                 continue
             try:
                 result = fn(case, case_run)
-                row["scores"][key] = {
-                    "score": float(result["score"]),
-                    "comment": result.get("comment", ""),
-                }
+                row["scores"][key] = {"score": float(result["score"]), "comment": result.get("comment", "")}
             except EvaluatorNotApplicable as e:
                 row["skipped"][key] = str(e)
             except EvaluatorUnavailable as e:
                 row["errors"][key] = str(e)
             except Exception as e:  # noqa: BLE001 - evaluator bug, not agent fault
                 row["errors"][key] = f"{type(e).__name__}: {e}"
-        return row
+        rows.append(row)
+    return rows
 
-    if max_workers > 1 and len(scored) > 1:
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(scored))) as pool:
-            rows = list(pool.map(_score_case, scored))
+
+def score_run(
+    run: RunArtifact, ds: Dataset, specs: list[dict], judge_model: str,
+    workers: int = 1, backend: str = "threads", max_workers: int | None = None,
+) -> Report:
+    """Score one run. With `workers > 1` the case runs are split into contiguous
+    chunks scored concurrently by joblib (`threads`, or `processes` — each worker
+    rebuilds the evaluators from `specs`); rows, metrics and slices are assembled in run
+    order afterwards, so the report is identical to a sequential scoring pass.
+    `max_workers` is the older name of `workers`."""
+    if max_workers is not None:
+        workers = max_workers
+    if backend not in ("threads", "processes"):
+        raise ValueError(f"invalid backend {backend!r}; use threads or processes")
+    cases_by_id = {c.id: c for c in ds.cases}
+    ids = [cr.case_id for cr in run.case_runs if cr.case_id in cases_by_id]
+    if workers > 1 and len(ids) > 1:
+        pool = Parallel(n_jobs=min(int(workers), len(ids)), prefer="threads" if backend == "threads" else "processes")
+        batches = pool(delayed(score_rows)(run, ds, specs, judge_model, chunk) for chunk in _chunks(ids, workers))
+        rows = [row for batch in batches for row in batch]
     else:
-        rows = [_score_case(pair) for pair in scored]
+        rows = score_rows(run, ds, specs, judge_model)
+    scored = [cases_by_id[row["case_id"]] for row in rows]
 
     report = Report(run_id=run.run_id, dataset_name=ds.name)
     per_metric: dict[str, list[float]] = {}
@@ -321,7 +341,7 @@ def score_run(
     slice_scores: dict[str, dict[str, dict[str, list[float]]]] = {
         dim: {} for dim in SLICE_DIMS
     }
-    for row, (case_run, case) in zip(rows, scored):
+    for row, case in zip(rows, scored):
         report.cases.append(row)
         for key in row["errors"]:
             metric_errors[key] = metric_errors.get(key, 0) + 1

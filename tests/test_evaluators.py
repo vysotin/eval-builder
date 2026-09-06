@@ -349,3 +349,26 @@ def test_score_run_parallel_matches_sequential(monkeypatch):
     assert parallel.metrics["contains"]["n"] == 3  # a, b and the agent-error zero
     assert parallel.metrics["contains"]["skipped"] == 1
     assert parallel.metrics["correctness"]["errors"] == 3  # judge unavailable on a, b, c; d is an agent error
+
+
+def test_score_run_process_backend_matches_sequential(monkeypatch):
+    """loky workers rebuild the evaluators from the specs; the report is identical."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    ds = Dataset(name="d", dataset_type="final_response", target=Target(module="m"))
+    ids = [add_case(ds, {"inputs": {"q": i}, "reference_outputs": {"contains": "yes"}, "metadata": {"intent": f"i.{i % 2}"}}).id for i in range(5)]
+    set_review(ds, ids, "approved", "t")
+    run = RunArtifact(run_id="r1", dataset_path="p", dataset_name="d", mocked=False,
+                      case_runs=[CaseRun(case_id=cid, outputs={"response": "yes" if i != 3 else "no"}) for i, cid in enumerate(ids)])
+    specs = [{"type": "contains"}, {"type": "expected_tools"}]
+    sequential = ev.score_run(run, ds, specs, "openai:x")
+    processes = ev.score_run(run, ds, specs, "openai:x", workers=3, backend="processes")
+    assert processes.model_dump() == sequential.model_dump()
+    assert [row["case_id"] for row in processes.cases] == ids and processes.metrics["contains"]["avg"] == 0.8
+    with pytest.raises(ValueError, match="backend"):
+        ev.score_run(run, ds, specs, "openai:x", workers=2, backend="gpu")
+
+
+def test_chunks_are_contiguous_and_cover_everything():
+    assert ev._chunks(list(range(7)), 3) == [[0, 1, 2], [3, 4], [5, 6]]
+    assert ev._chunks([1, 2], 5) == [[1], [2]]
+    assert ev._chunks([], 3) == [] and ev._chunks([9], 1) == [[9]]

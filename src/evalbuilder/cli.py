@@ -538,58 +538,120 @@ def discover(
     )
 
 
+def _agent_and_policy(ds: Dataset, *, endpoint: Optional[str], deployment: Optional[Path], mock: bool, on_miss: Optional[str],
+                      mock_model: Optional[str], model: Optional[str], timeout: float):
+    """The agent client for `infer` (remote when an endpoint / deployment is given, else
+    in-process) and the miss policy: flag > the dataset's (when mocking) > real."""
+    policy = on_miss or ((ds.mocks or {}).get("on_miss") if mock else None) or "real"
+    engine_spec = None
+    if mock and policy == "llm":
+        engine_spec = _mock_model_for(ds, mock_model)[1]
+    if deployment is not None and not endpoint:
+        from evalbuilder.deploy import load_record
+
+        record = load_record(deployment)
+        if record is None or not record.endpoint:
+            typer.echo(f"no deployment with an endpoint under {deployment} (run `evalbuilder deploy up` first)", err=True)
+            raise typer.Exit(1)
+        endpoint = record.endpoint
+    if endpoint:
+        from evalbuilder.agent_client import RemoteAgent
+
+        if model:
+            typer.echo("--model is ignored against a deployed agent: the deployment decides the agent model", err=True)
+        return RemoteAgent(endpoint, timeout=timeout), policy, engine_spec
+    from evalbuilder.inference import local_agent_for
+
+    return local_agent_for(ds, model_spec=model, mock_model_spec=engine_spec), policy, engine_spec
+
+
 @app.command()
-def run(
+def infer(
     path: Path,
-    mock: bool = typer.Option(False, "--mock/--no-mock"),
-    ids: Optional[str] = typer.Option(None, "--ids", help="comma-separated case ids"),
+    endpoint: Optional[str] = typer.Option(None, "--endpoint", help="URL of a deployed agent server (evalbuilder deploy up / serve)"),
+    deployment: Optional[Path] = typer.Option(None, "--deployment", help="pipeline output dir holding deployment.json (its endpoint is used)"),
+    scenarios: Optional[Path] = typer.Option(None, "--scenarios", help="scenarios.yaml: also run the multi-turn simulations"),
+    repeats: int = typer.Option(1, "--repeats", help="run the dataset this many times (one run artifact each)"),
+    workers: int = typer.Option(4, "--workers", help="cases / scenarios executed concurrently (1 = sequential)"),
+    backend: str = typer.Option("threads", "--backend", help="joblib backend: threads | processes"),
+    timeout: float = typer.Option(120.0, "--timeout", help="seconds per agent request (remote)"),
     out: Path = typer.Option(Path("eval/results"), "--out"),
-    model: Optional[str] = typer.Option(
-        None, "--model", help="agent model spec, e.g. claude-cli:sonnet (default: target's own)"
-    ),
+    ids: Optional[str] = typer.Option(None, "--ids", help="comma-separated case ids"),
+    mock: bool = typer.Option(True, "--mock/--no-mock", help="install the dataset's mock layers per request"),
+    model: Optional[str] = typer.Option(None, "--model", help="agent model spec for in-process runs, e.g. claude-cli:sonnet (default: target's own)"),
     on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy: real|fallback|strict|llm (default: the dataset's, else real)"),
     mock_model: Optional[str] = typer.Option(None, "--mock-model", help="model driving the LLM mock engine with --on-miss llm (default: mocks.llm.model)"),
     strategy: Optional[str] = typer.Option(None, "--strategy", help="mock strategy id for the engine (default: the dataset's)"),
+    mine: bool = typer.Option(True, "--mine/--no-mine", help="mine simulation violations into pending cases"),
 ) -> None:
-    """Execute approved cases against the target agent; write a run artifact."""
-    from evalbuilder.runner import run_dataset
+    """Inference phase: execute approved cases (and, with --scenarios, the multi-turn
+    simulations) against the agent — in-process, or deployed behind an endpoint — in
+    parallel with joblib; write run artifacts (`run-<id>.json`) and `simulation-<id>.json`."""
+    from uuid import uuid4
 
+    from evalbuilder import simulate as sim
+    from evalbuilder.inference import BACKENDS, infer_dataset, simulate_scenarios
+
+    if backend not in BACKENDS:
+        typer.echo(f"--backend must be one of {', '.join(BACKENDS)}", err=True)
+        raise typer.Exit(1)
     ds = _load_ds(path)
     id_list = [s.strip() for s in ids.split(",") if s.strip()] if ids else None
-    agent_model = None
-    if model:
-        from evalbuilder.claude_cli import model_from_spec
-
-        agent_model = model_from_spec(model)
-    # Miss-policy resolution: explicit flag > the dataset's own policy (only when
-    # mocking) > `real`. The engine model is only resolved when layer 2 can fire.
-    policy = on_miss or ((ds.mocks or {}).get("on_miss") if mock else None) or "real"
-    engine_model, engine_spec = (None, None)
-    if mock and policy == "llm":
-        engine_model, engine_spec = _mock_model_for(ds, mock_model)
-    try:
-        art = run_dataset(
-            ds, path, mocked=mock, ids=id_list, out_dir=out,
-            model=agent_model, model_spec=model, on_miss=policy,
-            mock_model=engine_model, mock_model_spec=engine_spec, strategy=strategy,
-        )
-    except ValueError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1)
-    errors = [cr for cr in art.case_runs if cr.error]
-    _emit(
-        {
-            "run_id": art.run_id,
-            "path": str(Path(out) / f"run-{art.run_id}.json"),
-            "cases": len(art.case_runs),
-            "errors": len(errors),
-            "error_cases": [
-                {"case_id": cr.case_id, "error": cr.error, "class": cr.error_class}
-                for cr in errors
-            ],
-            "mocking": art.mocking,
+    scenario_list = None
+    if scenarios is not None:
+        try:
+            scenario_list = sim.load_scenarios(scenarios)
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1)
+    agent, policy, engine_spec = _agent_and_policy(ds, endpoint=endpoint, deployment=deployment, mock=mock, on_miss=on_miss,
+                                                   mock_model=mock_model, model=model, timeout=timeout)
+    if agent.mode == "remote":
+        health = agent.health()
+        if not health.get("ok"):
+            typer.echo(f"agent at {agent.endpoint} is not healthy: {health.get('error')}", err=True)
+            raise typer.Exit(1)
+    runs = []
+    for i in range(max(1, repeats)):
+        try:
+            art = infer_dataset(
+                ds, path, agent, out_dir=out, ids=id_list, workers=workers, backend=backend,
+                on_miss=policy if mock else None, strategy=strategy, mocked=mock, model_spec=model if agent.mode == "local" else None,
+                mock_model_spec=engine_spec,
+            )
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1)
+        errors = [cr for cr in art.case_runs if cr.error]
+        typer.echo(f"infer: run {i + 1}/{max(1, repeats)} {art.run_id}: {len(art.case_runs)} case(s), {len(errors)} error(s)", err=True)
+        runs.append({
+            "run_id": art.run_id, "path": str(Path(out) / f"run-{art.run_id}.json"), "cases": len(art.case_runs), "errors": len(errors),
+            "error_cases": [{"case_id": cr.case_id, "error": cr.error, "class": cr.error_class} for cr in errors],
+            "mocking": art.mocking, "execution": art.execution,
+        })
+    simulation = None
+    if scenario_list:
+        results = simulate_scenarios(agent, scenario_list, mocks=ds.mocks if mock else None, on_miss=policy if mock else None,
+                                     strategy=strategy, workers=workers, backend=backend, mocked=mock)
+        mined = sim.mine_failures(ds, results) if mine else 0
+        if mined:
+            _save_valid(path, ds)
+        sim_id = uuid4().hex[:8]
+        sim_path = Path(out) / f"simulation-{sim_id}.json"
+        artifacts.save_json(sim_path, {"schema": "evalbuilder/simulation/v1", "results": results})
+        simulation = {
+            "sim_id": sim_id, "path": str(sim_path), "scenarios": len(results),
+            "stop_reasons": {r["scenario_id"]: r["stop_reason"] for r in results},
+            "violations": {r["scenario_id"]: r["violations"] for r in results if r["violations"]},
+            "mined": mined, "mock_calls": {r["scenario_id"]: r["mock_calls"] for r in results if r.get("mock_calls")},
         }
-    )
+    _emit({
+        **runs[0], "runs": runs, "repeats": len(runs), "simulation": simulation,
+        "mode": agent.mode, "endpoint": agent.endpoint, "workers": max(1, workers), "backend": backend,
+    })
+
+
+app.command("run", hidden=True)(infer)  # the pre-phase name: identical behaviour
 
 
 @app.command()
@@ -643,31 +705,96 @@ def simulate(
     )
 
 
+def _score_setup(dataset: Path, evaluators: Path, env_file: Optional[Path], config: Optional[Path]):
+    """Dataset, evaluator specs, judge model and thresholds shared by `score` and `eval`."""
+    import yaml
+
+    from evalbuilder.pipeline.config import ThresholdsConfig
+
+    ds = _load_ds(dataset)
+    spec_doc = yaml.safe_load(evaluators.read_text()) or {}
+    specs = spec_doc.get("evaluators", [])
+    if not specs:
+        typer.echo("evaluators.yaml has no evaluators", err=True)
+        raise typer.Exit(1)
+    settings = Settings.load(env_file)
+    judge = settings.judge_model
+    thresholds = ThresholdsConfig()
+    if config is not None:
+        from evalbuilder.pipeline.config import load_config
+
+        cfg = load_config(config)
+        judge, thresholds = cfg.models.judge, cfg.thresholds
+    return ds, specs, judge, thresholds
+
+
 @app.command()
 def score(
     run_path: Path,
     dataset: Path = typer.Option(..., "--dataset"),
     evaluators: Path = typer.Option(..., "--evaluators", help="evaluators.yaml"),
     out: Path = typer.Option(Path("eval/results"), "--out"),
+    workers: int = typer.Option(1, "--workers", help="case-run splits scored concurrently"),
+    backend: str = typer.Option("threads", "--backend", help="joblib backend: threads | processes"),
     env_file: Optional[Path] = typer.Option(None, "--env-file"),
 ) -> None:
-    """Score a run artifact with the configured evaluators; write a report."""
-    import yaml
-
+    """Score one run artifact with the configured evaluators; write and print its report
+    (`evalbuilder eval` scores several runs and aggregates them)."""
     from evalbuilder.evaluators import score_run
     from evalbuilder.schemas import RunArtifact
 
-    ds = _load_ds(dataset)
+    ds, specs, judge, _ = _score_setup(dataset, evaluators, env_file, None)
     run = RunArtifact.model_validate(json.loads(run_path.read_text()))
-    config = yaml.safe_load(evaluators.read_text()) or {}
-    specs = config.get("evaluators", [])
-    if not specs:
-        typer.echo("evaluators.yaml has no evaluators", err=True)
-        raise typer.Exit(1)
-    settings = Settings.load(env_file)
-    report = score_run(run, ds, specs, settings.judge_model)
+    report = score_run(run, ds, specs, judge, workers=workers, backend=backend)
     artifacts.save_json(Path(out) / f"score-report-{run.run_id}.json", report)
     _emit(report.model_dump(by_alias=True))
+
+
+@app.command("eval")
+def eval_runs(
+    runs: list[Path] = typer.Argument(..., help="run artifacts (run-<id>.json) — one score report each"),
+    dataset: Path = typer.Option(..., "--dataset"),
+    evaluators: Path = typer.Option(..., "--evaluators", help="evaluators.yaml"),
+    out: Path = typer.Option(Path("eval/results"), "--out"),
+    workers: int = typer.Option(4, "--workers", help="case-run splits scored concurrently per run (1 = sequential)"),
+    backend: str = typer.Option("threads", "--backend", help="joblib backend: threads | processes"),
+    aggregate: Optional[bool] = typer.Option(None, "--aggregate/--no-aggregate", help="write aggregate.json (default: when more than one run is given)"),
+    config: Optional[Path] = typer.Option(None, "--config", help="pipeline config: its judge model and thresholds are used"),
+    env_file: Optional[Path] = typer.Option(None, "--env-file"),
+) -> None:
+    """Evaluation phase: score stored run artifacts locally (joblib splits) and aggregate
+    repeats into pass rates vs thresholds, slices, stability and a verdict."""
+    from evalbuilder.evaluators import is_judge_spec, score_run
+    from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
+    from evalbuilder.pipeline.layout import stamp
+    from evalbuilder.schemas import RunArtifact
+
+    ds, specs, judge, thresholds = _score_setup(dataset, evaluators, env_file, config)
+    pairs = []
+    reports = []
+    for run_path in runs:
+        run = RunArtifact.model_validate(json.loads(run_path.read_text()))
+        report = score_run(run, ds, specs, judge, workers=workers, backend=backend)
+        report_path = Path(out) / f"score-report-{run.run_id}.json"
+        artifacts.save_json(report_path, report)
+        pairs.append((run, report))
+        reports.append({"run_id": run.run_id, "run": str(run_path), "path": str(report_path),
+                        "metrics": {m: v["avg"] for m, v in report.metrics.items()},
+                        "errors": {m: v["errors"] for m, v in report.metrics.items() if v["errors"]}})
+        typer.echo(f"eval: scored {run.run_id} ({len(report.cases)} case(s))", err=True)
+    summary: dict = {"reports": reports, "workers": max(1, workers), "backend": backend, "aggregate": None}
+    if aggregate or (aggregate is None and len(runs) > 1):
+        judge_metrics = {
+            e.get("name") or (e["prompt"].lower().removesuffix("_prompt") if e["type"] == "openevals" else e["type"])
+            for e in specs if is_judge_spec(e)
+        }
+        agg = aggregate_runs(pairs, ds, thresholds, judge_metrics=judge_metrics)
+        agg_path = Path(out) / "aggregate.json"
+        artifacts.save_json(agg_path, stamp("aggregate", agg))
+        summary["aggregate"] = {"path": str(agg_path), "verdict": agg["verdict"], "overall_score": agg["overall_score"],
+                                "metrics": {m: v["pass_rate"] for m, v in agg["metrics"].items()},
+                                "unstable_cases": len(agg["stability"]["unstable_cases"])}
+    _emit(summary)
 
 
 @app.command()
