@@ -23,7 +23,10 @@ review:
 | `coverage` | `total_cases: 20`, `per_intent: {happy: 2, failure: 1}`, `per_failure_category: 1`, `out_of_intent: 2`, `multi_turn_share: 0.15`, `per_tool_edge_cases: 2` | Per-cell counts are hard minimums; `total_cases` is a floor filled with extra happy variants; `per_tool_edge_cases` = schema-derived edge cases per tool (`schema-edge` cells: missing / wrong / out-of-enum / boundary input, malformed output) |
 | `evaluators` | `expected_tools, contains, contract, correctness` | Same specs as `evaluators.yaml`: deterministic (`expected_tools`, `contains`, `json_valid`, `trajectory_match`), OpenEvals (`correctness`, `contract`, `openevals` + `prompt: NAME_PROMPT`, or any rubric name like `hallucination`), AgentEvals (`trajectory_llm`), `custom` |
 | `thresholds` | `default: 0.8`, `metrics: {}`, `slice_min: 0.5`, `overall_pass: 0.8` | Pass rate per metric, per slice (intent / failure_mode / variant), and overall (mean of metric pass rates) |
-| `runs` | `repeats: 3` | Repeats feed stability detection |
+| `runs` | `repeats: 3` | Repeats feed stability detection. The older `runs.parallel_intents` / `parallel_scoring` / `parallel_simulations` keys still load: they are migrated to `inference.workers` / `evaluation.workers` (simulations share the inference pool; that key is dropped) and each migration is recorded as a preflight problem |
+| `deploy` | `target: local`, `image: {name: null, tag: latest, registry: null, push: auto, extras: []}`, `build: {context: ".", dockerfile: null, include: [], requirements: null}`, `port: 8080`, `namespace: default`, `replicas: 1`, `expose: port-forward`, `env: {}`, `keep: false`, `timeout: 240`, `context: null` | Where the agent (with both mock layers, behind `evalbuilder serve`) runs during inference. `target`: `local` (a subprocess of this interpreter, no Docker), `docker` (Docker Compose on the local daemon, `http://127.0.0.1:<port>`), `kubernetes` (`kubectl`: Deployment + Service), `openshift` (`oc`, prototype: + Route). `image.name` defaults to `evalbuilder-<name>`; `image.registry` prefixes the reference and is where `push: registry` pushes (required for openshift); `push`: `auto` = `registry` when a registry is set, else `load` (stream `docker save` into every node through a privileged loader DaemonSet — what works on Docker Desktop), `none` = the nodes already have it; `image.extras` = evalbuilder extras installed in the image (e.g. `[llm]` for API-key providers). `build.context` is the docker build context (the checkout, which must contain `src/evalbuilder`), `build.dockerfile` replaces the generated one, `build.include` copies extra paths (the target's package always is), `build.requirements` is pip-installed. `expose`: `port-forward` (a `kubectl port-forward`, restarted when it dies; works on every cluster), `nodeport` (`http://<node InternalIP>:<nodePort>`), `route` (openshift only). `env`: container environment; a `null` value copies the variable from the host (API keys) — unset ones are reported. `keep: true` skips the `teardown` stage. `timeout`: seconds to wait for readiness. `context`: kubectl / oc context. Container targets need `models.agent` (and `models.mock` under `on_miss: llm`) to run inside the image — an API-key provider or `scripted:`; `claude-cli` is rejected by `problems()` |
+| `inference` | `workers: 4`, `backend: threads`, `timeout: 120` | joblib parallelism for the infer stage (cases) and the simulate stage (scenarios) against the deployed agent: `workers` conversations at once (1 = sequential), `backend` `threads` (default; the work waits on HTTP) or `processes` (loky), `timeout` seconds per agent request |
+| `evaluation` | `workers: 4`, `backend: threads` | joblib parallelism for scoring: each run's case runs are split into `workers` contiguous chunks scored concurrently (evaluators rebuilt per process worker); the report is identical to a sequential pass |
 | `mocking` | `required: true`, `on_miss: strict`, `strategies: true`, `strategy: default`, `on_invalid: fallback`, `max_repairs: 1` | Layer 1: every mockable tool from `TOOLS` gets a fixture (wildcard default unless `on_miss: llm`); per-case rules inject errors. `on_miss`: `strict` (unmatched call = error), `llm` (layer 2: the LLM mock engine answers from the strategies in `dataset.mocks.strategies` under `models.mock`), `fallback`, `real`. `strategies` pre-generates the strategies; `strategy` is the dataset default (cases / scenarios may select another); `on_invalid` decides what a still-invalid engine answer becomes after `max_repairs` repair rounds (`fallback` = the strategy's `fallback_response`, `strict` = an infrastructure error). Skill loaders are never mocked |
 | `stages` | `skip: []`, `max_retries: 1`, `simulate: true`, `publish: auto` | `publish: auto` runs only when `LANGSMITH_API_KEY` is set |
 | `review` | `auto_approve: false`, `approved_by: ""`, `note: ""` | Without `auto_approve` the pipeline stops at `awaiting_review`; cases already approved/rejected by hand or in the UI are kept (`already_reviewed`) |
@@ -43,6 +46,10 @@ review:
 `uv sync --extra llm` (or `pip install -e '.[llm]'`) installs all three. The same spec works for `models.agent`,
 `models.judge`, `models.generator` and `EVALBUILDER_*_MODEL` in `.env`.
 
+`evalbuilder pipeline init` writes every key above with a comment; `evalbuilder deploy
+render CONFIG [--target T]` prints the Dockerfile / compose file / manifests the
+`deploy` section produces.
+
 ## Artifacts
 
 One naming convention (`src/evalbuilder/pipeline/layout.py`): root artifacts are
@@ -58,7 +65,8 @@ another one** — each kind is `final` (a deliverable), `work` (scratch under
 | `agent-map.json` | `evalbuilder/agent-map/v1` | discover, map | graph, tools (`kind`, `mockable`), prompts, skills, intents, scenarios (`skills`), failure modes, constraints, `applicable_failures` |
 | `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases with review/publication state, `mocks` (both layers), `coverage` (`plan` + `achieved`) |
 | `evaluators.yaml` | – | score | evaluator specs |
-| `results/run-<id>.json` | `evalbuilder/run/v1` | run | outputs, trajectories, tool calls, `mock_calls` ledger per case; `mocking` totals |
+| `deployment.json` | `evalbuilder/deployment/v1` | deploy, teardown | where the agent ran: `target`, `image`, `endpoint`, `expose`, `status` (`up` / `down` / `failed`), `resources` (compose project, namespace + names, loader, port-forward pid), every command executed (`commands`), health facts, the spec |
+| `results/run-<id>.json` | `evalbuilder/run/v1` | infer | outputs, trajectories, tool calls, `mock_calls` ledger and a per-turn `log` (`turn`, `seconds`, `tool_calls`, `error`, `mode`, `endpoint`) per case; `mocking` totals; `execution` (`mode`, `endpoint`, `workers`, `backend`, `seconds`) |
 | `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores |
 | `aggregate.json` | `evalbuilder/aggregate/v1` | aggregate | pass rates vs thresholds, slices, stability, verdict |
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |
@@ -73,7 +81,8 @@ another one** — each kind is `final` (a deliverable), `work` (scratch under
 | `work/mock-rules.json` | `evalbuilder/mock-rules/v1` | mocks | `tools`: tool → ordered rules (layer 1); handed to the dataset stage, kept for good in `dataset.mocks.tools` |
 | `work/mock-strategies.json` | `evalbuilder/mock-strategies/v1` | mocks | `world` + `strategies`: id → description, per-tool `behavior`, `examples`, `fallback_response` (layer 2); kept in `dataset.mocks.strategies` |
 | `work/state.json` | `evalbuilder/pipeline-state/v1` | engine | stage status, problems, `data.stopped_after` (drives `--resume`) |
-| `work/run-progress.json` | `evalbuilder/run-progress/v1` | run | live per-case / per-intent progress of the run stage |
+| `work/run-progress.json` | `evalbuilder/run-progress/v1` | infer | live per-case / per-intent progress of the infer stage (+ `endpoint`, `workers`, `backend`) |
+| `work/deploy/` | – | deploy | the generated `Dockerfile`, `compose.yaml` (docker), `manifests.yaml` + `loader.yaml` (kubernetes / openshift), `commands.log` (every external command with exit code and output tail), `serve.log` (local target), `port-forward.log` (kubernetes) |
 | `work/job.json` (+ `pipeline.log`) | `evalbuilder/pipeline-job/v1` | UI | background run launched from the UI: mode, argv, pid, timing, exit code |
 
 ### Derived — no file; read them out of their parent
@@ -102,22 +111,24 @@ moves them onto the current one.
 | dataset | map, mocks | invalid cases dropped; missing cells re-requested once; gaps reported |
 | review | dataset | self-review rejects; stops with `awaiting_review` unless `auto_approve` |
 | verify | review | blocking when expected calls have no rule or a tool is unmocked; under `on_miss: llm` misses are counted (`llm_answered_calls`) and a tool is covered by a rule or the default strategy |
-| run | verify | retried once; infrastructure errors per case recorded |
-| score | run | judge errors recorded per metric, never as agent failures |
+| deploy | verify | blocking: the target is unavailable (`docker` / `kubectl` / `oc` missing, daemon or cluster unreachable — preflight already checks this), the build or a command fails, or the container / server never becomes healthy within `deploy.timeout` (the failed `deployment.json` and `work/deploy/commands.log` hold the diagnosis); a deployment that is already up and healthy is reused |
+| infer | deploy | `runs.repeats` × every approved case against the deployed agent (`inference.workers`); retried once; infrastructure errors per case recorded; a run where every case is an infrastructure error fails the stage |
+| simulate | deploy, review (optional) | scenarios through the same deployed agent; failure never blocks the verdict |
+| teardown | deploy (optional) | removes the deployment after infer / simulate; skipped by config when `deploy.keep` is true; a failure is a problem, not an incomplete verdict |
+| score | infer | judge errors recorded per metric, never as agent failures; `evaluation.workers` splits |
 | aggregate | score | – |
-| simulate | review (optional) | failure never blocks the verdict |
 | publish | review (optional) | skipped without key |
 | analyze | aggregate (optional) | deterministic fallback |
 | report | always | – |
 
-Verdict: `incomplete` if any required stage (preflight … aggregate) did not succeed;
-otherwise `pass`/`fail` from thresholds.
+Verdict: `incomplete` if any required stage (preflight … verify, deploy, infer,
+score, aggregate) did not succeed; otherwise `pass`/`fail` from thresholds.
 
 ## Run control
 
 | flag | effect |
 |---|---|
-| `--until STAGE` | stop deliberately after `STAGE`; later stages are `skipped` (`stopped after <stage> (--until)`), the report lands, exit code 0. `--until dataset` = intents + mocks + cases only |
+| `--until STAGE` | stop deliberately after `STAGE`; later stages are `skipped` (`stopped after <stage> (--until)`), the report lands, exit code 0. `--until dataset` = intents + mocks + cases only; `--until deploy` leaves the agent running (`evalbuilder deploy status DIR`, `deploy down DIR`) |
 | `--resume` | reuse completed stages from `work/state.json` (the report is always rebuilt) |
 | `--resume --from STAGE` | invalidate `STAGE` and everything after it, then rerun |
 
@@ -125,6 +136,12 @@ Feedback loop: `--until dataset` → append a `feedback` entry (or `instructions
 config → `--resume --from dataset --until dataset` (or `--from map` / `--from mocks`) →
 `--resume` to approve and evaluate. The UI's *Run & review* page drives exactly these
 commands as background jobs.
+
+Phase commands (the same code the stages run): `evalbuilder deploy up|status|down|
+build|render|logs`, `evalbuilder infer DATASET [--deployment DIR | --endpoint URL]
+[--scenarios F] [--repeats N] [--workers N] [--backend threads|processes]`,
+`evalbuilder eval RUN… --dataset D --evaluators F [--workers N] [--aggregate]
+[--config CFG]`. `deploy up` reuses a deployment that is already up and healthy.
 
 ## Tool schemas in the agent map
 

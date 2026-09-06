@@ -284,3 +284,101 @@ present the same kind whichever way they got it — no page or stage knows about
 the dataset stage itself reads the `work/` handoff so a stale `dataset.json` cannot
 shadow the rules the current run just authored. `evalbuilder pipeline compact <dir>`
 migrates an older output directory in place, idempotently.
+
+## 22. The agent runs behind an HTTP server on a deployment target (2026-09-06)
+
+**Decision.** The pipeline never imports the target agent into its own process. The
+`deploy` stage runs it — with both mock layers — behind `evalbuilder serve` on the
+config's `deploy.target`: `local` (a detached subprocess of the same interpreter),
+`docker` (Docker Compose on the local daemon), `kubernetes` (`kubectl`; Docker Desktop's
+cluster or any other) or `openshift` (`oc`, a prototype). Every target implements one
+interface (`available`, `render`, `build`, `up`, `status`, `logs`, `down`), goes through
+one logged `CommandRunner`, writes what it generated to `work/deploy/` before using it,
+and leaves `deployment.json` behind. The `infer` and `simulate` stages talk to the
+recorded endpoint through `RemoteAgent`; the server is stateless (the full OpenAI-format
+history and the mock block travel with every request, the LLM mock engine's history as
+`mocks.history`), so replicas are interchangeable. `local` is the same path, which is
+what lets the offline test suite cover deploy → infer → eval without Docker.
+
+**Alternatives.** (a) Keep the in-process runner for `local` and add the HTTP path only
+for containers — rejected: two inference code paths, two mock-installation paths, and
+the offline tests would never exercise the one that matters. (b) A stateful server with
+conversation ids — rejected: it needs a session store, pins a conversation to one
+replica and complicates retries; `convert_to_openai_messages` / `convert_to_messages`
+round-trip tool calls exactly, so full-history requests cost nothing. (c) Bake the
+dataset into the image — rejected: mocks travel per request, so a regenerated dataset
+needs no rebuild. (d) FastAPI / uvicorn / `requests` — rejected: two JSON routes do not
+justify three dependencies in the image; the stdlib server and `urllib` suffice.
+
+**Consequence.** Models that only exist on the host cannot serve the agent: a
+`claude-cli:` agent or mock model is refused by `problems()` under a container target
+(the generator and the judges still run on the host). The generated Dockerfile assumes
+the evalbuilder checkout as build context; a foreign project brings its own
+`build.dockerfile`. `teardown` is a stage of its own (optional, after `simulate`,
+skipped with `deploy.keep`), and `--until deploy` leaves the agent up for probing.
+
+## 23. Kubernetes images through a loader DaemonSet; port-forward as the endpoint (2026-09-06)
+
+**Decision.** On Kubernetes the image is distributed by `push_mode`: `registry`
+(`docker push`, pull policy `Always`), `load` (a privileged `hostPID` DaemonSet on every
+node through which `docker save IMAGE` is streamed into containerd — `kubectl exec -i …
+nsenter -t 1 … ctr -n k8s.io images import -` — pull policy `Never`) or `none`; `auto`
+means `registry` when `deploy.image.registry` is set, else `load`. The pipeline reaches
+the Service through a detached `kubectl port-forward` by default (`expose: nodeport`
+uses the node's InternalIP, `route` is OpenShift's), whose pid is recorded and which
+`status` restarts when it died. OpenShift defaults to `registry` and `route`.
+
+**Alternatives.** (a) Rely on the cluster seeing local images — rejected: verified on
+Docker Desktop's kind-based cluster, where `imagePullPolicy: Never` yields
+`ErrImageNeverPull` for a locally built image and `docker desktop kubernetes` offers no
+image-load command. (b) A local registry the nodes pull from — rejected: the nodes'
+containerd would need an insecure-registry entry, which Docker Desktop manages and hides.
+(c) NodePort or LoadBalancer as the endpoint — rejected: on the same cluster a
+LoadBalancer gets an address on the kind network and neither it nor the NodePort is
+reachable from the host; a tunnel works on every cluster, at the price of one process.
+(d) Compose Bridge / Helm for the manifests — rejected: a Deployment, a Service and an
+optional Route are a few dozen lines of YAML the user can read.
+
+**Consequence.** `load` needs privileged pods (fine on Docker Desktop, minikube, kind;
+not on OpenShift, hence its `registry` default). A port-forward is a single tunnel to
+the Service, not a load balancer over replicas. Everything the target ran is in
+`deployment.json`'s `commands` and `work/deploy/commands.log`.
+
+## 24. joblib for the inference and evaluation phases (2026-09-06)
+
+**Decision.** `inference.py` runs cases and scenarios with `joblib.Parallel(n_jobs,
+prefer="threads"|"processes", return_as="generator")`; `evaluators.score_run` scores
+contiguous case-run splits the same way (`evaluation.workers` / `backend`). The unit of
+work is one conversation (a case with all its turns, or a scenario) or one scoring
+split; the agent clients pickle (models are rebuilt from specs in the worker), so both
+backends see identical inputs, and the ordered generator keeps results — and therefore
+artifacts — identical to a sequential pass while progress is reported after every item.
+
+**Alternatives.** (a) Keep the `ThreadPoolExecutor` pools and the intent-group
+grouping — rejected: the grouping existed to keep cases of one intent sequential in a
+shared process; with a stateless server every case is independent, and one library
+with a process option covers the CPU-bound in-process case (scripted agents) too. (b)
+`asyncio` — rejected: the agent, the judges and the mock engine are synchronous
+LangChain calls; threads are the natural fit and processes are a config switch.
+
+**Consequence.** `runs.parallel_intents` / `parallel_scoring` / `parallel_simulations`
+became `inference.workers` / `evaluation.workers` (and one pool for cases and
+scenarios); old configs are migrated on load with a note. A model object (an injected
+test generator as the simulated user) forces the threads backend.
+
+## 25. `run` → `infer`, `score` → `eval`; the old names stay as aliases (2026-09-06)
+
+**Decision.** The phases are named the same everywhere: config sections `deploy` /
+`inference` / `evaluation`, stages `deploy` / `infer` / `teardown` (plus `score` and
+`aggregate` inside the evaluation phase), commands `evalbuilder deploy`, `evalbuilder
+infer`, `evalbuilder eval`. `evalbuilder run` is a hidden alias of `infer` with identical
+behaviour; `evalbuilder score` stays for one run (the interactive skills use it) and
+`eval` is the multi-run, aggregating form. Readers accept both stage names: the report,
+the UI loader and the progress widget fall back to `stages.run` in a directory written
+before the rename, and the run artifact keeps its file name (`results/run-<id>.json`).
+
+**Reasoning.** A phase that has its own command, config section, stage and artifact
+should carry one name in all four places; keeping the pre-phase names as aliases costs
+one decorator each and spares the skills and scripts an edit. **Consequence:** a
+`work/state.json` from an older run resumes by re-executing `deploy` and `infer` (there
+is no cached `infer` record), which is the safe outcome.

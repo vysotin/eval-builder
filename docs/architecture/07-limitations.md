@@ -12,7 +12,21 @@ yet built.
 | Target contract required | The module must expose `TOOLS` and `build_agent(model=None, tools=None)`; agents without that seam need a ~10-line adapter. |
 | Input shape | The graph must accept `{"messages": [...]}`; state beyond `messages` is neither injected nor captured; `outputs.response` is the last message's text. |
 | Multi-turn replay | Follow-up turns re-invoke the graph with the accumulated message list; checkpointer-thread state is not preserved between turns. |
-| No per-case timeout | Long or hung agent calls block their intent group; cases within one intent run serially (`runs.parallel_intents` controls the run-stage thread pool), while scoring and simulations parallelize per case run / per scenario (`runs.parallel_scoring`, `runs.parallel_simulations`; 1 = fully sequential everywhere). |
+| Per-request timeout only | Against a deployed agent every turn has the HTTP timeout (`inference.timeout`, default 120 s); an in-process call (`infer` without an endpoint, `run_dataset`) has none. Cases, scenarios and scoring splits parallelize with joblib (`inference.workers`, `evaluation.workers`; 1 = sequential; `backend: processes` for CPU-bound in-process agents). |
+
+## Deployment
+
+| limitation | notes / workaround |
+|---|---|
+| `claude-cli` models cannot run in the container | The `claude` binary and its login are not in the image: under `docker` / `kubernetes` / `openshift` the agent model and the mock model (`models.mock`, or the generator under `on_miss: llm`) must be an API-key provider (key passed through `deploy.env: {ANTHROPIC_API_KEY: null}`) or a `scripted:` model — `problems()` refuses the config otherwise. The generator and the judges run on the host and may still use `claude-cli`. |
+| Generated Dockerfile assumes the evalbuilder checkout | The build context must contain `pyproject.toml`, `README.md`, `src/` and the target's top-level package (`deploy.build.include` adds paths, `requirements` a pip file); a target living in another repository brings its own `deploy.build.dockerfile` (used verbatim) that installs evalbuilder and runs `evalbuilder serve`. A `.dockerignore` keeps `.venv`, `.git`, `eval/` and the example artifacts out of the context. |
+| `load` needs privileged pods | The image loader is a `hostPID`, privileged DaemonSet (what `kind load` does through the Kubernetes API); clusters that forbid it (OpenShift by default) need `image.registry` + `push: registry`. `push: none` is for clusters that already share the image store (Docker Desktop's kubeadm provisioner). |
+| A port-forward is one tunnel | `expose: port-forward` runs a single `kubectl port-forward` process to the Service — `deploy status` / `infer` restart it when it died, but it is not load-balanced over replicas and it lives only as long as the host process tree. `nodeport` needs the node's InternalIP to be routable from the host (it is not on Docker Desktop's kind cluster). |
+| OpenShift is a prototype | The `oc` path (registry push, Route endpoint, `oc whoami`) is exercised against a fake command runner only; no live cluster was available. |
+| Docker target binds the container port on the host | `deploy.port` is mapped to the same host port (`8080:8080`); a busy port fails `compose up`. Change `deploy.port`. |
+| Secrets in rendered files | `deploy.env` values — including keys copied from the host — are written in plain text into `work/deploy/compose.yaml` / `manifests.yaml` and appear in the Dockerfile-less command log; `work/` is scratch and git-ignored under `eval/`, but treat the directory as sensitive. |
+| Engine history travels per request | With a stateless server the LLM mock engine is rebuilt per turn and seeded with `mocks.history` (tool/args/answer of earlier turns, rebuilt from the ledger) instead of one engine object per conversation; consistency across turns is what the history prompt gives, not shared state. |
+| One deployment per output directory | `deployment.json` records one deployment; `deploy up` reuses it while healthy and replaces it otherwise. Two pipelines on the same directory would fight over it. |
 
 ## Discovery and schemas
 
@@ -56,6 +70,7 @@ yet built.
 | Problems persist across resumes | Earlier warnings stay in `problems` (history) even after the stage recovered; read them with the stage status. By design. |
 | Batching | Cases are generated in batches of six cells with one re-request; a weak generator can leave gaps, which are reported, not filled silently. |
 | Sub-agents as nodes are not mocked separately | Specialist nodes run as part of the graph; only their tools are mocked (by design, decision 6). |
+| Legacy configs are rewritten on load | `runs.parallel_intents` / `parallel_scoring` / `parallel_simulations` become `inference.workers` / `evaluation.workers` (the last one is dropped); the rewrite is noted in preflight `problems`, and `to_yaml` writes the new keys. |
 
 ## Models and providers
 
@@ -89,5 +104,6 @@ yet built.
 |---|---|
 | Browser tests need chromium | `playwright install chromium` (via `uv run` or the activated venv); the suite skips itself otherwise. |
 | Python ≥ 3.11.7 | Tested on 3.12 with uv and on 3.11 with a plain `venv` + `pip` (`scripts/cli-smoke.sh` is the no-uv end-to-end check); the `dev` extra exists because older pips cannot install PEP 735 dependency groups. |
-| Live runs are not in CI | The committed `docs/examples/*` directories are the fixtures; a real model run is manual and slow. |
+| Live runs are not in CI | The committed `docs/examples/*` directories are the fixtures (written before the deploy phase, so they carry no `deployment.json` and name the stage `run`); a real model run is manual and slow. |
+| Docker / Kubernetes tests are opt-in | `tests/test_deploy_integration.py` (marker `docker`, excluded by the default `addopts`) builds the weather-bot image and deploys it for real; run `pytest -m docker` on a machine with the daemon and a `kubectl` context. Everything else exercises the targets against a fake command runner and the `local` target for real. |
 | Streamlit internals | The browser tests encode Streamlit 1.62 DOM details (react-aria comboboxes, canvas dataframes); a Streamlit upgrade may need locator updates. |

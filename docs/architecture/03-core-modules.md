@@ -17,7 +17,11 @@ inside it and their reasoning, and its limitations. The pipeline-only modules ar
   `metadata`, `review{status, note}`, `publication{langsmith_example_id}`), `target`
   (`module`, `factory`), dataset-level `mocks`, `langsmith` ids.
 - `RunArtifact` (`evalbuilder/run/v1`) with `CaseRun` (`outputs`, `trajectory`,
-  `tool_calls`, `node_path`, `error`, `error_class ∈ none|agent|infrastructure`).
+  `tool_calls`, `node_path`, `error`, `error_class ∈ none|agent|infrastructure`,
+  `mock_calls` — the mock ledger — and `log`, one entry per conversation turn:
+  `{turn, seconds, tool_calls, error, mode, endpoint}`); the artifact carries `mocking`
+  (policy, model, strategy, per-layer call totals) and `execution` — how the inference
+  phase ran: `{mode: local|remote, endpoint, workers, backend, seconds}`.
 - `Report` (`evalbuilder/score-report/v1`; the legacy id `evalbuilder/report/v1` is
   still accepted by the layout registry): `metrics`, `slices`, `cases`.
 
@@ -171,37 +175,225 @@ argument for that reason). `example()` cannot satisfy arbitrary regex patterns. 
 validator does not implement `format` semantics, `dependentRequired`, `if/then`,
 `uniqueItems`, or `$ref` outside `#/$defs/`.
 
-## Target contract and execution (`target.py`, `runner.py`)
+## Target contract and the primitives (`target.py`)
 
 The **target contract** is the only thing an agent repository must provide: a module
 exposing `TOOLS` (a list of LangChain tools) and `build_agent(model=None, tools=None)`
 returning a compiled graph. `build_graph` passes only the overrides it was given so a
 factory's own defaults (e.g. a scripted model) still apply.
 
-`run_case` streams the graph with `stream_mode=["updates", "values"]` to capture the
-node path and the final state, replays `metadata.user_turns` sequentially for
-multi-turn cases (appending to the same message list), converts messages to
-OpenAI-style dicts (`convert_to_openai_messages`) as the **trajectory**, extracts
-`tool_calls` from `AIMessage.tool_calls`, and returns the last message's content as
-`outputs.response`. Any exception becomes `error_class=agent`.
+`invoke_messages(graph, messages)` streams the graph with `stream_mode=["updates",
+"values"]` and returns the final state plus the node path; `extract(state)` converts the
+messages to OpenAI-style dicts (`convert_to_openai_messages`) as the **trajectory**,
+collects `tool_calls` from every `AIMessage`, and returns the last message's content as
+the response; `is_mock_engine_error(exc)` recognises a `MockEngineError` in the cause
+chain (an infrastructure failure, not the agent's). `run_case` keeps the older
+one-call-per-case shape on top of the same primitives (multi-turn replay of
+`metadata.user_turns`, `error_class=agent` on exceptions).
 
-`run_dataset` selects approved cases (or explicit ids, refusing non-approved ones),
-rebuilds the graph **per case** with tools wrapped by the merged mock rules
-(dataset-level overridden per tool by per-case rules) and the injected model, and
-classifies factory failures as `infrastructure`. It writes `run-<uuid8>.json`.
+## Agent clients (`agent_client.py`)
 
-**Reasoning.** Rebuilding per case is what makes per-case mock overrides (error
-injections) possible with immutable compiled graphs. Separating `agent` from
-`infrastructure` errors lets aggregation and the report keep "the agent misbehaved"
-apart from "the harness could not run".
+One `invoke(messages, mocks, mocked=True) -> InvokeResult` contract with two
+implementations; both pickle, so joblib's process backend can hand them to workers:
+
+- `InvokeResult` — `messages` (the full history after the turn, OpenAI format),
+  `response`, `tool_calls` (of the whole history), `node_path` (this turn), `mock_calls`
+  (this turn's ledger), `error`, `error_class`, `seconds`; `to_dict` / `from_dict` are
+  the wire format.
+- `LocalAgent(module, factory, agent_model_spec=, mock_model_spec=, agent_model=,
+  mock_model=)` — imports the target lazily and builds a graph (and fresh tool wrappers)
+  **per call**: rules from `mocks.tools`, the policy from `mocks.on_miss`, and under
+  `llm` an `LLMMockEngine` from `mocks.strategies` / `mocks.strategy` / `mocks.llm`,
+  seeded with `mocks.history` (the tool/args/answer triples of earlier turns) so a
+  stateless server keeps a conversation consistent. The engine's model is the client's
+  own (an object, or `mock_model_spec` — what the deployment configured) and the
+  request's `llm.model` spec is only the fallback. Building the agent is an
+  `infrastructure` error; a mock-engine failure is too; anything else is `agent`.
+  `health()` imports the module, checks the factory exists and builds a configured mock
+  model, so a broken target fails at start-up rather than on the first request.
+  Objects built lazily are dropped on pickling and rebuilt from the specs in the worker.
+- `RemoteAgent(endpoint, timeout)` — `POST /invoke` and `GET /health` over `urllib`;
+  connection failures and non-200 answers come back as `infrastructure` results.
+- `mocks_for_case(ds_mocks, case_meta, on_miss=, strategy=)` — the block one request
+  carries: dataset rules with the case's overrides on top (`merge_mock_rules`), the
+  policy (flag > dataset > `real`), the strategy (the case's own `metadata.mocks.strategy`
+  always wins over the run-level one), `strategies` and `llm` when the dataset has them.
+- `agent_for(endpoint=, module=)` — a remote client when an endpoint is given, else local.
+
+**The conversation is stateless.** The caller sends the full history and gets the full
+history back — tool calls and tool results included — so the next turn is `messages +
+[user]`. `convert_to_openai_messages` / `convert_to_messages` round-trip exactly (tool
+calls included), which is what makes replicas interchangeable and the server free of
+any session store.
+
+## The agent server (`serve.py`)
+
+A stdlib `ThreadingHTTPServer` (`AgentServer`; no web framework in the image) with two
+routes: `GET /health` → `LocalAgent.health()` + `server: evalbuilder/serve/v1` (500 with
+the error when the target is broken), `POST /invoke` with `{messages, mocks?, mocked?}`
+→ `InvokeResult.to_dict()` (400 for a missing body, invalid JSON, an empty `messages`
+list or a non-object `mocks`; 404 elsewhere). `make_server(agent, host, port=0)` binds
+(port 0 = any free port; `.endpoint`, `.serve_in_thread()` for tests) and `serve(module,
+factory, host, port, agent_model, mock_model)` is the blocking entry point of
+`evalbuilder serve`, the agent image's `CMD` and the `local` target; it calls `health()`
+before listening so a bad module, factory or mock model exits at start-up (the local
+target notices the dead process instead of waiting for the readiness timeout).
+
+## The inference engine (`inference.py`)
+
+Every unit of work is one conversation — a case (its first message plus every
+`metadata.user_turns` entry) or a scenario — run through `agent.invoke` turn by turn,
+so it needs nothing but a picklable client and plain dicts:
+
+- `parallel(workers, backend)` → `joblib.Parallel(n_jobs, prefer="threads"|"processes",
+  return_as="generator")`: results arrive in submission order, which keeps progress
+  reporting and artifact order trivial for both backends (`n_jobs=1` runs inline).
+- `run_conversation(agent, opening, user_turns, mocks)` — replays the turns, carries
+  `mocks.history` from the accumulated ledger, records one `log` entry per turn and
+  stops at the first turn that errors; returns the pieces of a `CaseRun`.
+- `infer_cases(agent, ds, cases, workers=, backend=, on_miss=, strategy=, progress=)` —
+  one task per case, `mocks_for_case` per case, a failed task is a `CaseRun` with an
+  error (never an exception), `progress` is called in the parent after every case with
+  `{case_id, intent, error_class, error, completed, total}`.
+- `select_cases(ds, ids)` (approved only; explicit ids must be approved) and
+  `infer_dataset(ds, dataset_path, agent, out_dir=, …)` → `run-<id>.json` with `mocking`
+  totals and the `execution` block.
+- `simulate_scenarios(agent, scenarios, mocks=, user_model_spec=, user_model=, workers=,
+  backend=, …)` — `simulate.simulate_scenario` stepping through the client; a scenario's
+  `mock_strategy` selects the engine strategy; results carry `mock_calls`, `mock_strategy`
+  and a per-turn `log`; an agent error becomes a result with `stop_reason: error`. The
+  simulated user is passed as a spec so process workers build their own (a model object
+  forces the threads backend).
+- `local_agent_for(ds, model=, model_spec=, mock_model=, mock_model_spec=)` and
+  `summarize_mock_calls(results)` are the small helpers the CLI and the stages share.
+
+**Reasoning.** `threads` is the default because the work is waiting on the agent (HTTP
+or model calls); `processes` (loky) exists for CPU-bound in-process agents, and the
+clients rebuild their models from specs inside the worker. Intent-group parallelism went
+away with the stateless server: every case is independent, so the case is the unit.
+
+## The runner (`runner.py`) and simulation (`simulate.py`)
+
+`run_dataset(ds, dataset_path, mocked=, ids=, out_dir=, model=, on_miss=, fallback=,
+max_workers=, workers=, backend=, progress=, mock_model=, mock_model_spec=, strategy=)`
+is the in-process convenience the interactive CLI and the tests use: it wraps the
+target in a `LocalAgent` (objects win over specs) and hands the work to
+`infer_dataset`; `max_workers` is the older name of `workers`. `tool_specs_of(module)`
+and `build_engine(model, ds, specs, strategy)` are shared with the `mock` commands.
+
+Scenarios (YAML) have `id`, `persona`, `goal`, `opening`, `followups[]`, `max_turns`
+and stop conditions (`success_contains`, `expect.contains`, `expect.not_contains`).
+`simulate_scenario(step, scenario, user_model=)` drives one scenario through a **step**
+— a callable taking the text transcript so far and returning the assistant's reply — with
+scripted follow-ups first, then a simulated user prompted with persona, goal and the
+last six transcript entries. A compiled graph is accepted too (`graph_step` adapts it).
+Stop reasons: `success` (needle seen), `exhausted` (no more user messages), `max_turns`
+(a truncation, reported as a violation when a success needle was expected).
+`mine_failures` turns violating runs into **pending** cases (`source=simulation`,
+`failure_mode=simulation-violation`, later turns in `user_turns`, transcript tail kept).
 
 **Limitations.** Multi-turn replay re-invokes the graph with the accumulated message
 list — graphs relying on a checkpointer thread id for state get a fresh state each
 turn; `outputs.response` is the last message's text (structured/state outputs beyond
-`messages` are not captured); there is no per-case timeout; parallelism is per intent
-group only (`max_workers` > 1 runs intent groups in threads, cases within one intent
-stay sequential, and an optional `progress` callback reports each completed case);
-the graph must accept `{"messages": [...]}` as input.
+`messages` are not captured); the per-request timeout is the HTTP client's
+(`inference.timeout`), there is none for an in-process call; the graph must accept
+`{"messages": [...]}` as input; the simulated user is a plain prompt, expectations are
+substring checks, and each scenario turn re-sends the plain role/content transcript
+(tool-call history is not replayed).
+
+## Deployment targets (`deploy/`)
+
+`spec.py` — `DeploymentSpec` (what to deploy: name, target, module/factory, image
+reference, `push`, registry, extras, build context / Dockerfile / includes /
+requirements, port, namespace, replicas, `expose`, the resolved container `env`, keep,
+timeout, kube context, the agent and mock model specs, `work_dir`) built by
+`spec_from_config(cfg, out_dir, target=)` — which also returns the `deploy.env` names
+requested from the host but unset — and `DeploymentRecord`, the `deployment.json`
+artifact (`evalbuilder/deployment/v1`: target, image, endpoint, expose, `status ∈
+pending|up|failed|down`, per-target `resources`, timestamps, the `commands` executed,
+`details`, the spec). `resource_name` makes DNS-1123 names (`evalbuilder-<name>`).
+
+`runner.py` — `CommandRunner`: `run(argv, input=, check=, timeout=, env=, cwd=)`,
+`pipe(producer, consumer)` (a real pipe, so an image tarball never sits in memory),
+`spawn(argv, log_path=)` (a detached process in its own session; returns the pid),
+`which`, `pid_alive` (reaps zombies first), `kill` (SIGTERM the group, then SIGKILL).
+Every call is appended to `history` (what the record embeds) and to
+`work/deploy/commands.log`; a non-zero exit raises `CommandError` with the output tail.
+Targets never import `subprocess`; tests inject a fake runner.
+
+`render.py` — the generated files: `render_dockerfile` (`python:3.12-slim`, copies
+`pyproject.toml`, `README.md`, `src/`, the target's top-level package (`package_dir`)
+and `build.include`, `pip install ".[extras]"` plus `build.requirements`, a `HEALTHCHECK`
+on `/health`, `CMD evalbuilder serve --module … --factory … --host 0.0.0.0 --port …`;
+model specs travel as environment, not as flags), `render_compose` (one service with
+`build`, `image`, `ports: [port:port]`, `environment` from `server_env` — the user's
+variables plus `EVALBUILDER_AGENT_MODEL` / `EVALBUILDER_MOCK_MODEL` — and a healthcheck),
+`render_manifests` (a Deployment with readiness / liveness probes on `/health` and the
+given `imagePullPolicy`, a ClusterIP or NodePort Service, and a Route under `expose:
+route`), `render_loader` (the privileged, `hostPID` `busybox` DaemonSet
+`<resource>-image-loader`).
+
+`base.py` — the interface every target implements: `available() -> (ok, reason)`,
+`render(spec) -> {file: content}`, `build(spec) -> image`, `up(spec) -> record`,
+`status(spec, record) -> {ready, endpoint, health, replicas, details}`, `logs`, `down`;
+plus `write_files` (render into `work/deploy/`), `wait_healthy(endpoint, timeout,
+alive=, diagnose=)` (poll `/health`; fail at once when the process behind the endpoint
+is gone, with its last log lines), `finish` (store the health facts and the command
+history on the record) and `failed`. The health probe and `sleep` are injectable.
+
+The targets (`deploy/__init__.py::TARGETS`):
+
+- **local** (`local.py`) — `spawn(python -m evalbuilder.cli serve --module M --factory
+  F --host 127.0.0.1 --port <free port>)` with the container environment, cwd = the
+  project root, output in `work/deploy/serve.log`; `status` = pid alive + `/health`;
+  `down` kills the process group. No Docker.
+- **docker** (`docker_compose.py`) — `available` = `docker info` + `docker compose
+  version`; `up` = write Dockerfile + `compose.yaml`, `docker compose -p <resource> -f
+  … up -d --build --wait --wait-timeout <timeout>`, endpoint `http://127.0.0.1:<port>`;
+  `status` parses `compose ps --format json`; `logs` = `compose logs --tail`; `down` =
+  `compose down --remove-orphans`.
+- **kubernetes** (`kubernetes.py`) — `available` = `kubectl get nodes` (+ `docker` for
+  the build); `up` = `docker build`, then image distribution by `push_mode`: `registry`
+  (`docker push`, pull policy `Always`), `load` (apply the loader DaemonSet, wait for its
+  rollout, list its pods, and for each one `docker save IMAGE | kubectl exec -i POD --
+  nsenter -t 1 -m -u -i -n -- ctr -n k8s.io images import -`; pull policy `Never`) or
+  `none` (`IfNotPresent`; `auto` = `registry` when a registry is configured, else `load`),
+  then `kubectl apply -f manifests.yaml`, `kubectl rollout status deployment/…
+  --timeout`, and the endpoint: `port-forward` (a detached `kubectl port-forward
+  svc/<resource> <free local port>:<port> --address 127.0.0.1`, pid + port recorded) or
+  `nodeport` (`http://<node InternalIP>:<nodePort>`). `status` reads the Deployment JSON
+  (`readyReplicas`) and **restarts a dead port-forward** (`ensure_endpoint`), so a
+  later `infer` finds a live tunnel; `down` kills the tunnel, `kubectl delete -f
+  manifests.yaml`, and deletes the loader DaemonSet. Every command honours
+  `deploy.context` (`--context`) and `deploy.namespace` (`-n`).
+- **openshift** (`openshift.py`, prototype) — the Kubernetes target with `cli = "oc"`,
+  `available` = `oc whoami`, `push` defaulting to `registry` (and refusing to run
+  without `deploy.image.registry`), `expose: route` adding a Route object and reading
+  the endpoint from `oc get route … -o jsonpath={.spec.host}` (`https` when the route
+  has TLS termination). Exercised against a fake `oc` only.
+
+`deploy/__init__.py` — `target_for(kind, runner=, log=)`, `record_path` / `load_record`
+(the `deployment` artifact kind), `default_runner` (logging to `work/deploy/commands.log`),
+and the entry points the CLI, the stages and the UI share: `deploy_render`,
+`deploy_build`, `deploy_up` (checks `available()`, reuses a recorded deployment that is
+still up and healthy — otherwise tears it down first — writes the failed record before
+re-raising), `deploy_status` (live facts, saved back onto the record), `deploy_logs`,
+`deploy_down` (marks the record `down` and clears the endpoint). They accept a
+`PipelineConfig` or an output directory (the spec is rebuilt from the record).
+
+**Reasoning.** Rendering everything to disk before use and logging every command keeps
+the deployment inspectable (`evalbuilder deploy render`, `work/deploy/commands.log`,
+the record's `commands`). The `load` distribution and the port-forward default come
+from what was verified on Docker Desktop's kind-based cluster: locally built images are
+not visible to the nodes, and NodePort / LoadBalancer services are not reachable from
+the host — streaming `docker save` into each node's containerd through a privileged
+pod is what `kind load` does, only through the Kubernetes API, and a tunnel works on
+every cluster. A registry push is one config key away and is what OpenShift uses.
+
+**Limitations.** See [07-limitations.md](07-limitations.md#deployment): the generated
+Dockerfile assumes the evalbuilder checkout as build context, `load` needs privileged
+pods, a port-forward is one tunnel, the docker target binds the container port on the
+host, and `claude-cli` models cannot run inside the image.
 
 ## Mocking (`mocking.py`, `mock_engine.py`)
 
@@ -248,8 +440,10 @@ instability to LLM-mocked calls.
 only (nodes calling services directly are not intercepted); wrapped tools drop
 tool-level settings such as `handle_tool_error`; the engine's history is per
 conversation, not per dataset (two cases can get different answers for the same
-unknown id — by design, and visible in the ledger); prompt size grows with the
-strategies document and the tool schemas.
+unknown id — by design, and visible in the ledger), and with a stateless agent server
+it is carried in the request (`mocks.history`, rebuilt from the ledger of earlier
+turns) rather than held by one engine object; prompt size grows with the strategies
+document and the tool schemas.
 
 ## Evaluators (`evaluators.py`)
 
@@ -259,10 +453,13 @@ raises `EvaluatorNotApplicable` (case has no reference → `skipped`) /
 case of a run, records per-case `scores`/`errors`/`skipped`, per-metric
 `{n, avg, min, max, errors, skipped}`, and per-slice means for `intent`,
 `failure_mode`, `variant`. A case that errored during the run scores 0 on every
-metric with the error as comment. With `max_workers > 1` the case runs are scored
-concurrently in a thread pool (each case still runs its evaluators in order); rows,
-metrics and slices are aggregated in run order afterwards, so the report is identical
-to a sequential pass.
+metric with the error as comment. `score_rows(run, ds, specs, judge_model, case_ids)`
+is the unit of work — it builds the evaluators itself, so a process worker can run it —
+and `score_run(…, workers=, backend=)` splits the case runs into contiguous chunks
+(`_chunks`), scores them with `joblib.Parallel` (`threads`, or loky `processes`; each
+worker rebuilds the evaluators from the specs), and assembles rows, metrics and slices
+in run order afterwards, so the report is identical to a sequential pass. `max_workers`
+is the older name of `workers`.
 
 Types: deterministic `expected_tools` (ordered subsequence of calls with recursive
 args subset, plus `forbidden_tools`), `contains` (case-insensitive substring(s)),
@@ -284,26 +481,6 @@ but thresholds assume pass rates); judge variance is only detected across repeat
 (the pipeline's stability analysis), not calibrated; `contains` is a plain substring
 check; `expected_tools` compares argument values by equality after subset selection
 (no fuzzy matching of ids or dates).
-
-## Simulation (`simulate.py`)
-
-Scenarios (YAML) have `id`, `persona`, `goal`, `opening`, `followups[]`, `max_turns`
-and stop conditions (`success_contains`, `expect.contains`, `expect.not_contains`).
-`simulate_scenario` drives the graph turn by turn: scripted follow-ups first, then —
-when a `user_model` is given — a simulated user prompted with persona, goal and the
-last six transcript entries. Stop reasons: `success` (needle seen), `exhausted` (no
-more user messages), `max_turns` (a truncation, reported as a violation when a
-success needle was expected). `simulate_scenarios(graph_factory, scenarios,
-user_model=, max_workers=)` runs a scenario list — concurrently when
-`max_workers > 1`, each worker building its own graph via the factory so nothing is
-shared between threads; results keep scenario order. `mine_failures` turns violating runs into **pending**
-cases (`source=simulation`, `failure_mode=simulation-violation`, later turns in
-`user_turns`, transcript tail kept for the reviewer).
-
-**Limitations.** The simulated user is a plain prompt, not OpenEvals' simulated-user
-harness; expectations are substring checks on the concatenated assistant text; each
-turn re-invokes the graph with the accumulated transcript as plain role/content
-messages (tool-call history is not replayed).
 
 ## Coverage grid (`coverage.py`)
 

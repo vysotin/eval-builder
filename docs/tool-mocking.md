@@ -91,24 +91,32 @@ tools' schemas (the CLI uses it for `mock strategies --set`).
 
 Three call sites, three decisions:
 
-- **Pipeline `run` stage** (`pipeline/stages.py`): always `mocked=True`,
-  `on_miss=cfg.mocking.on_miss` (config default `strict`). Per case,
+- **Pipeline `infer` stage** (`pipeline/stages.py`): always `mocked=True`,
+  `on_miss=cfg.mocking.on_miss` (config default `strict`). The mocks travel with every
+  request to the deployed agent (`agent_client.mocks_for_case`): per case,
   `merge_mock_rules(dataset_rules, case_rules)` is computed — **per-case rules replace
-  the dataset list for that tool** — and the graph is rebuilt per case with the wrapped
-  tools (`runner.py`). Under `llm` the runner builds one engine per case from the
-  dataset's `mocks.strategies` and `mocks.llm` (model, `on_invalid`, `max_repairs`),
-  selecting `metadata.mocks.strategy` when the case names one; the `CaseRun` keeps the
-  ledger in `mock_calls`, and the run artifact sums the layers in `mocking.calls`
-  (`rule`, `llm`, `real`, `fallback`, `error`, `invalid`).
-- **Simulate stage**: wraps tools with the **dataset-level** rules only (no per-case
-  overrides — scenarios are not cases) under the same policy; under `llm` each scenario
-  gets its own engine, honouring the scenario's `mock_strategy`; results carry
+  the dataset list for that tool** — together with the policy, the selected strategy,
+  the strategies document and the `llm` settings; the agent server (`serve.py`, the
+  same `LocalAgent` an in-process run uses) wraps the tools and rebuilds the graph per
+  request. Under `llm` that means one engine per request from the dataset's
+  `mocks.strategies` and `mocks.llm` (model, `on_invalid`, `max_repairs`), selecting
+  `metadata.mocks.strategy` when the case names one; the earlier turns' mocked answers
+  are sent back as `mocks.history`, so a multi-turn case stays consistent across a
+  stateless server. The `CaseRun` keeps the ledger in `mock_calls`, and the run
+  artifact sums the layers in `mocking.calls` (`rule`, `llm`, `real`, `fallback`,
+  `error`, `invalid`).
+- **Simulate stage**: sends the **dataset-level** rules only (no per-case overrides —
+  scenarios are not cases) under the same policy; under `llm` each scenario selects
+  its own `mock_strategy` and carries its engine history turn by turn; results carry
   `mock_calls` totals.
-- **Standalone CLI** (`evalbuilder run DATASET --mock [--on-miss …] [--mock-model SPEC]
-  [--strategy ID]`, `evalbuilder simulate … --mock`): mocking is **opt-in** (`--mock`,
-  default off); the policy defaults to the dataset's `mocks.on_miss`, else `real` — the
+- **Standalone CLI** (`evalbuilder infer DATASET [--no-mock] [--on-miss …]
+  [--mock-model SPEC] [--strategy ID] [--deployment DIR | --endpoint URL]`,
+  `evalbuilder simulate … --mock`): `infer` installs the dataset's mock layers by
+  default (`--no-mock` calls real tools), `simulate` keeps mocking **opt-in**
+  (`--mock`); the policy defaults to the dataset's `mocks.on_miss`, else `real` — the
   interactive/skill workflow may touch real tools unless told otherwise; the autonomous
-  pipeline never does.
+  pipeline never does. Against a deployed agent the mock model is the deployment's
+  (`EVALBUILDER_MOCK_MODEL` in the container, else the request's `mocks.llm.model`).
 
 ## 4. Where the rules and strategies come from (generation time)
 
