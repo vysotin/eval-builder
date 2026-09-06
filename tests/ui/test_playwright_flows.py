@@ -247,6 +247,23 @@ def _expect_results_verdict(page, verdict: str) -> None:
 # ── flows ──────────────────────────────────────────────────────
 
 
+def test_setup_form_has_deployment_and_parallelism_fields(page, app_url, work):
+    """The setup form offers the deployment target and the joblib workers; both land in the YAML."""
+    _open_setup(page, app_url)
+    _select(page, "Example agent", "weather-bot")
+    _select(page, "Deployment target", "docker")
+    _fill(page, "Inference workers", "3", kind="stNumberInput")
+    _click(page, "Generate YAML")
+    text = _yaml_area(page).input_value()
+    assert "deploy:" in text and "target: docker" in text and "inference:" in text and "workers: 3" in text
+    _click(page, "Validate")
+    expect(page.get_by_text("cannot run inside the agent container").first).to_be_visible()  # claude-cli agent model + docker
+    _select(page, "Deployment target", "local")
+    _click(page, "Generate YAML")
+    assert "target: local" in _yaml_area(page).input_value()
+    _shot(page, "setup-deployment-fields")
+
+
 def test_setup_discover_generate_validate_and_save(page, app_url, work):
     _open_setup(page, app_url)
     _select(page, "Example agent", "support-bot")
@@ -571,10 +588,22 @@ def test_weather_bot_small_dataset_review_and_evaluate(page, app_url, work):
     report = json.loads((out_dir / "report.json").read_text())
     assert report["verdict"] == "pass" and report["agent"]["tools"] == ["get_weather", "get_alerts"]
     assert report["stages"]["review"]["details"]["approved_by"] == "playwright weather"
+    # the deployment phase ran on the local target and was torn down: the Run & review
+    # page shows the record, the report and Summary name the target
+    assert report["deployment"]["target"] == "local" and report["deployment"]["status"] == "down"
+    assert {report["stages"][s]["status"] for s in ("deploy", "infer", "teardown")} == {"ok"}
+    deployment = page.locator("h3#deployment")
+    expect(deployment).to_be_visible()
+    block = page.locator("[data-testid='stMarkdown']").filter(has_text="target local")
+    expect(block.first).to_be_visible()
+    expect(page.get_by_text("down", exact=True).first).to_be_visible()
+    assert page.get_by_role("button", name="Tear down").count() == 0
+    _shot(page, "run-weather-deployment")
     _click(page, "Open results in the report pages")
     page.locator("h2#summary").wait_for(timeout=60_000)
     _settle(page)
     expect(page.get_by_text("Overall score")).to_be_visible()
+    expect(page.locator("[data-testid='stCaptionContainer']").filter(has_text="deployed to").first).to_be_visible()
     for title, anchor in (("Agent graph & tools", "agent"), ("Intents & scenarios", "intents"), ("Dataset & mocks", "dataset"),
                           ("Coverage", "coverage"), ("Eval results", "results"), ("Stability", "stability"),
                           ("Simulation", "simulation"), ("Analysis", "analysis"), ("Stages & problems", "stages")):

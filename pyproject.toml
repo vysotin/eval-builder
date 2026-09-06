@@ -44,8 +44,9 @@ packages = ["src/evalbuilder"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not docker'"
 markers = [
     "ui: browser tests driving the Streamlit app with Playwright",
     "slow: end-to-end tests that spawn real pipeline subprocesses",
+    "docker: real deployments on the local Docker daemon / Kubernetes cluster (skipped when unavailable)",
 ]

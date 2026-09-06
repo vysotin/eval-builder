@@ -469,3 +469,79 @@ def test_setup_form_carries_the_mock_layer_and_skills_into_the_yaml(tmp_path):
     assert at.selectbox(key="setup_on_miss").value == "llm" and at.selectbox(key="setup_on_invalid").value == "strict"
     assert at.text_input(key="setup_mock_model").value == "scripted:examples.support_bot.offline:mock_model"
     assert not at.checkbox(key="setup_strategies").value
+
+
+# ── deployment: setup form fields and the Run & review block ────
+
+
+def test_setup_form_carries_deployment_and_parallelism_into_the_yaml(tmp_path):
+    at = _app("setup")
+    at.selectbox(key="setup_target").select(SUPPORT).run()
+    assert at.selectbox(key="setup_deploy_target").value == "local" and at.number_input(key="setup_infer_workers").value == 4
+    at.selectbox(key="setup_deploy_target").select("docker").run()
+    at.text_input(key="setup_image_name").set_value("acme/support-bot").run()
+    at.number_input(key="setup_infer_workers").set_value(3).run()
+    at.selectbox(key="setup_infer_backend").select("processes").run()
+    at.number_input(key="setup_eval_workers").set_value(2).run()
+    at.checkbox(key="setup_keep").check().run()
+    at.button(key="setup_generate").click().run()
+    assert _errors(at) == []
+    text = at.text_area(key="setup_yaml").value
+    assert "deploy:" in text and "target: docker" in text and "name: acme/support-bot" in text and "keep: true" in text
+    assert "inference:" in text and "workers: 3" in text and "backend: processes" in text and "evaluation:" in text
+    # the form survives navigation and a reload from the YAML
+    _goto(at, "run")
+    _goto(at, "setup")
+    assert at.selectbox(key="setup_deploy_target").value == "docker" and at.number_input(key="setup_infer_workers").value == 3
+    # validating flags the claude-cli agent model, which cannot run inside the container
+    at.button(key="setup_validate").click().run()
+    assert any("cannot run inside the agent container" in e.value for e in at.error)
+    at.text_input(key="setup_agent_model").set_value("scripted:examples.support_bot.agent:default_scripted_model").run()
+    at.button(key="setup_generate").click().run()
+    at.button(key="setup_validate").click().run()
+    assert not at.error and any("is valid" in s.value for s in at.success)
+
+
+def _deployment_state(out: Path, status: str, endpoint: str | None):
+    from evalbuilder.deploy.spec import DeploymentRecord, DeploymentSpec
+
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "work").mkdir(exist_ok=True)
+    (out / "work" / "state.json").write_text(json.dumps({
+        "schema": "evalbuilder/pipeline-state/v1", "name": "x",
+        "stages": {"preflight": {"status": "ok"}, "dataset": {"status": "ok"}, "deploy": {"status": "ok"}, "infer": {"status": "ok"}},
+        "data": {},
+    }))
+    spec = DeploymentSpec(name="x", target="local", module="examples.weather_bot.agent", work_dir=str(out / "work" / "deploy"))
+    record = DeploymentRecord(name="x", target="local", endpoint=endpoint, expose="port-forward", status=status,
+                              resources={"pid": 999999999, "port": 1}, spec=spec.to_dict(),
+                              details={"health": {"module": "examples.weather_bot.agent", "tools": ["get_weather"], "agent_model": "scripted:a:b"}})
+    record.save(out / "deployment.json")
+
+
+def test_run_page_shows_the_deployment_block_and_tears_down(tmp_path):
+    out = tmp_path / "out"
+    _deployment_state(out, "up", "http://127.0.0.1:1")
+    at = _app("run", project={"mode": "dir", "dir": str(out)})
+    assert _errors(at) == []
+    page = " ".join(m.value for m in at.markdown)
+    assert "Deployment" in " ".join(h.value for h in at.subheader)
+    assert "target **local**" in page and "http://127.0.0.1:1" in page and "unhealthy" in page  # the pid is dead
+    assert any("get_weather" in c.value for c in at.caption)
+    at.button(key="run_teardown").click().run()
+    assert _errors(at) == []
+    assert json.loads((out / "deployment.json").read_text())["status"] == "down"
+    page = " ".join(m.value for m in at.markdown)
+    assert ":grey-badge[down]" in page and not any(b.key == "run_teardown" for b in at.button)
+
+
+def test_run_page_shows_a_failed_deployment(tmp_path):
+    out = tmp_path / "out"
+    _deployment_state(out, "failed", None)
+    record = json.loads((out / "deployment.json").read_text())
+    record["details"]["error"] = "DeploymentError: the agent server exited: no such factory"
+    (out / "deployment.json").write_text(json.dumps(record))
+    at = _app("run", project={"mode": "dir", "dir": str(out)})
+    assert _errors(at) == []
+    assert any("no such factory" in e.value for e in at.error)
+    assert not any(b.key == "run_teardown" for b in at.button)
