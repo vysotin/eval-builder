@@ -819,6 +819,139 @@ def publish(
     _emit(result)
 
 
+# ── `evalbuilder deploy …` — the deployment phase ───────────────
+# up / status / down / build / render / logs. The agent (with both mock layers) runs
+# behind an HTTP endpoint on the config's `deploy.target`: local (subprocess), docker
+# (compose), kubernetes (kubectl), openshift (oc, prototype). `deployment.json` in the
+# output directory records what runs where; `infer --deployment DIR` reads it back.
+deploy_app = typer.Typer(help="Deployment phase: run the agent (with both mock layers) behind an HTTP endpoint — local, docker, kubernetes, openshift.", no_args_is_help=True)
+app.add_typer(deploy_app, name="deploy")
+
+
+def _deploy_config(config: Path, target: Optional[str]):
+    """Load the pipeline config for a deploy command; `--target` overrides `deploy.target`."""
+    from evalbuilder.pipeline.config import DEPLOY_TARGETS, load_config
+
+    try:
+        cfg = load_config(config)
+    except (ValueError, FileNotFoundError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(2)
+    if target is not None:
+        if target not in DEPLOY_TARGETS:
+            typer.echo(f"--target must be one of {', '.join(DEPLOY_TARGETS)}", err=True)
+            raise typer.Exit(2)
+        cfg.deploy.target = target
+    problems = cfg.problems()
+    if problems:
+        typer.echo("config problems:\n  " + "\n  ".join(problems), err=True)
+        raise typer.Exit(2)
+    return cfg
+
+
+def _deploy_source(path: Path):
+    """A deploy status/down/logs argument: an output directory (existing or not), or a
+    config file (`.yaml` / `.yml` / `.json`)."""
+    if path.is_dir() or path.suffix.lower() not in (".yaml", ".yml", ".json"):
+        return path
+    return _deploy_config(path, None)
+
+
+def _record_summary(record: dict | None) -> dict:
+    if not record:
+        return {}
+    return {k: record.get(k) for k in ("name", "target", "image", "endpoint", "expose", "status", "resources", "updated_at")}
+
+
+@deploy_app.command("up")
+def deploy_up_cmd(
+    config: Path,
+    target: Optional[str] = typer.Option(None, "--target", help="override deploy.target: local | docker | kubernetes | openshift"),
+    env_file: Optional[Path] = typer.Option(None, "--env-file"),
+    quiet: bool = typer.Option(False, "--quiet"),
+) -> None:
+    """Build (if needed) and deploy the agent, wait for /health, write deployment.json."""
+    from evalbuilder.deploy import CommandError, DeploymentError, deploy_up, record_path
+
+    cfg = _deploy_config(config, target)
+    Settings.load(env_file)  # loads .env into the process for deploy.env pass-through
+    log = (lambda msg: None) if quiet else (lambda msg: typer.echo(msg, err=True))
+    try:
+        record = deploy_up(cfg, log=log)
+    except (DeploymentError, CommandError) as e:
+        typer.echo(f"deploy failed: {e}", err=True)
+        _emit({"status": "failed", "target": cfg.deploy.target, "error": str(e), "record": str(record_path(cfg.output_dir))})
+        raise typer.Exit(1)
+    _emit({**_record_summary(record.to_dict()), "record": str(record_path(cfg.output_dir)), "reused": bool(record.details.get("reused")),
+           "missing_host_env": record.details.get("missing_host_env") or [], "commands": len(record.commands)})
+
+
+@deploy_app.command("status")
+def deploy_status_cmd(path: Path = typer.Argument(..., help="pipeline output directory, or the config file")) -> None:
+    """Live status of the recorded deployment (exit 1 unless it is up and healthy)."""
+    from evalbuilder.deploy import deploy_status
+
+    status = deploy_status(_deploy_source(path))
+    _emit({"status": status["status"], "ready": status.get("ready", False), "endpoint": status.get("endpoint"),
+           "health": status.get("health"), "replicas": status.get("replicas"), "details": status.get("details"),
+           **({"record": _record_summary(status["record"])} if status.get("record") else {})})
+    if status["status"] != "up":
+        raise typer.Exit(1)
+
+
+@deploy_app.command("down")
+def deploy_down_cmd(path: Path = typer.Argument(..., help="pipeline output directory, or the config file")) -> None:
+    """Tear the recorded deployment down."""
+    from evalbuilder.deploy import deploy_down
+
+    result = deploy_down(_deploy_source(path))
+    _emit({"status": result["status"], **({"record": _record_summary(result["record"])} if result.get("record") else {})})
+
+
+@deploy_app.command("build")
+def deploy_build_cmd(
+    config: Path,
+    target: Optional[str] = typer.Option(None, "--target", help="override deploy.target"),
+) -> None:
+    """Build the agent image only (docker / kubernetes / openshift targets)."""
+    from evalbuilder.deploy import CommandError, deploy_build
+
+    cfg = _deploy_config(config, target)
+    try:
+        image = deploy_build(cfg, log=lambda msg: typer.echo(msg, err=True))
+    except CommandError as e:
+        typer.echo(f"build failed: {e}", err=True)
+        raise typer.Exit(1)
+    _emit({"target": cfg.deploy.target, "image": image or None})
+
+
+@deploy_app.command("render")
+def deploy_render_cmd(
+    config: Path,
+    target: Optional[str] = typer.Option(None, "--target", help="override deploy.target"),
+    write: bool = typer.Option(False, "--write", help="also write the files to <output dir>/work/deploy/"),
+) -> None:
+    """Print the generated Dockerfile / compose file / manifests without running anything."""
+    from evalbuilder.deploy import WORK_SUBDIR, deploy_render
+    from evalbuilder.pipeline.layout import WORK_DIR
+
+    cfg = _deploy_config(config, target)
+    files = deploy_render(cfg, write=write)
+    _emit({"target": cfg.deploy.target, "image": cfg.image_ref, "files": files,
+           "written_to": str(cfg.output_dir / WORK_DIR / WORK_SUBDIR) if write else None})
+
+
+@deploy_app.command("logs")
+def deploy_logs_cmd(
+    path: Path = typer.Argument(..., help="pipeline output directory, or the config file"),
+    lines: int = typer.Option(100, "--lines"),
+) -> None:
+    """Print the deployed agent's recent log lines (plain text)."""
+    from evalbuilder.deploy import deploy_logs
+
+    typer.echo(deploy_logs(_deploy_source(path), lines=lines))
+
+
 # ── `evalbuilder serve` — the agent server (container entry point) ──
 
 @app.command()

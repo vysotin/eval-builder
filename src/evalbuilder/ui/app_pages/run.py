@@ -41,7 +41,7 @@ def _status_block(out_dir: Path, live: bool) -> dict:
         job_progress(status)
         rp = status.get("run_progress")
         if rp and (rp.get("current") or []) and (
-            (status.get("progress") or {}).get("stage") == "run" or status.get("interrupted_stage") == "run"
+            (status.get("progress") or {}).get("stage") in ("infer", "run") or status.get("interrupted_stage") in ("infer", "run")
         ):
             st.markdown("**Partial results** — cases completed in the current repeat")
             table(rp["current"], columns=["case_id", "intent", "error_class", "error"])
@@ -68,7 +68,8 @@ def _status_block(out_dir: Path, live: bool) -> dict:
 
 def _generation_done(status: dict) -> bool:
     stages = status.get("stages") or {}
-    return stages.get("dataset", {}).get("status") in ("ok", "recovered") and stages.get("run", {}).get("status") not in ("ok", "recovered")
+    infer = stages.get("infer") or stages.get("run") or {}
+    return stages.get("dataset", {}).get("status") in ("ok", "recovered") and infer.get("status") not in ("ok", "recovered")
 
 
 def _review_section(out_dir: Path, status: dict, config_path: str | None) -> None:

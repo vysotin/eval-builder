@@ -119,7 +119,13 @@ def mock_strategies(_messages=None) -> dict:
     ]}
 
 
-INVALID_FIRST = {"enabled": False}  # tests flip this to exercise the repair round
+INVALID_FIRST = {"enabled": False}  # tests flip this (or set EVALBUILDER_WEATHER_INVALID_FIRST=1 for a deployed agent) to exercise the repair round
+
+
+def _invalid_first() -> bool:
+    import os
+
+    return INVALID_FIRST["enabled"] or os.environ.get("EVALBUILDER_WEATHER_INVALID_FIRST") == "1"
 
 
 def _mock_response(messages) -> dict:
@@ -127,7 +133,7 @@ def _mock_response(messages) -> dict:
 
     call = call_in_prompt(str(messages[-1].content)) or {}
     tool, args, strategy = call.get("tool"), call.get("args") or {}, call.get("strategy")
-    if INVALID_FIRST["enabled"] and "PROBLEMS WITH YOUR PREVIOUS ANSWER" not in str(messages[-1].content):
+    if _invalid_first() and "PROBLEMS WITH YOUR PREVIOUS ANSWER" not in str(messages[-1].content):
         return {"response_json": "not json {"}
     city = args.get("city", "Paris")
     if tool == "get_weather":

@@ -43,7 +43,7 @@ def llm_bundle_dir(tmp_path_factory):
     cfg.stages.publish = "never"
     cfg.save(root / "support-llm.yaml")
     _, report = run_pipeline(root / "support-llm.yaml", settings=Settings())
-    assert report["stages"]["run"]["status"] == "ok", report["stages"]
+    assert report["stages"]["infer"]["status"] == "ok", report["stages"]
     return str(root / "out")
 
 
@@ -158,7 +158,7 @@ def test_incident_desk_example_loads_with_schema_data():
     assert incident.report["config"]["models"]["generator"] == "claude-cli:claude-sonnet-5"
     assert incident.report["config"]["instructions"].startswith("Ops domain")
     assert "schema-edge" in incident.report["coverage"]["by_kind"]
-    assert incident.verdict in ("pass", "fail")
+    assert incident.verdict == incident.report["verdict"]  # the committed run stopped after dataset (--until): incomplete
 
 
 @pytest.mark.parametrize("page", PAGES)

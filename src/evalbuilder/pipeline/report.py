@@ -86,7 +86,8 @@ def _mocking_summary(ctx: PipelineContext, stages: dict) -> dict:
     """Policy, model, strategies and per-layer call totals of the two mocking layers."""
     cfg = ctx.config
     strategies = ctx.mock_strategies() or {}
-    run_calls = ((stages.get("run", {}).get("details") or {}).get("mocking") or {}).get("calls") or {}
+    infer_stage = stages.get("infer") or stages.get("run") or {}  # `run` = the stage's name before 2026-09
+    run_calls = ((infer_stage.get("details") or {}).get("mocking") or {}).get("calls") or {}
     sim_calls = (stages.get("simulate", {}).get("details") or {}).get("mock_calls") or {}
     return {
         "on_miss": cfg.mocking.on_miss,
@@ -99,6 +100,14 @@ def _mocking_summary(ctx: PipelineContext, stages: dict) -> dict:
         "calls": run_calls,
         "simulation_calls": sim_calls,
     }
+
+
+def _deployment_summary(ctx: PipelineContext) -> dict | None:
+    record = ctx.deployment()
+    if record is None:
+        return None
+    return {"target": record.target, "image": record.image or None, "endpoint": record.endpoint, "expose": record.expose,
+            "status": record.status, "push": record.details.get("push"), "updated_at": record.updated_at}
 
 
 def build_report(ctx: PipelineContext) -> dict:
@@ -155,6 +164,7 @@ def build_report(ctx: PipelineContext) -> dict:
         "slices": agg.get("slices", {}) if agg else {},
         "stability": agg.get("stability") if agg else None,
         "mocking": _mocking_summary(ctx, stages),
+        "deployment": _deployment_summary(ctx),
         "cases": agg.get("cases", []) if agg else [],
         "failing_cases": agg.get("failing_cases", []) if agg else [],
         "simulation": {
@@ -194,6 +204,10 @@ def summary_text(report: dict) -> str:
             f"unstable_evaluators={len(st.get('unstable_evaluators', []))} "
             f"text_varies={st.get('text_varies')} suspect_judge_comments={len(st.get('suspect_judge_comments', []))}"
         )
+    deployment = report.get("deployment") or {}
+    if deployment:
+        lines.append(f"deployment: target={deployment.get('target')} endpoint={deployment.get('endpoint')} status={deployment.get('status')}"
+                     + (f" image={deployment.get('image')}" if deployment.get("image") else ""))
     mocking = report.get("mocking") or {}
     if mocking.get("calls"):
         calls = mocking["calls"]
@@ -232,6 +246,8 @@ def run_pipeline(
         skip.add("simulate")
     if cfg.stages.publish == "never" or (cfg.stages.publish == "auto" and not settings.langsmith_api_key):
         skip.add("publish")
+    if cfg.deploy.keep:
+        skip.add("teardown")
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     runner = PipelineRunner(
         stages=build_stages(),

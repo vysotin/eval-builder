@@ -64,6 +64,10 @@ class Bundle:
         return self.get("aggregate")
 
     @property
+    def deployment(self) -> dict | None:
+        return self.get("deployment")
+
+    @property
     def report(self) -> dict | None:
         return self.get("pipeline_report")
 
@@ -84,7 +88,8 @@ class Bundle:
         """Run ids in scoring order when the state knows it, else sorted."""
         ordered: list[str] = []
         state = self.state or {}
-        for entry in ((state.get("stages") or {}).get("run") or {}).get("artifacts", {}).get("runs", []) or []:
+        infer_stage = (state.get("stages") or {}).get("infer") or (state.get("stages") or {}).get("run") or {}  # `run`: pre-2026-09 name
+        for entry in infer_stage.get("artifacts", {}).get("runs", []) or []:
             if entry.get("run_id"):
                 ordered.append(entry["run_id"])
         known = set(self.runs) | set(self.score_reports)

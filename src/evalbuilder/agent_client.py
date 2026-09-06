@@ -139,6 +139,10 @@ class LocalAgent:
 
     def health(self) -> dict:
         module = self._target()
+        if not callable(getattr(module, self.factory, None)):
+            raise AttributeError(f"module {self.module} has no factory {self.factory!r}")
+        if self.mock_model_spec and "" not in self._mock_models:
+            self._mock_model(None)  # a bad mock model spec is a start-up error, not a per-request one
         return {
             "ok": True, "mode": self.mode, "module": self.module, "factory": self.factory,
             "tools": [t.name for t in getattr(module, "TOOLS", []) or []],

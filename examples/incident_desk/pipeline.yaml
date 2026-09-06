@@ -53,12 +53,22 @@ thresholds:
   default: 0.7
   slice_min: 0.5
   overall_pass: 0.75
-# repeats detect unstable cases and evaluators; parallel_intents / parallel_scoring / parallel_simulations size the run, scoring and simulation thread pools (1 = sequential)
+# repeats detect unstable cases and evaluators
 runs:
   repeats: 2
-  parallel_intents: 4
-  parallel_scoring: 4
-  parallel_simulations: 4
+# where the agent (with both mock layers) runs during inference: local (subprocess), docker (compose), kubernetes (kubectl), openshift (oc)
+# the claude-cli agent model above cannot run inside a container: switch models.agent to an API-key provider (key in deploy.env) before choosing docker/kubernetes
+deploy:
+  target: local
+# joblib parallelism for cases and simulation scenarios against the deployed agent
+inference:
+  workers: 4
+  backend: threads
+  timeout: 120
+# joblib parallelism for scoring stored runs (case-run splits)
+evaluation:
+  workers: 4
+  backend: threads
 # layer 1 = deterministic rules; on_miss strict = unmatched call is an error, llm = the LLM mock engine answers from pre-generated strategies (validated against the tool's output schema; on_invalid fallback|strict, max_repairs)
 mocking:
   required: true

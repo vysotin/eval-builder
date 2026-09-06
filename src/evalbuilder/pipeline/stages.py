@@ -7,6 +7,7 @@ resumed run (cached stages) has the same data as a fresh one.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -15,25 +16,25 @@ import yaml
 
 from evalbuilder import artifacts
 from evalbuilder import discover as discovery
+from evalbuilder import inference
 from evalbuilder import simulate as sim
 from evalbuilder import target as target_mod
 from evalbuilder import tool_schemas
 from evalbuilder.config import Settings, capability_check, provider_ready
 from evalbuilder.evaluators import is_judge_spec, score_run
-from evalbuilder.mocking import merge_mock_rules, verify_summary, with_fallback, wrap_tools
+from evalbuilder.mocking import verify_summary, with_fallback
 from evalbuilder.pipeline import generator as gen_mod
 from evalbuilder.pipeline.aggregate import aggregate as aggregate_runs
 from evalbuilder.pipeline.config import PipelineConfig
 from evalbuilder.pipeline.engine import Stage, StageStop
-from evalbuilder.pipeline.layout import ARTIFACTS, existing_path, path_for, stamp, unwrap
+from evalbuilder.pipeline.layout import ARTIFACTS, WORK_DIR, existing_path, path_for, stamp, unwrap
 from evalbuilder.pipeline.planning import Cell, achieved, plan_cells, summarize_plan
 from evalbuilder.pipeline.taxonomy import applicable_failure_types
-from evalbuilder.runner import build_engine, run_dataset, tool_specs_of
 from evalbuilder.schemas import AgentMap, Dataset, Report, RunArtifact, Target
 
 REQUIRED_STAGES = (
     "preflight", "discover", "map", "mocks", "dataset", "review", "verify",
-    "run", "score", "aggregate",
+    "deploy", "infer", "score", "aggregate",
 )
 
 
@@ -245,6 +246,32 @@ class PipelineContext:
             ]
         return self._cache["cells"]
 
+    # ── the deployed agent ─────────────────────────────────────
+    def deploy_runner(self):
+        from evalbuilder.deploy import COMMANDS_LOG, WORK_SUBDIR, CommandRunner
+
+        return CommandRunner(log_path=self.out_dir / WORK_DIR / WORK_SUBDIR / COMMANDS_LOG, log=self.log)
+
+    def deployment(self):
+        """The `deployment.json` record (None before the deploy stage)."""
+        from evalbuilder.deploy import load_record
+
+        return load_record(self.out_dir)
+
+    def agent(self):
+        """A `RemoteAgent` for the running deployment — its health is checked (a dead
+        port-forward is restarted) before every phase that uses it."""
+        from evalbuilder.agent_client import RemoteAgent
+        from evalbuilder.deploy import deploy_status
+
+        record = self.deployment()
+        if record is None or record.status != "up" or not record.endpoint:
+            raise RuntimeError("no running deployment (deployment.json): the deploy stage must succeed first")
+        live = deploy_status(self.config, self.out_dir, runner=self.deploy_runner(), log=self.log)
+        if not live.get("ready"):
+            raise RuntimeError(f"deployed agent at {record.endpoint} is not healthy: {(live.get('health') or {}).get('error') or live.get('status')}")
+        return RemoteAgent(live["endpoint"], timeout=float(self.config.inference.timeout))
+
     def run_reports(self) -> list[tuple[RunArtifact, Report]]:
         if "run_reports" not in self._cache:
             score_rec = self.state.stages.get("score") if self.state else None
@@ -302,9 +329,23 @@ def preflight(ctx: PipelineContext) -> dict:
                 raise ValueError(f"{role} model {spec!r} unavailable: {reason}")
             ctx.problem("preflight", f"judge model {spec!r} unavailable: {reason}; judge evaluators will error")
     judge_specs = [e for e in cfg.evaluators if is_judge_spec(e)]
+    for note in cfg.migrated:
+        ctx.problem("preflight", f"config: {note}")
+    from evalbuilder.deploy import target_for
+    from evalbuilder.deploy.spec import resolve_env
+
+    available, reason = target_for(cfg.deploy.target, log=ctx.log).available()
+    if not available:
+        raise ValueError(f"deployment target {cfg.deploy.target!r} unavailable: {reason}")
+    _, missing_env = resolve_env(cfg.deploy.env)
+    for name in missing_env:
+        ctx.problem("preflight", f"deploy.env {name} is not set on the host; the agent container will not receive it")
     ctx.out_dir.mkdir(parents=True, exist_ok=True)
     return {"capabilities": caps["capabilities"], "degraded": caps["degraded"], "models": models,
-            "judge_evaluators": len(judge_specs), "mocking": cfg.mocking.on_miss}
+            "judge_evaluators": len(judge_specs), "mocking": cfg.mocking.on_miss,
+            "deploy": {"target": cfg.deploy.target, "available": reason, "image": cfg.image_ref if cfg.container_target else None},
+            "inference": {"workers": cfg.inference.workers, "backend": cfg.inference.backend},
+            "evaluation": {"workers": cfg.evaluation.workers, "backend": cfg.evaluation.backend}}
 
 
 def _live_tools(module) -> list[dict]:
@@ -626,9 +667,28 @@ def verify(ctx: PipelineContext) -> dict:
     }
 
 
-def run(ctx: PipelineContext) -> dict:
+def deploy(ctx: PipelineContext) -> dict:
+    """Run the agent (with both mock layers) behind an endpoint on the configured target."""
+    from evalbuilder.deploy import deploy_up, record_path
+
+    cfg = ctx.config
+    started = time.time()
+    record = deploy_up(cfg, ctx.out_dir, runner=ctx.deploy_runner(), log=ctx.log)
+    for name in record.details.get("missing_host_env") or []:
+        ctx.problem("deploy", f"deploy.env {name} is not set on the host; the agent container did not receive it")
+    return {
+        "artifacts": {"deployment": str(record_path(ctx.out_dir))},
+        "target": record.target, "image": record.image or None, "endpoint": record.endpoint, "expose": record.expose,
+        "reused": bool(record.details.get("reused")), "push": record.details.get("push"),
+        "health": record.details.get("health"), "commands": len(record.commands), "seconds": round(time.time() - started, 3),
+    }
+
+
+def infer(ctx: PipelineContext) -> dict:
+    """`runs.repeats` executions of every approved case against the deployed agent."""
     cfg = ctx.config
     ds = ctx.dataset()
+    agent = ctx.agent()
     runs = []
     errors = {"agent": 0, "infrastructure": 0}
     approved = [c for c in ds.cases if c.review.status == "approved"]
@@ -636,14 +696,16 @@ def run(ctx: PipelineContext) -> dict:
     for c in approved:
         by_intent.setdefault(c.metadata.get("intent") or "", {"done": 0, "total": 0, "errors": 0})["total"] += 1
     prog = {
-        "repeats": cfg.runs.repeats, "repeat": 0, "parallel_intents": cfg.runs.parallel_intents,
+        "repeats": cfg.runs.repeats, "repeat": 0, "workers": cfg.inference.workers, "backend": cfg.inference.backend,
+        "endpoint": agent.endpoint, "mode": agent.mode,
         "cases_total": len(approved), "cases_done": 0,
         "overall_total": len(approved) * cfg.runs.repeats, "overall_done": 0,
         "by_intent": by_intent, "runs": [], "current": [], "mock_calls": {},
     }
     mock_calls: dict[str, int] = {}
+    execution = None
 
-    def on_case(evt: dict) -> None:  # serialized by the runner; keeps run-progress.json live
+    def on_case(evt: dict) -> None:  # called in order by the engine; keeps run-progress.json live
         prog["cases_done"] = evt["completed"]
         prog["overall_done"] += 1
         rec = prog["by_intent"].setdefault(evt["intent"], {"done": 0, "total": 0, "errors": 0})
@@ -658,13 +720,11 @@ def run(ctx: PipelineContext) -> dict:
         for rec in prog["by_intent"].values():
             rec.update(done=0, errors=0)
         ctx.save_artifact("run_progress", prog)
-        ctx.log(f"run: repeat {i + 1}/{cfg.runs.repeats}")
-        art = run_dataset(
-            ds, ctx.dataset_path, mocked=True, out_dir=ctx.results_dir,
-            model=ctx.agent_model(), model_spec=cfg.models.agent, on_miss=cfg.mocking.on_miss,
-            max_workers=cfg.runs.parallel_intents, progress=on_case,
-            mock_model=ctx.mock_model(), mock_model_spec=cfg.mock_model_spec if cfg.llm_mocking else None,
-            strategy=cfg.mocking.strategy,
+        ctx.log(f"infer: repeat {i + 1}/{cfg.runs.repeats} against {agent.endpoint} ({cfg.inference.workers} {cfg.inference.backend})")
+        art = inference.infer_dataset(
+            ds, ctx.dataset_path, agent, out_dir=ctx.results_dir, workers=cfg.inference.workers, backend=cfg.inference.backend,
+            on_miss=cfg.mocking.on_miss, strategy=cfg.mocking.strategy, mocked=True, progress=on_case,
+            model_spec=cfg.models.agent, mock_model_spec=cfg.mock_model_spec if cfg.llm_mocking else None,
         )
         infra = [cr for cr in art.case_runs if cr.error_class == "infrastructure"]
         if infra and len(infra) == len(art.case_runs):
@@ -674,30 +734,41 @@ def run(ctx: PipelineContext) -> dict:
         runs.append({"run_id": art.run_id, "path": str(ctx.artifact("run", art.run_id))})
         for layer, n in ((art.mocking or {}).get("calls") or {}).items():
             mock_calls[layer] = mock_calls.get(layer, 0) + n
+        execution = art.execution
         prog["runs"] = list(runs)
         prog["mock_calls"] = dict(mock_calls)
         ctx.save_artifact("run_progress", prog)
     if mock_calls.get("invalid"):
-        ctx.problem("run", f"{mock_calls['invalid']} LLM mock response(s) failed output-schema validation "
-                           f"({mock_calls.get('fallback', 0)} answered by the strategy fallback, {mock_calls.get('error', 0)} raised)")
+        ctx.problem("infer", f"{mock_calls['invalid']} LLM mock response(s) failed output-schema validation "
+                             f"({mock_calls.get('fallback', 0)} answered by the strategy fallback, {mock_calls.get('error', 0)} raised)")
     return {"artifacts": {"runs": runs, "run_progress": str(ctx.artifact("run_progress"))},
-            "repeats": cfg.runs.repeats, "parallel_intents": cfg.runs.parallel_intents,
+            "repeats": cfg.runs.repeats, "workers": cfg.inference.workers, "backend": cfg.inference.backend,
+            "endpoint": agent.endpoint, "execution": execution,
             "cases": len(ds.cases), "errors": errors,
             "mocking": {"on_miss": cfg.mocking.on_miss, "model": cfg.mock_model_spec if cfg.llm_mocking else None,
                         "strategy": cfg.mocking.strategy if cfg.llm_mocking else None, "calls": mock_calls}}
+
+
+def teardown(ctx: PipelineContext) -> dict:
+    """Remove the deployment (skipped by config when `deploy.keep` is true)."""
+    from evalbuilder.deploy import deploy_down, record_path
+
+    result = deploy_down(ctx.config, ctx.out_dir, runner=ctx.deploy_runner(), log=ctx.log)
+    return {"artifacts": {"deployment": str(record_path(ctx.out_dir))}, "status": result["status"],
+            "target": (result.get("record") or {}).get("target")}
 
 
 def score(ctx: PipelineContext) -> dict:
     cfg = ctx.config
     ds = ctx.dataset()
     ctx.artifact("evaluators").write_text(yaml.safe_dump({"evaluators": cfg.evaluators}))
-    runs = ctx.state.stages["run"].artifacts["runs"]
+    runs = ctx.state.stages["infer"].artifacts["runs"]
     pairs = []
     reports = []
     for entry in runs:
         run_art = RunArtifact.model_validate(json.loads(Path(entry["path"]).read_text()))
         report = score_run(run_art, ds, cfg.evaluators, cfg.models.judge,
-                           max_workers=cfg.runs.parallel_scoring)
+                           workers=cfg.evaluation.workers, backend=cfg.evaluation.backend)
         report_path = ctx.artifact("score_report", run_art.run_id)
         artifacts.save_json(report_path, report)
         pairs.append({"run": entry["path"], "report": str(report_path)})
@@ -712,7 +783,7 @@ def score(ctx: PipelineContext) -> dict:
         raise RuntimeError("no evaluator produced a single score")
     return {
         "artifacts": {"pairs": pairs, "evaluators": str(ctx.artifact("evaluators"))},
-        "parallel_scoring": cfg.runs.parallel_scoring,
+        "workers": cfg.evaluation.workers, "backend": cfg.evaluation.backend,
         "metrics": {m: v["avg"] for m, v in reports[0][1].metrics.items()} if reports else {},
         "evaluator_errors": {m: v["errors"] for m, v in reports[0][1].metrics.items() if v["errors"]} if reports else {},
     }
@@ -748,22 +819,15 @@ def simulate(ctx: PipelineContext) -> dict:
     scen_path = ctx.artifact("scenarios")
     scen_path.write_text(yaml.safe_dump({"scenarios": scenarios}, sort_keys=False))
     scenario_list = sim.load_scenarios(scen_path)
-    module = target_mod.load_target(ds.target)
-    agent_model = ctx.agent_model()
-    llm = cfg.llm_mocking
-    tool_specs = tool_specs_of(module) if llm else {}
-    mock_model = ctx.mock_model()
-
-    def graph_factory(scenario):  # a fresh graph (and tool wrappers) per scenario, so scenarios can run concurrently
-        ledger: list[dict] = []
-        engine = build_engine(mock_model, ds, tool_specs, strategy=scenario.get("mock_strategy") or cfg.mocking.strategy) if llm else None
-        tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules(ds.mocks.get("tools", {}), {}),
-                           on_miss=cfg.mocking.on_miss, engine=engine, ledger=ledger)
-        return target_mod.build_graph(module, ds.target, tools=tools, model=agent_model), ledger
-
-    user_model = getattr(ctx.generator(), "model", None)
-    results = sim.simulate_scenarios(graph_factory, scenario_list, user_model=user_model,
-                                     max_workers=cfg.runs.parallel_simulations)
+    agent = ctx.agent()
+    # The simulated user is the generator model: an injected generator (tests) is used as
+    # an object, a configured one is passed as a spec so process workers can build it.
+    user_model = getattr(ctx.generator(), "model", None) if ctx.generator_factory is not None else None
+    results = inference.simulate_scenarios(
+        agent, scenario_list, mocks=ds.mocks, user_model=user_model,
+        user_model_spec=None if user_model is not None else cfg.models.generator,
+        workers=cfg.inference.workers, backend=cfg.inference.backend, on_miss=cfg.mocking.on_miss, strategy=cfg.mocking.strategy,
+    )
     mined = sim.mine_failures(ds, results)
     if mined:
         ctx.save_dataset(ds)
@@ -774,7 +838,7 @@ def simulate(ctx: PipelineContext) -> dict:
             totals[layer] = totals.get(layer, 0) + n
     return {
         "artifacts": {"scenarios": str(scen_path), "simulation": str(sim_path)},
-        "parallel_simulations": cfg.runs.parallel_simulations,
+        "workers": cfg.inference.workers, "backend": cfg.inference.backend, "endpoint": agent.endpoint,
         "scenarios": len(results),
         "stop_reasons": {r["scenario_id"]: r["stop_reason"] for r in results},
         "violations": {r["scenario_id"]: r["violations"] for r in results if r["violations"]},
@@ -841,10 +905,12 @@ def build_stages() -> list[Stage]:
         Stage("dataset", build_dataset, deps=("map", "mocks"), recover=_note("dataset")),
         Stage("review", review, deps=("dataset",), recover=_note("review")),
         Stage("verify", verify, deps=("review",), retries=0),
-        Stage("run", run, deps=("verify",), recover=_note("run")),
-        Stage("score", score, deps=("run",), recover=_note("score")),
+        Stage("deploy", deploy, deps=("verify",), retries=0),
+        Stage("infer", infer, deps=("deploy",), recover=_note("infer")),
+        Stage("simulate", simulate, deps=("deploy", "review"), optional=True, recover=_note("simulate")),
+        Stage("teardown", teardown, deps=("deploy",), optional=True, retries=0),
+        Stage("score", score, deps=("infer",), recover=_note("score")),
         Stage("aggregate", aggregate, deps=("score",), retries=0),
-        Stage("simulate", simulate, deps=("review",), optional=True, recover=_note("simulate")),
         Stage("publish", publish, deps=("review",), optional=True),
         Stage("analyze", analyze, deps=("aggregate",), optional=True, retries=0),
         Stage("report", report, always=True, retries=0),

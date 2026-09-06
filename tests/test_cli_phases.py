@@ -112,3 +112,69 @@ def test_eval_uses_the_config_thresholds(tmp_path):
     result = _ok(CliRunner().invoke(app, ["eval", summary["path"], "--dataset", str(ds_path), "--evaluators", str(_evaluators(tmp_path)),
                                           "--out", str(out), "--aggregate", "--config", str(cfg)]))
     assert result["aggregate"]["verdict"] == "fail"  # contains can never reach 1.1
+
+
+# ── evalbuilder deploy … ────────────────────────────────────────
+
+
+def _config(tmp_path: Path, target: str = "local") -> Path:
+    cfg = tmp_path / "pipeline.yaml"
+    cfg.write_text(yaml.safe_dump({
+        "schema": "evalbuilder/pipeline-config/v1", "name": "weather-cli",
+        "target": {"source": "examples/weather_bot/agent.py", "module": WEATHER},
+        "models": {"agent": "scripted:examples.weather_bot.agent:default_scripted_model"},
+        "deploy": {"target": target, "image": {"registry": "quay.io/x"} if target == "openshift" else {}},
+        "output": {"dir": str(tmp_path / "out")},
+    }, sort_keys=False))
+    return cfg
+
+
+def test_deploy_cli_local_up_status_infer_down(tmp_path):
+    cfg = _config(tmp_path)
+    ds_path = _dataset(tmp_path, n=2)
+    up = _ok(CliRunner().invoke(app, ["deploy", "up", str(cfg), "--quiet"]))
+    try:
+        assert up["status"] == "up" and up["target"] == "local" and up["endpoint"].startswith("http://127.0.0.1:")
+        assert up["record"] == str(tmp_path / "out" / "deployment.json") and up["reused"] is False and up["commands"] >= 1
+        status = _ok(CliRunner().invoke(app, ["deploy", "status", str(cfg)]))
+        assert status["status"] == "up" and status["ready"] and status["health"]["tools"] == ["get_weather", "get_alerts"]
+        again = _ok(CliRunner().invoke(app, ["deploy", "up", str(cfg), "--quiet"]))
+        assert again["reused"] is True and again["endpoint"] == up["endpoint"]
+        summary = _ok(CliRunner().invoke(app, ["infer", str(ds_path), "--deployment", str(tmp_path / "out"), "--out", str(tmp_path / "results")]))
+        assert summary["mode"] == "remote" and summary["endpoint"] == up["endpoint"] and summary["errors"] == 0
+        logs = CliRunner().invoke(app, ["deploy", "logs", str(tmp_path / "out")])
+        assert logs.exit_code == 0 and "evalbuilder serve" in logs.output
+    finally:
+        down = _ok(CliRunner().invoke(app, ["deploy", "down", str(tmp_path / "out")]))
+    assert down["status"] == "down" and down["record"]["endpoint"] is None
+    gone = CliRunner().invoke(app, ["deploy", "status", str(tmp_path / "out")])
+    assert gone.exit_code == 1 and json.loads(gone.stdout)["status"] == "down"
+    missing = CliRunner().invoke(app, ["infer", str(ds_path), "--deployment", str(tmp_path / "out"), "--out", str(tmp_path / "results")])
+    assert missing.exit_code == 1 and "deploy up" in missing.output
+
+
+def test_deploy_cli_render_build_and_bad_targets(tmp_path):
+    cfg = _config(tmp_path)
+    rendered = _ok(CliRunner().invoke(app, ["deploy", "render", str(cfg), "--target", "kubernetes"]))
+    assert rendered["target"] == "kubernetes" and set(rendered["files"]) == {"Dockerfile", "manifests.yaml", "loader.yaml"}
+    assert rendered["image"] == "evalbuilder-weather-cli:latest" and "evalbuilder serve" in rendered["files"]["Dockerfile"] and rendered["written_to"] is None
+    written = _ok(CliRunner().invoke(app, ["deploy", "render", str(cfg), "--target", "docker", "--write"]))
+    assert (Path(written["written_to"]) / "compose.yaml").exists()
+    assert _ok(CliRunner().invoke(app, ["deploy", "render", str(cfg)]))["files"] == {}
+    assert _ok(CliRunner().invoke(app, ["deploy", "build", str(cfg)]))["image"] is None  # nothing to build locally
+    bad = CliRunner().invoke(app, ["deploy", "up", str(cfg), "--target", "heroku"])
+    assert bad.exit_code == 2 and "--target must be one of" in bad.output
+    invalid = CliRunner().invoke(app, ["deploy", "render", str(cfg), "--target", "openshift"])
+    assert invalid.exit_code == 2 and "image.registry" in invalid.output
+    assert CliRunner().invoke(app, ["deploy", "status", str(tmp_path / "nowhere")]).exit_code == 1
+    assert _ok(CliRunner().invoke(app, ["deploy", "down", str(tmp_path / "nowhere")]))["status"] == "none"
+
+
+def test_deploy_cli_reports_a_failed_start(tmp_path):
+    cfg = _config(tmp_path)
+    text = cfg.read_text().replace("module: examples.weather_bot.agent", "module: examples.weather_bot.agent\n  factory: no_such_factory")
+    cfg.write_text(text)
+    result = CliRunner().invoke(app, ["deploy", "up", str(cfg), "--quiet"])
+    assert result.exit_code == 1 and "no_such_factory" in result.output
+    record = json.loads((tmp_path / "out" / "deployment.json").read_text())
+    assert record["status"] == "failed" and "no_such_factory" in record["details"]["error"]

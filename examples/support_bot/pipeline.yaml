@@ -30,6 +30,13 @@ thresholds:
   overall_pass: 0.75
 runs:
   repeats: 2
+deploy:
+  target: local             # docker | kubernetes | openshift need an agent model that runs in the image (API key via deploy.env), not claude-cli
+inference:
+  workers: 4                # cases / scenarios against the deployed agent (joblib; backend threads | processes)
+  backend: threads
+evaluation:
+  workers: 4                # scoring splits
 mocking:
   required: true
   on_miss: strict

@@ -78,21 +78,28 @@ class DeploymentTarget:
     def new_record(self, spec: DeploymentSpec) -> DeploymentRecord:
         return DeploymentRecord(name=spec.name, target=self.kind, image=spec.image, expose=spec.expose, spec=spec.to_dict())
 
-    def wait_healthy(self, endpoint: str, timeout: float, interval: float = 1.0) -> dict:
-        """Poll `/health` until it answers ok; raises DeploymentError after `timeout` seconds."""
+    def wait_healthy(self, endpoint: str, timeout: float, interval: float = 1.0,
+                     alive: Callable[[], bool] | None = None, diagnose: Callable[[], str] | None = None) -> dict:
+        """Poll `/health` until it answers ok; raises DeploymentError after `timeout`
+        seconds — or at once when `alive()` says the process behind the endpoint is gone
+        (`diagnose()` adds its last log lines to the message)."""
         deadline = time.time() + timeout
         last: dict = {}
         while True:
             last = self.health(endpoint)
             if last.get("ok"):
                 return last
+            if alive is not None and not alive():
+                tail = diagnose() if diagnose is not None else ""
+                raise DeploymentError(f"the agent server behind {endpoint} exited before becoming healthy" + (f": {tail}" if tail else ""))
             if time.time() >= deadline:
                 raise DeploymentError(f"{endpoint} did not become healthy within {timeout}s: {last.get('error') or last}")
             self.sleep(interval)
 
-    def finish(self, record: DeploymentRecord, endpoint: str, timeout: float) -> DeploymentRecord:
+    def finish(self, record: DeploymentRecord, endpoint: str, timeout: float,
+               alive: Callable[[], bool] | None = None, diagnose: Callable[[], str] | None = None) -> DeploymentRecord:
         """Wait for the endpoint, store the health facts and the command history."""
-        health = self.wait_healthy(endpoint, timeout)
+        health = self.wait_healthy(endpoint, timeout, alive=alive, diagnose=diagnose)
         record.endpoint = endpoint
         record.status = "up"
         record.details["health"] = {k: v for k, v in health.items() if k in ("module", "factory", "tools", "agent_model", "mock_model", "server")}

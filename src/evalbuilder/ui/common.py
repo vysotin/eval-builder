@@ -80,7 +80,7 @@ def job_badge_line(status: dict) -> str:
 
 def _run_stage_active(status: dict) -> bool:
     prog = status.get("progress") or {}
-    return prog.get("stage") == "run" or status.get("interrupted_stage") == "run"
+    return prog.get("stage") in ("infer", "run") or status.get("interrupted_stage") in ("infer", "run")
 
 
 def job_progress(status: dict, compact: bool = False) -> None:

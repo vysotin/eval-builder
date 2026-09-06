@@ -2,6 +2,7 @@
 
 import json
 import shutil
+from pathlib import Path
 
 import yaml
 from typer.testing import CliRunner
@@ -29,7 +30,9 @@ def _config(tmp_path, **overrides):
                      "out_of_intent": 1, "multi_turn_share": 0.0, "per_tool_edge_cases": 0},
         "evaluators": [{"type": "expected_tools"}, {"type": "contains"}],
         "thresholds": {"default": 0.8, "slice_min": 0.5, "overall_pass": 0.8},
-        "runs": {"repeats": 2, "parallel_scoring": 2, "parallel_simulations": 2},
+        "runs": {"repeats": 2},
+        "inference": {"workers": 2},
+        "evaluation": {"workers": 2},
         "stages": {"simulate": True, "publish": "never", "max_retries": 1},
         "review": {"auto_approve": True, "approved_by": "tester", "note": "offline e2e"},
         "output": {"dir": str(tmp_path / "out")},
@@ -135,7 +138,7 @@ def test_full_offline_pipeline_passes(tmp_path):
     statuses = {k: v["status"] for k, v in report["stages"].items()}
     assert statuses == {
         "preflight": "ok", "discover": "ok", "map": "ok", "mocks": "ok", "dataset": "ok", "review": "ok",
-        "verify": "ok", "run": "ok", "score": "ok", "aggregate": "ok", "simulate": "ok",
+        "verify": "ok", "deploy": "ok", "infer": "ok", "simulate": "ok", "teardown": "ok", "score": "ok", "aggregate": "ok",
         "publish": "skipped", "analyze": "ok", "report": "ok",
     }, statuses
     assert report["verdict"] == "pass" and report["overall_score"] == 1.0, report["verdict_reasons"]
@@ -153,20 +156,29 @@ def test_full_offline_pipeline_passes(tmp_path):
     assert "Always mention the order id in the answer." in report["agent"]["constraints"]
     assert report["simulation"]["details"]["stop_reasons"] == {"refund-flow": "success"}
     assert report["stages"]["review"]["details"]["approved_by"] == "tester"
-    assert report["stages"]["score"]["details"]["parallel_scoring"] == 2
-    assert report["stages"]["simulate"]["details"]["parallel_simulations"] == 2
+    assert report["stages"]["score"]["details"]["workers"] == 2
+    assert report["stages"]["simulate"]["details"]["workers"] == 2
+    assert report["stages"]["deploy"]["details"]["target"] == "local" and report["stages"]["deploy"]["details"]["endpoint"].startswith("http://127.0.0.1:")
+    assert report["stages"]["infer"]["details"]["execution"]["mode"] == "remote" and report["stages"]["infer"]["details"]["workers"] == 2
+    assert report["deployment"]["target"] == "local" and report["deployment"]["status"] == "down"
+    assert report["stages"]["teardown"]["details"]["status"] == "down"
     # ── artifacts on disk ────────────────────────────────────────
     # The output root holds deliverables only: nothing there is a copy of part of
     # another artifact. Everything the pipeline needs but no reader of the evaluation
     # does — resume state, live progress, the mocks→dataset handoff — lives in work/.
     out = tmp_path / "out"
     assert sorted(p.name for p in out.iterdir()) == [
-        "agent-map.json", "aggregate.json", "analysis.json", "dataset.json", "evaluators.yaml",
+        "agent-map.json", "aggregate.json", "analysis.json", "dataset.json", "deployment.json", "evaluators.yaml",
         "report.json", "results", "scenarios.yaml", "simulation.json", "work",
     ]
     assert sorted(p.name for p in (out / "work").iterdir()) == [
-        "mock-rules.json", "mock-strategies.json", "run-progress.json", "state.json",
+        "deploy", "mock-rules.json", "mock-strategies.json", "run-progress.json", "state.json",
     ]
+    deployment = json.loads((out / "deployment.json").read_text())
+    assert deployment["schema"] == "evalbuilder/deployment/v1" and deployment["status"] == "down" and deployment["endpoint"] is None
+    assert (out / "work" / "deploy" / "commands.log").exists() and (out / "work" / "deploy" / "serve.log").exists()
+    run_art = json.loads(Path(report["runs"][0]["run"]).read_text())
+    assert run_art["execution"]["mode"] == "remote" and run_art["case_runs"][0]["log"][0]["mode"] == "remote"
     prog = json.loads((out / "work" / "run-progress.json").read_text())
     assert prog["schema"] == "evalbuilder/run-progress/v1"
     assert prog["repeat"] == 2 and prog["repeats"] == 2
@@ -210,7 +222,7 @@ def test_awaiting_review_then_resume_completes(tmp_path):
     _, report = run_pipeline(cfg_path, generator_factory=_generator, settings=Settings())
     assert report["verdict"] == "incomplete"
     assert report["stages"]["review"]["status"] == "awaiting_review"
-    assert report["stages"]["run"]["status"] == "skipped" and report["stages"]["report"]["status"] == "ok"
+    assert report["stages"]["infer"]["status"] == "skipped" and report["stages"]["report"]["status"] == "ok"
     assert any(p["stage"] == "review" and p["severity"] == "error" for p in report["problems"])
     ds = json.loads((tmp_path / "out" / "dataset.json").read_text())
     assert all(c["review"]["status"] == "pending" for c in ds["cases"])

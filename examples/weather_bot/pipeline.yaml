@@ -1,0 +1,57 @@
+schema: evalbuilder/pipeline-config/v1
+name: weather-bot
+# The smallest example, fully offline: scripted agent + offline generator + offline mock model.
+# Deploys the agent to Docker Compose on the local daemon (switch `deploy.target` to
+# kubernetes for the Docker Desktop cluster, or local for no Docker at all) — the scripted
+# models run inside the image, so no key is needed anywhere.
+target:
+  source: examples/weather_bot/agent.py
+  module: examples.weather_bot.agent
+  factory: build_agent
+models:
+  agent: scripted:examples.weather_bot.agent:default_scripted_model
+  judge: scripted:examples.weather_bot.agent:default_scripted_model
+  generator: scripted:examples.weather_bot.offline:generator_model
+  mock: scripted:examples.weather_bot.offline:mock_model
+constraints:
+  - "Always name the city in the answer."
+coverage:
+  total_cases: 4
+  per_intent: {happy: 1, failure: 1}
+  per_failure_category: 1
+  out_of_intent: 1
+  multi_turn_share: 0.2
+  per_tool_edge_cases: 1
+evaluators:
+  - type: expected_tools
+  - type: contains
+thresholds:
+  default: 0.8
+  slice_min: 0.5
+  overall_pass: 0.8
+runs:
+  repeats: 2
+deploy:
+  target: docker              # local | docker | kubernetes | openshift
+  image: {name: evalbuilder-weather-bot, tag: latest, push: auto}
+  port: 8080
+  expose: port-forward        # kubernetes: port-forward (default) | nodeport
+  keep: false
+  timeout: 240
+inference:
+  workers: 4
+  backend: threads
+evaluation:
+  workers: 2
+mocking:
+  required: true
+  on_miss: llm
+  strategies: true
+stages:
+  simulate: true
+  publish: never
+review:
+  auto_approve: true
+  approved_by: "examples/weather_bot/pipeline.yaml"
+output:
+  dir: eval/pipeline/weather-bot

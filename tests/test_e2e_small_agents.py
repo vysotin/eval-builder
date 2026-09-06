@@ -70,7 +70,7 @@ def test_weather_bot_review_loop_until_dataset_feedback_regenerate_approve(tmp_p
     out = tmp_path / "out"
     _, report = run_pipeline(cfg_path, until="dataset", settings=Settings())
     stages = report["stages"]
-    assert stages["dataset"]["status"] == "ok" and stages["review"]["status"] == "skipped" and stages["run"]["status"] == "skipped"
+    assert stages["dataset"]["status"] == "ok" and stages["review"]["status"] == "skipped" and stages["infer"]["status"] == "skipped" and stages["deploy"]["status"] == "skipped"
     assert json.loads((out / "work" / "state.json").read_text())["data"]["stopped_after"] == "dataset"
     ds = json.loads((out / "dataset.json").read_text())
     assert ds["cases"] and all(c["review"]["status"] == "pending" for c in ds["cases"])
@@ -118,7 +118,7 @@ def test_weather_bot_background_jobs_dataset_then_resume(tmp_path):
     job = jobs.start_job(cfg_path, out, mode="dataset")
     status = _wait_job(out)
     assert status["exit_code"] == 0, jobs.tail_log(out)
-    assert status["stopped_after"] == "dataset" and status["stages"]["run"]["status"] == "skipped"
+    assert status["stopped_after"] == "dataset" and status["stages"]["infer"]["status"] == "skipped"
     assert job["until"] == "dataset" and "--until dataset" in jobs.tail_log(out)
     setup_mod.approve_in_config(cfg_path, "job tester")
     jobs.start_job(cfg_path, out, mode="resume")
@@ -161,7 +161,7 @@ def test_weather_bot_llm_mocking_layer_answers_the_long_tail(tmp_path):
     # verify counted the calls the engine will answer instead of failing; run recorded every layer
     verify = report["stages"]["verify"]["details"]
     assert verify["on_miss"] == "llm" and verify["llm_answered_calls"] > 0 and verify["strategy_tools"] == ["get_alerts", "get_weather"]
-    calls = report["stages"]["run"]["details"]["mocking"]["calls"]
+    calls = report["stages"]["infer"]["details"]["mocking"]["calls"]
     assert calls["llm"] > 0 and calls["invalid"] == 0 and calls["error"] == 0
     assert report["mocking"]["layers"] == ["rules", "llm_engine"] and report["mocking"]["model"] == WEATHER_MOCK
     assert report["mocking"]["strategies"] == ["default", "stormy"] and report["mocking"]["calls"] == calls
@@ -174,14 +174,15 @@ def test_weather_bot_llm_mocking_layer_answers_the_long_tail(tmp_path):
     assert "mocking: on_miss=llm" in summary
 
 
-def test_weather_bot_llm_mocking_repair_round_and_strict_policy(tmp_path):
+def test_weather_bot_llm_mocking_repair_round_and_strict_policy(tmp_path, monkeypatch):
     from examples.weather_bot import offline
 
     cfg_path = _llm_config(tmp_path, repeats=1, simulate=False)
     offline.INVALID_FIRST["enabled"] = True
+    monkeypatch.setenv("EVALBUILDER_WEATHER_INVALID_FIRST", "1")  # the mock model runs inside the deployed agent server
     try:
         _, report = run_pipeline(cfg_path, settings=Settings())
-        calls = report["stages"]["run"]["details"]["mocking"]["calls"]
+        calls = report["stages"]["infer"]["details"]["mocking"]["calls"]
         assert report["verdict"] == "pass" and calls["llm"] > 0 and calls["invalid"] == 0  # every first answer repaired
         run = json.loads(Path(report["runs"][0]["run"]).read_text())
         llm_entries = [m for cr in run["case_runs"] for m in cr["mock_calls"] if m["layer"] == "llm"]
@@ -193,14 +194,14 @@ def test_weather_bot_llm_mocking_repair_round_and_strict_policy(tmp_path):
         cfg.mocking.on_invalid = "strict"
         cfg.save(cfg_path)
         _, report2 = run_pipeline(cfg_path, resume=True, invalidate_from="dataset", settings=Settings())
-        details = report2["stages"]["run"]["details"]
+        details = report2["stages"]["infer"]["details"]
         assert details["mocking"]["calls"]["error"] >= 1 and details["errors"]["infrastructure"] >= 1 and details["errors"]["agent"] == 0
         assert any("failed output-schema validation" in p["message"] for p in report2["problems"])
         # …and with fallback the strategy's fallback_response answers instead
         cfg.mocking.on_invalid = "fallback"
         cfg.save(cfg_path)
         _, report3 = run_pipeline(cfg_path, resume=True, invalidate_from="dataset", settings=Settings())
-        details3 = report3["stages"]["run"]["details"]
+        details3 = report3["stages"]["infer"]["details"]
         assert details3["mocking"]["calls"]["fallback"] >= 1 and details3["errors"]["infrastructure"] == 0
         assert report3["verdict"] == "pass", report3["verdict_reasons"]
     finally:
@@ -214,4 +215,4 @@ def test_weather_bot_llm_mocking_needs_a_ready_mock_model(tmp_path):
     cfg.save(cfg_path)
     _, report = run_pipeline(cfg_path, settings=Settings())
     assert report["verdict"] == "incomplete" and report["stages"]["preflight"]["status"] == "ok"  # scripted specs are 'ready' until built
-    assert report["stages"]["run"]["status"] == "failed" and "no_such_factory" in (report["stages"]["run"]["error"] or "")
+    assert report["stages"]["deploy"]["status"] == "failed" and "no_such_factory" in (report["stages"]["deploy"]["error"] or "")

@@ -29,7 +29,9 @@ class LocalTarget(DeploymentTarget):
         try:
             pid = self.runner.spawn(argv, log_path=log_path, env=server_env(spec), cwd=spec.project_root)
             record.resources = {"pid": pid, "port": port, "log": str(log_path), "argv": argv}
-            return self.finish(record, f"http://127.0.0.1:{port}", spec.timeout)
+            return self.finish(record, f"http://127.0.0.1:{port}", spec.timeout,
+                               alive=lambda: self.runner.pid_alive(pid),
+                               diagnose=lambda: " | ".join(self.logs(spec, record, lines=6).splitlines()[-6:]))
         except Exception as e:  # noqa: BLE001 - the record keeps the diagnosis; the caller decides
             self.runner.kill(record.resources.get("pid"))
             self.failed(record, e)
