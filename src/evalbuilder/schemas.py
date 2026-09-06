@@ -76,6 +76,7 @@ class CaseRun(BaseModel):
     error: str | None = None
     error_class: Literal["none", "agent", "infrastructure"] = "none"
     mock_calls: list[dict] = Field(default_factory=list)  # ledger: one entry per mocked call (layer rule|llm|real|fallback|error)
+    log: list[dict] = Field(default_factory=list)  # inference log: one entry per turn {turn, seconds, tool_calls, error, mode, endpoint}
 
 
 class RunArtifact(BaseModel):
@@ -90,6 +91,7 @@ class RunArtifact(BaseModel):
     timestamp: str = ""
     agent_model: str | None = None
     mocking: dict | None = None  # {on_miss, model, strategy, calls: {rule, llm, real, fallback, error, invalid}}
+    execution: dict | None = None  # {mode: local|remote, endpoint, workers, backend, seconds} — how the inference phase ran
 
 
 class Report(BaseModel):

@@ -1,4 +1,9 @@
-"""Load the target LangGraph agent and execute one case with trajectory capture."""
+"""Load the target LangGraph agent, build its graph, and invoke it with trajectory capture.
+
+`invoke_messages` / `extract` are the primitives the agent clients (`agent_client.py`)
+and the inference engine build on; `run_case` keeps the one-call-per-case shape the
+interactive runner used.
+"""
 
 from __future__ import annotations
 
@@ -33,7 +38,8 @@ def build_graph(module, target: Target, tools=None, model=None):
     return factory(**kwargs)
 
 
-def _extract(state) -> tuple[list[dict], list[dict], str]:
+def extract(state) -> tuple[list[dict], list[dict], str]:
+    """(trajectory in OpenAI format, tool calls of the whole history, last assistant text)."""
     messages = state["messages"]
     trajectory = convert_to_openai_messages(messages)
     tool_calls = [
@@ -45,6 +51,11 @@ def _extract(state) -> tuple[list[dict], list[dict], str]:
     last = messages[-1].content
     response = last if isinstance(last, str) else str(last)
     return trajectory, tool_calls, response
+
+
+def invoke_messages(graph, messages: list) -> tuple[dict, list[str]]:
+    """Invoke the graph on a message history; returns the final state and the node path."""
+    return _invoke_with_path(graph, {"messages": list(messages)})
 
 
 def _invoke_with_path(graph, inputs: dict) -> tuple[dict, list[str]]:
@@ -68,7 +79,7 @@ def run_case(graph, case: Case) -> CaseRun:
             messages.append({"role": "user", "content": turn})
             state, more_path = _invoke_with_path(graph, {"messages": messages})
             node_path.extend(more_path)
-        trajectory, tool_calls, response = _extract(state)
+        trajectory, tool_calls, response = extract(state)
         return CaseRun(
             case_id=case.id,
             outputs={"response": response},
@@ -80,11 +91,11 @@ def run_case(graph, case: Case) -> CaseRun:
         return CaseRun(
             case_id=case.id,
             error=f"{type(e).__name__}: {e}",
-            error_class="infrastructure" if _is_mock_engine_error(e) else "agent",
+            error_class="infrastructure" if is_mock_engine_error(e) else "agent",
         )
 
 
-def _is_mock_engine_error(exc: BaseException) -> bool:
+def is_mock_engine_error(exc: BaseException) -> bool:
     """A mock engine failure (invalid LLM mock under `on_invalid: strict`) is not the agent's doing."""
     from evalbuilder.mock_engine import MockEngineError
 
@@ -95,3 +106,7 @@ def _is_mock_engine_error(exc: BaseException) -> bool:
         exc = exc.__cause__ or exc.__context__
         seen += 1
     return False
+
+
+_extract = extract  # compatibility aliases
+_is_mock_engine_error = is_mock_engine_error

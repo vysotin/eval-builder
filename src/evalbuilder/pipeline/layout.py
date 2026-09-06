@@ -129,12 +129,16 @@ ARTIFACTS: dict[str, ArtifactKind] = {
             "Evaluator specs used for scoring (same format as `evalbuilder score --evaluators`).",
         ),
         ArtifactKind(
-            "run", "results/run-{run_id}.json", "evalbuilder/run/v1", "run",
-            "One execution of every approved case: outputs, trajectory, tool calls, node path, errors.",
+            "deployment", "deployment.json", "evalbuilder/deployment/v1", "deploy, teardown",
+            "Where the agent ran during inference: target, image, endpoint, resources, status, the commands executed.",
         ),
         ArtifactKind(
-            "run_progress", f"{WORK_DIR}/run-progress.json", "evalbuilder/run-progress/v1", "run",
-            "Live progress of the run stage: current repeat, per-case completions, per-intent tallies.",
+            "run", "results/run-{run_id}.json", "evalbuilder/run/v1", "infer",
+            "One execution of every approved case: outputs, trajectory, tool calls, node path, errors, per-turn log, execution info.",
+        ),
+        ArtifactKind(
+            "run_progress", f"{WORK_DIR}/run-progress.json", "evalbuilder/run-progress/v1", "infer",
+            "Live progress of the infer stage: current repeat, per-case completions, per-intent tallies.",
             legacy_files=("run-progress.json",), tier="work",
         ),
         ArtifactKind(

@@ -232,3 +232,15 @@ def test_compact_dir_leaves_a_copy_alone_when_its_parent_is_missing(tmp_path):
     (out / "coverage.json").write_text(json.dumps({"planned": 1}))
     assert compact_dir(out) == {"folded": [], "moved": [], "removed": []}
     assert (out / "coverage.json").exists()
+
+
+def test_deployment_record_is_a_root_deliverable():
+    a = ARTIFACTS["deployment"]
+    assert a.file == "deployment.json" and a.schema == "evalbuilder/deployment/v1" and a.tier == "final"
+    assert "deploy" in a.stage and "teardown" in a.stage
+    assert kind_of_file("deployment.json") == (a, "")
+    assert kind_of_schema("evalbuilder/deployment/v1") is a
+    from evalbuilder.deploy.spec import DEPLOYMENT_SCHEMA
+
+    assert DEPLOYMENT_SCHEMA == a.schema
+    assert any(row["kind"] == "deployment" for row in convention_table())
