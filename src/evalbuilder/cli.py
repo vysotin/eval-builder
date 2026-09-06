@@ -606,7 +606,6 @@ def simulate(
     from uuid import uuid4
 
     from evalbuilder import simulate as sim
-    from evalbuilder import target as target_mod
 
     ds = _load_ds(path)
     try:
@@ -614,29 +613,17 @@ def simulate(
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
-    module = target_mod.load_target(ds.target)
-    if mock:
-        from evalbuilder.mocking import merge_mock_rules, wrap_tools
-        from evalbuilder.runner import build_engine, tool_specs_of
+    # One graph per scenario turn (the agent client is stateless): a fresh engine keeps
+    # the LLM mock's call history in the request (`mocks.history`) and the scenario's
+    # own `mock_strategy` selects the strategy; every result attributes its mocked calls.
+    from evalbuilder.inference import local_agent_for, simulate_scenarios
 
-        policy = on_miss or (ds.mocks or {}).get("on_miss") or "real"
-        engine_model = _mock_model_for(ds, mock_model)[0] if policy == "llm" else None
-        specs = tool_specs_of(module) if policy == "llm" else {}
-
-        # One graph per scenario: a fresh engine keeps the LLM mock's call history (and
-        # the scenario's own `mock_strategy`) scoped to that conversation, and a fresh
-        # ledger lets the result attribute every mocked call.
-        def graph_factory(scenario):
-            ledger: list[dict] = []
-            engine = build_engine(engine_model, ds, specs, strategy=scenario.get("mock_strategy")) if policy == "llm" else None
-            tools = wrap_tools(list(getattr(module, "TOOLS")), merge_mock_rules((ds.mocks or {}).get("tools", {}), {}),
-                               on_miss=policy, engine=engine, ledger=ledger)
-            return target_mod.build_graph(module, ds.target, tools=tools), ledger
-
-        results = sim.simulate_scenarios(graph_factory, scenario_list)
-    else:
-        graph = target_mod.build_graph(module, ds.target)
-        results = [sim.simulate_scenario(graph, s) for s in scenario_list]
+    policy = on_miss or (ds.mocks or {}).get("on_miss") or "real"
+    engine_spec = None
+    if mock and policy == "llm":
+        engine_spec = _mock_model_for(ds, mock_model)[1]
+    agent = local_agent_for(ds, mock_model_spec=engine_spec)
+    results = simulate_scenarios(agent, scenario_list, mocks=ds.mocks if mock else None, on_miss=policy if mock else None, mocked=mock)
     mined = sim.mine_failures(ds, results) if mine else 0
     if mined:
         _save_valid(path, ds)

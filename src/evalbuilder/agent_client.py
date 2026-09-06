@@ -97,6 +97,7 @@ class LocalAgent:
         if mock_model is not None:
             self._mock_models[""] = mock_model
         self._module = None
+        self.default_fallback = None  # canned answer for `on_miss: fallback` when the request names none
 
     # objects built lazily are not pickled: workers rebuild them from the specs
     def __getstate__(self):
@@ -122,10 +123,13 @@ class LocalAgent:
         return self._agent_model
 
     def _mock_model(self, spec: str | None):
-        """The engine's model: the request's `llm.model` spec, else this client's."""
-        key = spec or ""
+        """The engine's model: this client's own (an object, or `mock_model_spec` — what
+        the deployment configured) wins; the request's `llm.model` spec is the fallback."""
+        if "" in self._mock_models:
+            return self._mock_models[""]
+        key = "" if self.mock_model_spec else (spec or "")
         if key not in self._mock_models:
-            chosen = spec or self.mock_model_spec
+            chosen = self.mock_model_spec or spec
             if not chosen:
                 raise ValueError("on_miss='llm' needs a mock model: mocks.llm.model in the request or mock_model_spec on the client")
             from evalbuilder.claude_cli import model_from_spec
@@ -163,8 +167,11 @@ class LocalAgent:
                         strategy=mocks.get("strategy") or DEFAULT_STRATEGY,
                         on_invalid=llm.get("on_invalid", "fallback"), max_repairs=int(llm.get("max_repairs", 1)),
                     )
+                    # earlier turns of a stateless conversation: what the engine already answered
+                    engine.history.extend(h for h in (mocks.get("history") or []) if isinstance(h, dict))
+                fallback = mocks["fallback"] if "fallback" in mocks else self.default_fallback
                 tools = wrap_tools(list(getattr(module, "TOOLS")), mocks.get("tools") or {}, on_miss=on_miss,
-                                   fallback=mocks.get("fallback"), engine=engine, ledger=ledger)
+                                   fallback=fallback, engine=engine, ledger=ledger)
                 graph = target_mod.build_graph(module, target, tools=tools, model=self._agent())
             else:
                 graph = target_mod.build_graph(module, target, model=self._agent())

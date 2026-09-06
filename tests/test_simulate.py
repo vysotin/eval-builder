@@ -107,52 +107,27 @@ def test_cli_simulate(tmp_path):
     assert list(tmp_path.glob("simulation-*.json"))
 
 
-# ── parallel scenario execution ────────────────────────────────
+# ── scenarios through the inference engine ────────────────────
 
 
-class _FakeGraph:
-    """graph.invoke stand-in: replies with a fixed text, optionally after a barrier."""
+def test_graph_step_adapter_and_plain_callable_steps():
+    from evalbuilder.simulate import graph_step
 
-    def __init__(self, reply, barrier=None):
-        self.reply = reply
-        self.barrier = barrier
-
-    def invoke(self, state):
-        from types import SimpleNamespace
-
-        if self.barrier is not None:
-            self.barrier.wait()  # raises BrokenBarrierError when scenarios run sequentially
-        return {"messages": [SimpleNamespace(content=self.reply)]}
+    step = graph_step(build_agent())
+    assert "confirm" in simulate_scenario(step, SCEN)["transcript"][-1]["content"].lower()
+    canned = simulate_scenario(lambda transcript: "ok, please confirm", SCEN)
+    assert canned["stop_reason"] == "success" and canned["turns"] == 1
 
 
-def _scen(i):
-    return {"id": f"s{i}", "opening": "hi", "max_turns": 2, "success_contains": "confirm"}
+def test_inference_simulates_scenarios_in_parallel_with_a_stateless_agent():
+    from evalbuilder.agent_client import LocalAgent
+    from evalbuilder.inference import simulate_scenarios
 
-
-def test_simulate_scenarios_run_concurrently_with_a_graph_per_scenario():
-    import threading
-
-    from evalbuilder.simulate import simulate_scenarios
-
-    barrier = threading.Barrier(2, timeout=10)
-    built = []
-
-    def factory():
-        graph = _FakeGraph("done, please confirm", barrier)
-        built.append(graph)
-        return graph
-
-    results = simulate_scenarios(factory, [_scen(1), _scen(2)], max_workers=2)
-    assert [r["scenario_id"] for r in results] == ["s1", "s2"]  # scenario order kept
-    assert all(r["stop_reason"] == "success" for r in results)
-    assert len(built) == 2  # each worker built its own graph
-
-
-def test_simulate_scenarios_sequential_matches_parallel():
-    from evalbuilder.simulate import simulate_scenarios
-
-    scens = [_scen(1), _scen(2), _scen(3)]
-    parallel = simulate_scenarios(lambda: _FakeGraph("ok, confirm"), scens, max_workers=3)
-    sequential = simulate_scenarios(lambda: _FakeGraph("ok, confirm"), scens, max_workers=1)
-    assert parallel == sequential
-    assert [r["scenario_id"] for r in parallel] == ["s1", "s2", "s3"]
+    scens = [dict(SCEN, id=f"s{i}") for i in range(3)]
+    agent = LocalAgent("examples.travel_planner.agent")
+    parallel = simulate_scenarios(agent, scens, mocks=None, workers=3)
+    sequential = simulate_scenarios(agent, scens, mocks=None, workers=1)
+    strip = lambda rs: [{k: v for k, v in r.items() if k != "log"} for r in rs]  # noqa: E731
+    assert strip(parallel) == strip(sequential)
+    assert [r["scenario_id"] for r in parallel] == ["s0", "s1", "s2"] and all(r["stop_reason"] == "success" for r in parallel)
+    assert all(len(r["log"]) == r["turns"] for r in parallel)

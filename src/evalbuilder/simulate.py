@@ -1,15 +1,20 @@
-"""Multi-turn conversation simulation: goal + stop conditions, failures mined as cases."""
+"""Multi-turn conversation simulation: goal + stop conditions, failures mined as cases.
+
+`simulate_scenario` drives one scenario through a *step* — a callable taking the text
+transcript so far (`[{role, content}, …]`) and returning the assistant's reply. A
+compiled graph is accepted too (`graph_step` adapts it); the inference engine
+(`inference.simulate_scenarios`) steps through an agent client, local or remote, in
+parallel.
+"""
 
 from __future__ import annotations
 
-import inspect
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
 from evalbuilder.artifacts import add_case
-from evalbuilder.mocking import ledger_totals
 from evalbuilder.schemas import Dataset
 
 REQUIRED_KEYS = ("id", "opening", "max_turns")
@@ -59,7 +64,22 @@ def _check_expectations(scenario: dict, transcript: list[dict]) -> list[str]:
     return violations
 
 
-def simulate_scenario(graph, scenario: dict, user_model=None) -> dict:
+def graph_step(graph) -> Callable[[list[dict]], str]:
+    """A step over a compiled graph: invoke it on the transcript, return the last reply."""
+
+    def step(transcript: list[dict]) -> str:
+        state = graph.invoke({"messages": [dict(m) for m in transcript]})
+        reply = state["messages"][-1].content
+        return reply if isinstance(reply, str) else str(reply)
+
+    return step
+
+
+def simulate_scenario(step, scenario: dict, user_model=None) -> dict:
+    """Run one scenario: opening → replies → follow-ups / simulated user, until the
+    success literal appears, the follow-ups run out, or `max_turns` (a truncation)."""
+    if not callable(step):
+        step = graph_step(step)
     transcript: list[dict] = []
     followups = list(scenario.get("followups", []))
     success_needle = (scenario.get("success_contains") or "").lower()
@@ -69,9 +89,7 @@ def simulate_scenario(graph, scenario: dict, user_model=None) -> dict:
 
     while turns < int(scenario["max_turns"]):
         transcript.append({"role": "user", "content": user_message})
-        state = graph.invoke({"messages": [dict(m) for m in transcript]})
-        reply = state["messages"][-1].content
-        reply = reply if isinstance(reply, str) else str(reply)
+        reply = step(transcript)
         transcript.append({"role": "assistant", "content": reply})
         turns += 1
 
@@ -100,34 +118,6 @@ def simulate_scenario(graph, scenario: dict, user_model=None) -> dict:
         "transcript": transcript,
         "violations": violations,
     }
-
-
-def simulate_scenarios(
-    graph_factory, scenarios: list[dict], user_model=None, max_workers: int = 1
-) -> list[dict]:
-    """Run every scenario, each against its own graph from `graph_factory()`.
-
-    A factory that takes an argument receives the scenario (so it can select the
-    scenario's `mock_strategy`); it may return `(graph, ledger)` to have the mock ledger
-    summarised into the result (`mock_calls`). With `max_workers > 1` the scenarios run
-    concurrently in a thread pool — each worker builds a fresh graph (mirroring the
-    per-case graphs of `run_dataset`), so no graph or tool wrapper is shared between
-    threads. Results keep scenario order and are identical to a sequential pass."""
-    takes_scenario = bool(inspect.signature(graph_factory).parameters)
-
-    def _one(scenario: dict) -> dict:
-        built = graph_factory(scenario) if takes_scenario else graph_factory()
-        graph, ledger = built if isinstance(built, tuple) else (built, None)
-        result = simulate_scenario(graph, scenario, user_model=user_model)
-        if ledger is not None:
-            result["mock_calls"] = ledger_totals(ledger)
-            result["mock_strategy"] = scenario.get("mock_strategy")
-        return result
-
-    if max_workers > 1 and len(scenarios) > 1:
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(scenarios))) as pool:
-            return list(pool.map(_one, scenarios))
-    return [_one(scenario) for scenario in scenarios]
 
 
 def mine_failures(ds: Dataset, results: list[dict]) -> int:
