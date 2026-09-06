@@ -1,0 +1,11 @@
+# evalbuilder deploy builds the agent image from the project root: keep the context small
+.git
+.venv
+venv
+eval
+.pytest_cache
+**/__pycache__
+*.egg-info
+node_modules
+docs/examples
+shots

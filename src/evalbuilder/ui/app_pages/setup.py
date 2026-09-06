@@ -312,6 +312,32 @@ def render() -> None:
             st.number_input("Repeats", 1, 10, key="setup_repeats")
         with t5:
             st.checkbox("Simulate multi-turn", key="setup_simulate")
+        st.markdown("**Deployment** — where the agent (with both mock layers) runs during inference; "
+                    "container targets need an agent model that runs inside the image (API key passed through `deploy.env`), not claude-cli")
+        d1, d2, d3, d4, d5, d6 = st.columns([1.2, 1.5, 1.5, 1, 1.2, 0.8])
+        with d1:
+            st.selectbox("Deployment target", list(setup_mod.DEPLOY_TARGET_CHOICES), key="setup_deploy_target",
+                         help="local = a subprocess (no Docker) · docker = Docker Compose · kubernetes = kubectl (image loaded into the nodes, or pushed to the registry) · openshift = oc (prototype)")
+        with d2:
+            st.text_input("Image name (empty = evalbuilder-<name>)", key="setup_image_name")
+        with d3:
+            st.text_input("Registry (push target; required for openshift)", key="setup_image_registry", placeholder="docker.io/me")
+        with d4:
+            st.text_input("Namespace", key="setup_namespace")
+        with d5:
+            st.selectbox("Expose", list(setup_mod.EXPOSE_CHOICES), key="setup_expose",
+                         help="kubernetes: port-forward (works everywhere) | nodeport; openshift: route")
+        with d6:
+            st.checkbox("Keep running", key="setup_keep", help="skip the teardown stage; `evalbuilder deploy down` later")
+        st.markdown("**Parallelism** — joblib workers for the inference phase (cases and scenarios) and the evaluation phase (scoring splits)")
+        w1, w2, w3 = st.columns(3)
+        with w1:
+            st.number_input("Inference workers", 1, 64, key="setup_infer_workers")
+        with w2:
+            st.selectbox("Inference backend", list(setup_mod.BACKEND_CHOICES), key="setup_infer_backend",
+                         help="threads (default) or loky processes")
+        with w3:
+            st.number_input("Evaluation workers", 1, 64, key="setup_eval_workers")
         r1, r2, r3 = st.columns([1, 1, 2])
         with r1:
             st.checkbox("Auto-approve generated cases", key="setup_auto_approve",

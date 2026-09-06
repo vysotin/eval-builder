@@ -35,6 +35,10 @@ def render() -> None:
             f"**{bundle.name}** · target `{(bundle.config.get('target') or {}).get('module', '?')}` · "
             f"generated {report.get('generated_at', '—')[:19].replace('T', ' ')}"
         )
+    deployment = report.get("deployment") or bundle.deployment or {}
+    if deployment:
+        st.caption(f"deployed to **{deployment.get('target')}**" + (f" at `{deployment.get('endpoint')}`" if deployment.get("endpoint") else "")
+                   + (f" · image `{deployment.get('image')}`" if deployment.get("image") else "") + f" · now {deployment.get('status', '—')}")
     reasons = report.get("verdict_reasons") or (bundle.aggregate or {}).get("verdict_reasons") or []
     if len(reasons) <= 3:
         for reason in reasons:

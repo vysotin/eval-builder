@@ -16,6 +16,9 @@ from evalbuilder.pipeline.layout import artifact_index, existing_path, path_for
 from evalbuilder.schemas import Target
 
 EVALUATOR_CHOICES = ("expected_tools", "contains", "contract", "correctness", "trajectory_llm", "json_valid", "trajectory_match")
+DEPLOY_TARGET_CHOICES = ("local", "docker", "kubernetes", "openshift")
+EXPOSE_CHOICES = ("port-forward", "nodeport", "route")
+BACKEND_CHOICES = ("threads", "processes")
 DEFAULT_TARGET_ROOTS = ("examples",)
 DEFAULT_PROJECT_ROOTS = ("eval/pipeline", "docs/examples")
 SCRIPTED_SUFFIX = ":default_scripted_model"
@@ -142,6 +145,15 @@ def default_form(target: dict | None = None) -> dict:
         "simulate": True,
         "auto_approve": False,
         "approved_by": "",
+        "deploy_target": "local",
+        "image_name": "",
+        "image_registry": "",
+        "namespace": "default",
+        "expose": "port-forward",
+        "keep": False,
+        "infer_workers": 4,
+        "infer_backend": "threads",
+        "eval_workers": 4,
         "output_dir": f"eval/pipeline/{name}" if target else "",
         "config_path": f"eval/pipeline/{name}.yaml" if target else "",
     }
@@ -180,6 +192,15 @@ def form_from_config(cfg: PipelineConfig, output_dir: str | None = None, config_
         "simulate": cfg.stages.simulate,
         "auto_approve": cfg.review.auto_approve,
         "approved_by": cfg.review.approved_by,
+        "deploy_target": cfg.deploy.target,
+        "image_name": cfg.deploy.image.name or "",
+        "image_registry": cfg.deploy.image.registry or "",
+        "namespace": cfg.deploy.namespace,
+        "expose": cfg.deploy.expose,
+        "keep": cfg.deploy.keep,
+        "infer_workers": cfg.inference.workers,
+        "infer_backend": cfg.inference.backend,
+        "eval_workers": cfg.evaluation.workers,
         "output_dir": output_dir or str(cfg.output_dir),
         "config_path": config_path or f"eval/pipeline/{cfg.name}.yaml",
     }
@@ -296,6 +317,15 @@ def build_config(form: dict) -> PipelineConfig:
             "overall_pass": float(form.get("overall_pass", 0.8)),
         },
         "runs": {"repeats": int(form.get("repeats", 2))},
+        "deploy": {
+            "target": form.get("deploy_target") or "local",
+            "image": {"name": (form.get("image_name") or "").strip() or None, "registry": (form.get("image_registry") or "").strip() or None},
+            "namespace": (form.get("namespace") or "").strip() or "default",
+            "expose": form.get("expose") or "port-forward",
+            "keep": bool(form.get("keep", False)),
+        },
+        "inference": {"workers": int(form.get("infer_workers", 4)), "backend": form.get("infer_backend") or "threads"},
+        "evaluation": {"workers": int(form.get("eval_workers", 4))},
         "mocking": {"required": True, "on_miss": form.get("on_miss") or "strict", "on_invalid": form.get("on_invalid") or "fallback",
                     "strategies": bool(form.get("strategies", True))},
         "stages": {"simulate": bool(form.get("simulate", True)), "publish": "auto", "max_retries": 1},

@@ -152,6 +152,46 @@ def _review_section(out_dir: Path, status: dict, config_path: str | None) -> Non
         st.rerun()
 
 
+def _deployment_section(out_dir: Path, running: bool) -> None:
+    """The recorded deployment (target, image, endpoint, live status) and a Tear down button."""
+    from evalbuilder.deploy import deploy_down, deploy_status, load_record
+
+    record = load_record(out_dir)
+    if record is None:
+        return
+    st.subheader("Deployment", anchor="deployment")
+    badge = {"up": ":green-badge[up]", "down": ":grey-badge[down]", "failed": ":red-badge[failed]"}.get(record.status, f":orange-badge[{record.status}]")
+    line = f"{badge} target **{record.target}**"
+    if record.image:
+        line += f" · image `{record.image}`"
+    if record.endpoint:
+        line += f" · endpoint `{record.endpoint}`"
+    line += f" · expose `{record.expose}` · updated {str(record.updated_at)[:19].replace('T', ' ')}"
+    st.markdown(line)
+    health = (record.details or {}).get("health") or {}
+    if health.get("tools"):
+        st.caption(f"serves `{health.get('module')}` · tools {', '.join(f'`{t}`' for t in health['tools'])}"
+                   + (f" · agent model `{health.get('agent_model')}`" if health.get("agent_model") else "")
+                   + (f" · mock model `{health.get('mock_model')}`" if health.get("mock_model") else ""))
+    if record.status == "failed" and (record.details or {}).get("error"):
+        st.error(record.details["error"][:400])
+    if record.status == "up" and not running:
+        c1, c2 = st.columns([1, 4])
+        with c1:
+            if st.button("Tear down", key="run_teardown", icon=":material/power_settings_new:",
+                         help="Stop the deployed agent (evalbuilder deploy down). The pipeline's teardown stage does this unless deploy.keep is set."):
+                deploy_down(out_dir)
+                st.rerun()
+        with c2:
+            live = deploy_status(out_dir)
+            ready = live.get("ready")
+            replicas = live.get("replicas") or {}
+            st.markdown((":green-badge[healthy]" if ready else ":red-badge[unhealthy]")
+                        + f" replicas {replicas.get('ready', '?')}/{replicas.get('wanted', '?')}"
+                        + (f" · {(live.get('health') or {}).get('error')}" if not ready and (live.get("health") or {}).get("error") else ""))
+    st.caption(f"record `{out_dir / 'deployment.json'}` · rendered files and command log under `{out_dir / 'work' / 'deploy'}`")
+
+
 def _results_section(out_dir: Path) -> None:
     bundle = loader.load_dir(str(out_dir))
     st.subheader("Results", anchor="results")
@@ -218,6 +258,11 @@ def render() -> None:
     if _generation_done(status):
         with st.container(border=True):
             _review_section(out_dir, status, config_path)
+    from evalbuilder.deploy import load_record
+
+    if load_record(out_dir) is not None:
+        with st.container(border=True):
+            _deployment_section(out_dir, running=status["status"] == "running")
     if (out_dir / "report.json").exists():
         with st.container(border=True):
             _results_section(out_dir)
