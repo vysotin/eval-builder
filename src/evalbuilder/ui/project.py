@@ -31,7 +31,7 @@ INTERNAL_FIELDS = ("config_mtime",)
 # setup-page state (besides the form) that a new project / clear must drop
 SETUP_STATE_KEYS = ("setup_preview", "setup_notice", "setup_result", "setup_goto")
 # run-page state that must not survive a change of folder
-RUN_STATE_KEYS = ("review_feedback", "review_from", "proceed_by", "proceed_reject", "proceed_notice")
+RUN_STATE_KEYS = ("review_feedback", "review_from", "proceed_by", "proceed_reject", "proceed_notice", "run_deploy_status")
 
 
 # ── form (persistent copy of the setup widgets) ─────────────────

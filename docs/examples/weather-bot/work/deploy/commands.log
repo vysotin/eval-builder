@@ -1,0 +1,2 @@
+[2026-09-07T08:49:04+00:00] $ ./.venv/bin/python3 -m evalbuilder.cli serve --module examples.weather_bot.agent --factory build_agent --host 127.0.0.1 --port 53409
+  → spawned pid 88371, output in docs/examples/weather-bot/work/deploy/serve.log

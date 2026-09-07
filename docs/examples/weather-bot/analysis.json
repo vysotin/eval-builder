@@ -1,0 +1,13 @@
+{
+  "schema": "evalbuilder/analysis/v1",
+  "summary": "Offline analysis: the weather bot names the city and never invents data.",
+  "verdict_explanation": "pass — thresholds met",
+  "failure_patterns": [],
+  "weak_slices": [],
+  "stability_notes": "stable across repeats",
+  "evaluator_issues": [],
+  "recommendations": [
+    "Add judge evaluators with a real model."
+  ],
+  "source": "generator"
+}

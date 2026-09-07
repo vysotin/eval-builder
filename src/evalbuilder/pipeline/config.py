@@ -101,6 +101,7 @@ class DeployConfig(BaseModel):
     image: ImageConfig = Field(default_factory=ImageConfig)
     build: BuildConfig = Field(default_factory=BuildConfig)
     port: int = 8080  # container port of the agent server
+    host_port: int | None = None  # docker: host port the container port is published on (null = same as port)
     namespace: str = "default"  # kubernetes / openshift
     replicas: int = 1
     expose: Literal["port-forward", "nodeport", "route"] = "port-forward"  # how the pipeline reaches the service
@@ -348,6 +349,11 @@ class PipelineConfig(BaseModel):
         errors: list[str] = []
         if not 1 <= d.port <= 65535:
             errors.append("deploy.port must be within [1, 65535]")
+        if d.host_port is not None:
+            if not 1 <= d.host_port <= 65535:
+                errors.append("deploy.host_port must be within [1, 65535]")
+            if d.target != "docker":
+                errors.append("deploy.host_port is only meaningful for the docker target")
         if d.replicas < 1:
             errors.append("deploy.replicas must be >= 1")
         if d.timeout < 1:
@@ -457,6 +463,7 @@ deploy:                       # where the agent (with both mock layers) runs dur
     include: []               # extra paths copied into the image (the target's package always is)
     requirements: null        # requirements.txt installed in the image
   port: 8080                  # container port of the agent server
+  host_port: null             # docker: host port published for it (null = same as port; set it when 8080 is taken)
   namespace: default          # kubernetes / openshift namespace (project)
   replicas: 1
   expose: port-forward        # kubernetes: port-forward | nodeport; openshift: route

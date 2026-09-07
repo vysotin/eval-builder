@@ -1,0 +1,12 @@
+scenarios:
+- id: weather-then-alerts
+  intent: intent.conditions
+  persona: traveller
+  goal: weather and alerts for Paris
+  opening: What is the weather in Paris?
+  followups:
+  - Any alerts for Paris?
+  max_turns: 3
+  success_contains: heat advisory
+  expect:
+    contains: Paris

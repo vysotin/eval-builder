@@ -89,8 +89,9 @@ in-process or deployed, with the same workers) or on their own:
 
 ```bash
 evalbuilder infer eval/datasets/NAME.json --scenarios eval/scenarios.yaml --out eval/results   # runs + simulation-<id>.json
-evalbuilder simulate eval/datasets/NAME.json --scenarios eval/scenarios.yaml                   # scenarios only, real tools
+evalbuilder simulate eval/datasets/NAME.json --scenarios eval/scenarios.yaml                   # scenarios only, in-process, real tools
 evalbuilder simulate eval/datasets/NAME.json --scenarios eval/scenarios.yaml --mock            # dataset mocks; a scenario's mock_strategy selects the engine's strategy
+evalbuilder simulate eval/datasets/NAME.json --scenarios eval/scenarios.yaml --deployment eval/out --workers 4   # against the deployed agent (or --endpoint URL)
 ```
 
 Stopping at `max_turns` is a truncation, not a pass. Only expectation-violating

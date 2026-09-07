@@ -1,0 +1,561 @@
+{
+  "schema": "evalbuilder/run/v1",
+  "run_id": "932cc142",
+  "dataset_path": "docs/examples/weather-bot/dataset.json",
+  "dataset_name": "weather-bot",
+  "mocked": true,
+  "case_runs": [
+    {
+      "case_id": "case-1bcfeeea1d",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in Paris?"
+          }
+        ],
+        "user_turns": [
+          "And are there any alerts for Paris?"
+        ]
+      },
+      "outputs": {
+        "response": "Alerts: {\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "What is the weather in Paris?"
+        },
+        {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "type": "function",
+              "id": "call_1",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\": \"Paris\"}"
+              }
+            }
+          ],
+          "content": ""
+        },
+        {
+          "role": "tool",
+          "name": "get_weather",
+          "tool_call_id": "call_1",
+          "content": "{\"temp\": 72, \"condition\": \"sunny\", \"city\": \"Paris\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "It is 72F and sunny in Paris."
+        },
+        {
+          "role": "user",
+          "content": "And are there any alerts for Paris?"
+        },
+        {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "type": "function",
+              "id": "call_1",
+              "function": {
+                "name": "get_alerts",
+                "arguments": "{\"city\": \"Paris\"}"
+              }
+            }
+          ],
+          "content": ""
+        },
+        {
+          "role": "tool",
+          "name": "get_alerts",
+          "tool_call_id": "call_1",
+          "content": "{\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "Alerts: {\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "get_weather",
+          "args": {
+            "city": "Paris"
+          }
+        },
+        {
+          "name": "get_alerts",
+          "args": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "node_path": [
+        "model",
+        "tools",
+        "model",
+        "model",
+        "tools",
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [
+        {
+          "tool": "get_weather",
+          "args": {
+            "city": "Paris"
+          },
+          "layer": "llm",
+          "strategy": "default",
+          "response": {
+            "temp": 72,
+            "condition": "sunny",
+            "city": "Paris"
+          },
+          "valid": true,
+          "repairs": 0,
+          "fallback": false,
+          "seconds": 0.0
+        },
+        {
+          "tool": "get_alerts",
+          "args": {
+            "city": "Paris"
+          },
+          "layer": "llm",
+          "strategy": "default",
+          "response": {
+            "alerts": [
+              "heat advisory"
+            ],
+            "city": "Paris"
+          },
+          "valid": true,
+          "repairs": 0,
+          "fallback": false,
+          "seconds": 0.0
+        }
+      ],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.013,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        },
+        {
+          "turn": 1,
+          "seconds": 0.007,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    },
+    {
+      "case_id": "case-357ad7a5f7",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in Paris?"
+          }
+        ]
+      },
+      "outputs": {
+        "response": "Sorry, the weather service could not answer right now."
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "What is the weather in Paris?"
+        },
+        {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "type": "function",
+              "id": "call_1",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\": \"Paris\"}"
+              }
+            }
+          ],
+          "content": ""
+        },
+        {
+          "role": "tool",
+          "name": "get_weather",
+          "tool_call_id": "call_1",
+          "content": "{\"error\": \"service unavailable\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "Sorry, the weather service could not answer right now."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "get_weather",
+          "args": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "node_path": [
+        "model",
+        "tools",
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [
+        {
+          "tool": "get_weather",
+          "args": {
+            "city": "Paris"
+          },
+          "layer": "rule",
+          "rule": 0,
+          "response": {
+            "error": "service unavailable"
+          }
+        }
+      ],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.012,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    },
+    {
+      "case_id": "case-af8dace40e",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Any alerts for Paris?"
+          }
+        ]
+      },
+      "outputs": {
+        "response": "Alerts: {\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "Any alerts for Paris?"
+        },
+        {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "type": "function",
+              "id": "call_1",
+              "function": {
+                "name": "get_alerts",
+                "arguments": "{\"city\": \"Paris\"}"
+              }
+            }
+          ],
+          "content": ""
+        },
+        {
+          "role": "tool",
+          "name": "get_alerts",
+          "tool_call_id": "call_1",
+          "content": "{\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "Alerts: {\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "get_alerts",
+          "args": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "node_path": [
+        "model",
+        "tools",
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [
+        {
+          "tool": "get_alerts",
+          "args": {
+            "city": "Paris"
+          },
+          "layer": "llm",
+          "strategy": "default",
+          "response": {
+            "alerts": [
+              "heat advisory"
+            ],
+            "city": "Paris"
+          },
+          "valid": true,
+          "repairs": 0,
+          "fallback": false,
+          "seconds": 0.0
+        }
+      ],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.008,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    },
+    {
+      "case_id": "case-fb5c5bbdc9",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Any alerts for Paris?"
+          }
+        ]
+      },
+      "outputs": {
+        "response": "Sorry, the weather service could not answer right now."
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "Any alerts for Paris?"
+        },
+        {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "type": "function",
+              "id": "call_1",
+              "function": {
+                "name": "get_alerts",
+                "arguments": "{\"city\": \"Paris\"}"
+              }
+            }
+          ],
+          "content": ""
+        },
+        {
+          "role": "tool",
+          "name": "get_alerts",
+          "tool_call_id": "call_1",
+          "content": "{\"error\": \"service unavailable\"}"
+        },
+        {
+          "role": "assistant",
+          "content": "Sorry, the weather service could not answer right now."
+        }
+      ],
+      "tool_calls": [
+        {
+          "name": "get_alerts",
+          "args": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "node_path": [
+        "model",
+        "tools",
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [
+        {
+          "tool": "get_alerts",
+          "args": {
+            "city": "Paris"
+          },
+          "layer": "rule",
+          "rule": 0,
+          "response": {
+            "error": "service unavailable"
+          }
+        }
+      ],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.014,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    },
+    {
+      "case_id": "case-124e4608e5",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Book me a table for two tonight"
+          }
+        ]
+      },
+      "outputs": {
+        "response": "I can only help with weather conditions and alerts — which city?"
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "Book me a table for two tonight"
+        },
+        {
+          "role": "assistant",
+          "content": "I can only help with weather conditions and alerts — which city?"
+        }
+      ],
+      "tool_calls": [],
+      "node_path": [
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.007,
+          "tool_calls": 0,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    },
+    {
+      "case_id": "case-07a9582822",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather like today?"
+          }
+        ]
+      },
+      "outputs": {
+        "response": "I can only help with weather conditions and alerts — which city?"
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "What is the weather like today?"
+        },
+        {
+          "role": "assistant",
+          "content": "I can only help with weather conditions and alerts — which city?"
+        }
+      ],
+      "tool_calls": [],
+      "node_path": [
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.006,
+          "tool_calls": 0,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    },
+    {
+      "case_id": "case-67ab660de2",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Any weather alerts right now?"
+          }
+        ]
+      },
+      "outputs": {
+        "response": "I can only help with weather conditions and alerts — which city?"
+      },
+      "trajectory": [
+        {
+          "role": "user",
+          "content": "Any weather alerts right now?"
+        },
+        {
+          "role": "assistant",
+          "content": "I can only help with weather conditions and alerts — which city?"
+        }
+      ],
+      "tool_calls": [],
+      "node_path": [
+        "model"
+      ],
+      "error": null,
+      "error_class": "none",
+      "mock_calls": [],
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.006,
+          "tool_calls": 0,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    }
+  ],
+  "timestamp": "2026-09-07T08:49:05.314106+00:00",
+  "agent_model": "scripted:examples.weather_bot.agent:default_scripted_model",
+  "mocking": {
+    "on_miss": "llm",
+    "model": "scripted:examples.weather_bot.offline:mock_model",
+    "strategy": "default",
+    "calls": {
+      "rule": 2,
+      "llm": 3,
+      "real": 0,
+      "fallback": 0,
+      "error": 0,
+      "invalid": 0
+    }
+  },
+  "execution": {
+    "mode": "remote",
+    "endpoint": "http://127.0.0.1:53409",
+    "workers": 4,
+    "backend": "threads",
+    "seconds": 0.026
+  }
+}

@@ -55,7 +55,8 @@ deploy:
     dockerfile: null       # your own Dockerfile instead of the generated one
     include: []            # extra paths copied into the image (the target's package always is)
     requirements: null     # requirements.txt installed in the image
-  port: 8080               # container port of the agent server (the docker target maps it 1:1 on the host)
+  port: 8080               # container port of the agent server
+  host_port: null          # docker only: host port it is published on (null = the same as port)
   namespace: default       # kubernetes / openshift namespace (project)
   replicas: 1
   expose: port-forward     # kubernetes: port-forward | nodeport; openshift: route
@@ -99,7 +100,7 @@ tests and the UI browser tests use.
 ### `docker` — Docker Compose on the local daemon
 
 Files: `work/deploy/Dockerfile` (unless `build.dockerfile`) and `work/deploy/compose.yaml`
-(project `evalbuilder-<name>`, one service `agent`, `ports: ["<port>:<port>"]`, the
+(project `evalbuilder-<name>`, one service `agent`, `ports: ["<host_port>:<port>"]`, the
 environment, a `/health` healthcheck). Commands:
 
 ```
@@ -109,9 +110,12 @@ docker compose … logs --no-color --tail N agent  # logs
 docker compose … down --remove-orphans           # down
 ```
 
-Endpoint `http://127.0.0.1:<deploy.port>`. The host port is the container port, so a busy
-8080 means changing `deploy.port`. `available()` needs `docker` on PATH, a reachable
-daemon (`docker info`) and Compose v2 (`docker compose version`).
+Endpoint `http://127.0.0.1:<deploy.host_port>`. The container port (`deploy.port`) is
+published on `deploy.host_port`, which defaults to the same number — so when 8080 is
+already taken on the host, set `host_port: 9090` and leave the container port alone
+(nothing inside the image changes). `host_port` is docker-only: the config check rejects
+it on the other targets. `available()` needs `docker` on PATH, a reachable daemon
+(`docker info`) and Compose v2 (`docker compose version`).
 
 ### `kubernetes` — kubectl
 
@@ -247,7 +251,7 @@ values in plain text — `work/` is scratch, keep it out of version control (the
 |---|---|
 | `deployment target 'docker' unavailable: docker is not on PATH` / `docker daemon not reachable` | install / start Docker (Desktop); `docker info` must work for the user running evalbuilder |
 | `models.agent 'claude-cli:…' cannot run inside the agent container` | the `claude` binary is not in the image: an API-key provider with the key in `deploy.env`, or a scripted model; or `deploy.target: local` |
-| `docker compose … up` fails with a port in use | the docker target publishes `deploy.port` on the host as is — change `deploy.port` |
+| `docker compose … up` fails with a port in use | the host port `deploy.host_port` (default: `deploy.port`) is taken — set `deploy.host_port` to a free one; the container port can stay 8080 |
 | pod stuck in `ErrImageNeverPull` / `ImagePullBackOff` | the nodes cannot see a local image: keep `image.push: auto` without a registry (= `load`, needs privileged pods), or set `image.registry` and let it `push` |
 | `image loader pods did not start` | the cluster refuses privileged / `hostPID` pods: push to a registry instead (`image.registry`) |
 | `did not become healthy within …s` on Kubernetes | `evalbuilder deploy logs DIR` (container log) and `kubectl -n NS describe deployment evalbuilder-<name>`; a wrong `build.include` (the agent's imports are not in the image) shows up here |

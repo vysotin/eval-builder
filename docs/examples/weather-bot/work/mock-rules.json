@@ -1,0 +1,7 @@
+{
+  "schema": "evalbuilder/mock-rules/v1",
+  "tools": {
+    "get_weather": [],
+    "get_alerts": []
+  }
+}

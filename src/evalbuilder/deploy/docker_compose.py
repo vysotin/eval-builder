@@ -1,6 +1,6 @@
 """The `docker` target: the agent image built and run by Docker Compose on the local
 daemon (`docker compose -p <name> up -d --build --wait`), reachable on
-`http://127.0.0.1:<port>`."""
+`http://127.0.0.1:<host_port>` (`deploy.host_port`, or the container port)."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class DockerComposeTarget(DeploymentTarget):
         try:
             self.write_files(spec)
             self.runner.run(self._compose(spec, "up", "-d", "--build", "--wait", "--wait-timeout", str(spec.timeout)), timeout=spec.timeout + 1800)
-            return self.finish(record, f"http://127.0.0.1:{spec.port}", spec.timeout)
+            return self.finish(record, f"http://127.0.0.1:{spec.host_port}", spec.timeout)
         except Exception as e:  # noqa: BLE001
             self.failed(record, e)
             raise

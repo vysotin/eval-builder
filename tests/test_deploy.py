@@ -216,6 +216,18 @@ def test_docker_target_up_status_logs_down(tmp_path):
     assert _calls(runner, "compose", "down")[0][-2:] == ["down", "--remove-orphans"]
 
 
+def test_docker_host_port_publishes_the_container_port_elsewhere(tmp_path):
+    spec, _ = spec_from_config(_cfg(tmp_path, target="docker", host_port=9090))
+    assert (spec.port, spec.host_port) == (8080, 9090)
+    defaulted, _ = spec_from_config(_cfg(tmp_path, target="docker"))
+    assert defaulted.host_port == 8080  # null = the container port
+    svc = yaml.safe_load(render_compose(spec, tmp_path / "Dockerfile"))["services"]["agent"]
+    assert svc["ports"] == ["9090:8080"] and "127.0.0.1:8080/health" in svc["healthcheck"]["test"][-1]
+    runner = FakeRunner()
+    record = _target(DockerComposeTarget, runner).up(spec)
+    assert record.status == "up" and record.endpoint == "http://127.0.0.1:9090"
+
+
 def test_docker_target_failure_is_recorded(tmp_path):
     runner = FakeRunner({"compose -p evalbuilder-weather-small -f": "FAIL"})
     spec, _ = spec_from_config(_cfg(tmp_path, target="docker"))
@@ -228,7 +240,7 @@ def test_docker_target_failure_is_recorded(tmp_path):
 
 
 def test_kubernetes_load_path_end_to_end(tmp_path):
-    runner = FakeRunner({"get pods -l app=evalbuilder-weather-small-image-loader": "loader-a loader-b", "get deployment": json.dumps({"spec": {"replicas": 1}, "status": {"readyReplicas": 1, "availableReplicas": 1}})})
+    runner = FakeRunner({"get pods -l app=evalbuilder-weather-small-image-loader": "loader-a loader-b", "get deployment": "1|1|1"})
     spec, _ = spec_from_config(_cfg(tmp_path, target="kubernetes", namespace="evals", context="docker-desktop"))
     tgt = _target(KubernetesTarget, runner)
     assert tgt.push_mode(spec) == "load"
@@ -292,6 +304,23 @@ def test_kubernetes_availability_and_failed_rollout(tmp_path):
         _target(KubernetesTarget, runner).up(spec)
 
 
+def test_kubernetes_status_reads_the_replicas_with_one_jsonpath_line(tmp_path):
+    """A pretty-printed Deployment JSON is longer than the runner's output tail, so the
+    status comes from a single-line jsonpath read instead of `-o json`."""
+    spec, _ = spec_from_config(_cfg(tmp_path, target="kubernetes"))
+    runner = FakeRunner({"get deployment": "1|1|1"})
+    tgt = _target(KubernetesTarget, runner)
+    assert tgt._deployment_state(spec) == {"found": True, "ready": 1, "wanted": 1, "available": 1}
+    argv = _calls(runner, "get deployment")[0]
+    assert argv[-2:] == ["-o", 'jsonpath={.spec.replicas}{"|"}{.status.readyReplicas}{"|"}{.status.availableReplicas}']
+    assert "\n" not in runner._stdout(argv)  # one line, so the runner's bounded tail can never cut it
+    # scaling up; a status the cluster has not filled in yet; a command that fails
+    assert _target(KubernetesTarget, FakeRunner({"get deployment": "3|1|2"}))._deployment_state(spec) == {"found": True, "ready": 1, "wanted": 3, "available": 2}
+    assert _target(KubernetesTarget, FakeRunner({"get deployment": "1||"}))._deployment_state(spec) == {"found": True, "ready": 0, "wanted": 1, "available": 0}
+    failed = _target(KubernetesTarget, FakeRunner({"get deployment": "FAIL"}))._deployment_state(spec)
+    assert failed["found"] is False and failed["ready"] == 0 and failed["error"] == "boom"
+
+
 def test_wait_healthy_times_out(tmp_path):
     spec, _ = spec_from_config(_cfg(tmp_path, target="docker"))
     tgt = DockerComposeTarget(runner=FakeRunner(), health=lambda e: {"ok": False, "error": "refused"}, sleep=lambda s: None)
@@ -304,7 +333,7 @@ def test_wait_healthy_times_out(tmp_path):
 
 def test_openshift_uses_oc_registry_push_and_a_route(tmp_path):
     runner = FakeRunner({"oc whoami": "dev", "jsonpath={.spec.host}": "agent-evals.apps.example", "jsonpath={.spec.tls.termination}": "edge",
-                         "get deployment": json.dumps({"spec": {"replicas": 1}, "status": {"readyReplicas": 1}})})
+                         "get deployment": "1|1|"})
     spec, _ = spec_from_config(_cfg(tmp_path, target="openshift", image={"registry": "image-registry.openshift-image-registry.svc:5000/evals"}, namespace="evals"))
     tgt = _target(OpenShiftTarget, runner)
     assert tgt.available() == (True, "oc logged in as dev") and tgt.cli == "oc" and tgt.push_mode(spec) == "registry"
@@ -387,6 +416,22 @@ def test_deploy_up_records_failures_and_unavailable_targets(tmp_path):
         deploy_up(cfg, runner=FakeRunner(missing=("kubectl",)))
     with pytest.raises(ValueError, match="unknown deployment target"):
         target_for("heroku")
+
+
+def test_deploy_up_can_skip_the_availability_probe(tmp_path):
+    """The pipeline probes the target once, in preflight, and the deploy stage passes
+    `check_available=False`; the default still probes."""
+    for target, probe in (("kubernetes", "get nodes -o name"), ("docker", "docker info")):
+        outputs = {"docker build": "FAIL", "docker compose -p": "FAIL", "get nodes -o name": "node/a", "docker info": "27.0"}
+        cfg = _cfg(tmp_path / target, target=target)
+        skipped = FakeRunner(outputs)
+        with pytest.raises(CommandError):
+            deploy_up(cfg, runner=skipped, check_available=False)
+        assert skipped.calls and not _calls(skipped, probe)
+        checked = FakeRunner(outputs)
+        with pytest.raises(CommandError):
+            deploy_up(cfg, runner=checked)
+        assert _calls(checked, probe)
 
 
 def test_deploy_render_returns_the_generated_files(tmp_path):

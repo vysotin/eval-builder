@@ -1,0 +1,94 @@
+{
+  "schema": "evalbuilder/deployment/v1",
+  "name": "weather-bot",
+  "target": "local",
+  "image": "evalbuilder-weather-bot:latest",
+  "endpoint": null,
+  "expose": "port-forward",
+  "status": "down",
+  "resources": {
+    "pid": 88371,
+    "port": 53409,
+    "log": "docs/examples/weather-bot/work/deploy/serve.log",
+    "argv": [
+      "./.venv/bin/python3",
+      "-m",
+      "evalbuilder.cli",
+      "serve",
+      "--module",
+      "examples.weather_bot.agent",
+      "--factory",
+      "build_agent",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "53409"
+    ]
+  },
+  "created_at": "2026-09-07T08:49:04+00:00",
+  "updated_at": "2026-09-07T08:49:05+00:00",
+  "commands": [],
+  "details": {
+    "health": {
+      "module": "examples.weather_bot.agent",
+      "factory": "build_agent",
+      "tools": [
+        "get_weather",
+        "get_alerts"
+      ],
+      "agent_model": "scripted:examples.weather_bot.agent:default_scripted_model",
+      "mock_model": "scripted:examples.weather_bot.offline:mock_model",
+      "server": "evalbuilder/serve/v1"
+    },
+    "missing_host_env": [],
+    "last_status": {
+      "ready": true,
+      "endpoint": "http://127.0.0.1:53409",
+      "health": {
+        "ok": true,
+        "mode": "remote",
+        "module": "examples.weather_bot.agent",
+        "factory": "build_agent",
+        "tools": [
+          "get_weather",
+          "get_alerts"
+        ],
+        "agent_model": "scripted:examples.weather_bot.agent:default_scripted_model",
+        "mock_model": "scripted:examples.weather_bot.offline:mock_model",
+        "client": "evalbuilder/agent-client/v1",
+        "server": "evalbuilder/serve/v1"
+      },
+      "replicas": {
+        "ready": 1,
+        "wanted": 1
+      }
+    }
+  },
+  "spec": {
+    "name": "weather-bot",
+    "target": "local",
+    "module": "examples.weather_bot.agent",
+    "factory": "build_agent",
+    "image": "evalbuilder-weather-bot:latest",
+    "push": "auto",
+    "registry": null,
+    "extras": [],
+    "build_context": ".",
+    "dockerfile": null,
+    "include": [],
+    "requirements": null,
+    "port": 8080,
+    "namespace": "default",
+    "replicas": 1,
+    "expose": "port-forward",
+    "env": {},
+    "keep": false,
+    "timeout": 240,
+    "context": null,
+    "agent_model": "scripted:examples.weather_bot.agent:default_scripted_model",
+    "mock_model": "scripted:examples.weather_bot.offline:mock_model",
+    "work_dir": "docs/examples/weather-bot/work/deploy",
+    "python_version": "3.12",
+    "project_root": "."
+  }
+}

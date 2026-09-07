@@ -1,0 +1,261 @@
+{
+  "schema": "evalbuilder/agent-map/v1",
+  "framework": "langgraph",
+  "source_sha256": "a65ba0f420843cfe0c178ac31364d231af1e52853158008210db3a7398d393a4",
+  "app": {
+    "source": "examples/weather_bot/agent.py",
+    "models": [],
+    "module": "examples.weather_bot.agent",
+    "factory": "build_agent",
+    "root_node": null
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "build_agent",
+        "kind": "llm",
+        "prompt": "You are a weather assistant. Use get_weather for conditions and get_alerts for warnings. Always name the city in your answer.",
+        "tools": [
+          "get_weather",
+          "get_alerts"
+        ],
+        "evidence": [
+          "source:examples/weather_bot/agent.py:72"
+        ]
+      }
+    ],
+    "edges": [],
+    "conditional_edges": [],
+    "live": {
+      "nodes": [
+        "__start__",
+        "model",
+        "tools",
+        "__end__"
+      ],
+      "edges": [
+        [
+          "__start__",
+          "model"
+        ],
+        [
+          "model",
+          "__end__"
+        ],
+        [
+          "model",
+          "tools"
+        ],
+        [
+          "tools",
+          "model"
+        ]
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather conditions for a city.",
+      "args_schema": {
+        "description": "Get current weather conditions for a city.",
+        "properties": {
+          "city": {
+            "title": "City",
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "schema_source": "annotations",
+      "models": [],
+      "side_effecting": false,
+      "kind": "tool",
+      "mockable": true,
+      "used_by": [
+        "build_agent"
+      ],
+      "edge_cases": [
+        {
+          "id": "edge.get_weather.missing_required.city",
+          "tool": "get_weather",
+          "kind": "missing_required",
+          "field": "city",
+          "detail": "`city` (string) is required by get_weather but the user does not provide it",
+          "failure_mode": "input_validation",
+          "expected_behavior": "Ask the user for `city` instead of calling get_weather with a guessed or placeholder value.",
+          "evidence": [
+            "schema:get_weather.city"
+          ]
+        }
+      ],
+      "live": true
+    },
+    {
+      "name": "get_alerts",
+      "description": "Get active weather alerts for a city.",
+      "args_schema": {
+        "description": "Get active weather alerts for a city.",
+        "properties": {
+          "city": {
+            "title": "City",
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "schema_source": "annotations",
+      "models": [],
+      "side_effecting": false,
+      "kind": "tool",
+      "mockable": true,
+      "used_by": [
+        "build_agent"
+      ],
+      "edge_cases": [
+        {
+          "id": "edge.get_alerts.missing_required.city",
+          "tool": "get_alerts",
+          "kind": "missing_required",
+          "field": "city",
+          "detail": "`city` (string) is required by get_alerts but the user does not provide it",
+          "failure_mode": "input_validation",
+          "expected_behavior": "Ask the user for `city` instead of calling get_alerts with a guessed or placeholder value.",
+          "evidence": [
+            "schema:get_alerts.city"
+          ]
+        }
+      ],
+      "live": true
+    }
+  ],
+  "skills": [],
+  "constraints": [
+    "Always name the city in the answer."
+  ],
+  "data_domains": {
+    "topics": [],
+    "sources": []
+  },
+  "intents": [
+    {
+      "id": "intent.conditions",
+      "description": "Current weather conditions for a city",
+      "evidence": [
+        "tool:get_weather",
+        "prompt:build_agent"
+      ],
+      "status": "hypothesis"
+    },
+    {
+      "id": "intent.alerts",
+      "description": "Active weather alerts for a city",
+      "evidence": [
+        "tool:get_alerts",
+        "prompt:build_agent"
+      ],
+      "status": "hypothesis"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario.conditions.happy",
+      "intent": "intent.conditions",
+      "kind": "happy",
+      "description": "asks for the weather in a named city",
+      "expected_behavior": "names the city with temperature and condition",
+      "evidence": [
+        "tool:get_weather"
+      ],
+      "status": "hypothesis"
+    },
+    {
+      "id": "scenario.conditions.service-down",
+      "intent": "intent.conditions",
+      "kind": "failure",
+      "failure_mode": "tool_error_handling",
+      "description": "the weather service errors",
+      "expected_behavior": "apologises without inventing data",
+      "evidence": [
+        "prompt:build_agent"
+      ],
+      "status": "hypothesis"
+    },
+    {
+      "id": "scenario.alerts.happy",
+      "intent": "intent.alerts",
+      "kind": "happy",
+      "description": "asks for alerts in a named city",
+      "expected_behavior": "lists the alerts",
+      "evidence": [
+        "tool:get_alerts"
+      ],
+      "status": "hypothesis"
+    },
+    {
+      "id": "scenario.alerts.service-down",
+      "intent": "intent.alerts",
+      "kind": "failure",
+      "failure_mode": "tool_error_handling",
+      "description": "the alerts service errors",
+      "expected_behavior": "apologises",
+      "evidence": [
+        "prompt:build_agent"
+      ],
+      "status": "hypothesis"
+    }
+  ],
+  "failure_scenarios": [
+    {
+      "failure_type": "out_of_scope",
+      "rationale": "the prompt limits the bot to weather",
+      "evidence": [
+        "prompt:build_agent"
+      ]
+    }
+  ],
+  "applicable_failures": {
+    "input_validation": [
+      "app:always"
+    ],
+    "provider_error": [
+      "app:always"
+    ],
+    "out_of_scope": [
+      "app:always"
+    ],
+    "tool_misuse": [
+      "tool:get_weather",
+      "tool:get_alerts"
+    ],
+    "tool_error_handling": [
+      "tool:get_weather",
+      "tool:get_alerts"
+    ],
+    "prompt_injection": [
+      "tool:get_weather",
+      "tool:get_alerts"
+    ],
+    "state_loss": [
+      "app:multi-turn"
+    ],
+    "constraint_violation": [
+      "constraint:Always name the city in the answer."
+    ]
+  },
+  "decisions_needed": []
+}

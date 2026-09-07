@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from evalbuilder.pipeline.layout import ARTIFACTS
+from evalbuilder.pipeline.setup import discover_projects
 from evalbuilder.ui import loader
 
 EXAMPLE = Path("docs/examples/support-bot")
+WEATHER_EXAMPLE = Path("docs/examples/weather-bot")
 
 
 @pytest.fixture(scope="module")
@@ -143,3 +145,32 @@ def test_load_dir_reads_run_progress(tmp_path):
     b = loader.load_dir(tmp_path)
     assert b.has("run_progress")
     assert b.get("run_progress")["cases_done"] == 2
+
+
+def test_load_dir_reads_the_deployed_weather_bot_example():
+    """The weather-bot example is a whole offline pipeline run made *after* the deploy
+    phase: it carries deployment.json, its inference stage is named `infer` (the older
+    two examples still say `run`), the runs went over HTTP against the deployed agent,
+    and every case run records the request that was sent plus a per-turn log."""
+    b = loader.load_dir(WEATHER_EXAMPLE)
+    assert b.problems == []
+    assert b.name == "weather-bot" and b.verdict == "pass"
+    assert b.has("deployment")
+    assert b.deployment["target"] == "local" and b.deployment["status"] == "down"
+    assert b.run_ids == [e["run_id"] for e in b.state["stages"]["infer"]["artifacts"]["runs"]]
+    assert len(b.run_ids) == 2
+    for run_id in b.run_ids:
+        run = b.runs[run_id]
+        assert run["execution"]["mode"] == "remote"  # inference hit the deployment, not an in-process graph
+        assert run["case_runs"]
+        assert all(cr["inputs"] and cr["log"] for cr in run["case_runs"])
+    assert b.summary()["runs"] == 2
+
+
+def test_discovery_lists_the_weather_bot_example():
+    """Both discovery paths — the report UI's and pipeline setup's — offer the new example."""
+    assert str(WEATHER_EXAMPLE) in loader.discover_dirs()
+    projects = {p["dir"]: p for p in discover_projects()}
+    assert str(WEATHER_EXAMPLE) in projects
+    assert projects[str(WEATHER_EXAMPLE)]["name"] == "weather-bot"
+    assert projects[str(WEATHER_EXAMPLE)]["has_artifacts"]

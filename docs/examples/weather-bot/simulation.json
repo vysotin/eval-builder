@@ -1,0 +1,56 @@
+{
+  "schema": "evalbuilder/simulation/v1",
+  "results": [
+    {
+      "scenario_id": "weather-then-alerts",
+      "stop_reason": "success",
+      "turns": 2,
+      "transcript": [
+        {
+          "role": "user",
+          "content": "What is the weather in Paris?"
+        },
+        {
+          "role": "assistant",
+          "content": "It is 72F and sunny in Paris."
+        },
+        {
+          "role": "user",
+          "content": "Any alerts for Paris?"
+        },
+        {
+          "role": "assistant",
+          "content": "Alerts: {\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+        }
+      ],
+      "violations": [],
+      "mock_calls": {
+        "rule": 0,
+        "llm": 2,
+        "real": 0,
+        "fallback": 0,
+        "error": 0,
+        "invalid": 0
+      },
+      "mock_strategy": null,
+      "log": [
+        {
+          "turn": 0,
+          "seconds": 0.004,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        },
+        {
+          "turn": 1,
+          "seconds": 0.003,
+          "tool_calls": 1,
+          "error": null,
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409"
+        }
+      ]
+    }
+  ]
+}

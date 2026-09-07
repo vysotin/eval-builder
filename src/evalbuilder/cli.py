@@ -658,17 +658,28 @@ app.command("run", hidden=True)(infer)  # the pre-phase name: identical behaviou
 def simulate(
     path: Path,
     scenarios: Path = typer.Option(..., "--scenarios"),
+    endpoint: Optional[str] = typer.Option(None, "--endpoint", help="URL of a deployed agent server (evalbuilder deploy up / serve)"),
+    deployment: Optional[Path] = typer.Option(None, "--deployment", help="pipeline output dir holding deployment.json (its endpoint is used)"),
+    workers: int = typer.Option(4, "--workers", help="scenarios executed concurrently (1 = sequential)"),
+    backend: str = typer.Option("threads", "--backend", help="joblib backend: threads | processes"),
+    timeout: float = typer.Option(120.0, "--timeout", help="seconds per agent request (remote)"),
     out: Path = typer.Option(Path("eval/results"), "--out"),
     mine: bool = typer.Option(True, "--mine/--no-mine"),
     mock: bool = typer.Option(False, "--mock/--no-mock", help="install the dataset's mock layers (rules, and the LLM engine under on_miss llm)"),
     on_miss: Optional[str] = typer.Option(None, "--on-miss", help="mock miss policy with --mock (default: the dataset's, else real)"),
     mock_model: Optional[str] = typer.Option(None, "--mock-model", help="model driving the LLM mock engine (default: mocks.llm.model)"),
 ) -> None:
-    """Run multi-turn simulation scenarios; mine violations into pending cases."""
+    """Run multi-turn simulation scenarios — in-process, or against a deployed agent
+    (`--endpoint`, or the endpoint in `DIR/deployment.json`) — and mine violations into
+    pending cases."""
     from uuid import uuid4
 
     from evalbuilder import simulate as sim
+    from evalbuilder.inference import BACKENDS, simulate_scenarios
 
+    if backend not in BACKENDS:
+        typer.echo(f"--backend must be one of {', '.join(BACKENDS)}", err=True)
+        raise typer.Exit(1)
     ds = _load_ds(path)
     try:
         scenario_list = sim.load_scenarios(scenarios)
@@ -678,14 +689,15 @@ def simulate(
     # One graph per scenario turn (the agent client is stateless): a fresh engine keeps
     # the LLM mock's call history in the request (`mocks.history`) and the scenario's
     # own `mock_strategy` selects the strategy; every result attributes its mocked calls.
-    from evalbuilder.inference import local_agent_for, simulate_scenarios
-
-    policy = on_miss or (ds.mocks or {}).get("on_miss") or "real"
-    engine_spec = None
-    if mock and policy == "llm":
-        engine_spec = _mock_model_for(ds, mock_model)[1]
-    agent = local_agent_for(ds, mock_model_spec=engine_spec)
-    results = simulate_scenarios(agent, scenario_list, mocks=ds.mocks if mock else None, on_miss=policy if mock else None, mocked=mock)
+    agent, policy, _engine_spec = _agent_and_policy(ds, endpoint=endpoint, deployment=deployment, mock=mock, on_miss=on_miss,
+                                                    mock_model=mock_model, model=None, timeout=timeout)
+    if agent.mode == "remote":
+        health = agent.health()
+        if not health.get("ok"):
+            typer.echo(f"agent at {agent.endpoint} is not healthy: {health.get('error')}", err=True)
+            raise typer.Exit(1)
+    results = simulate_scenarios(agent, scenario_list, mocks=ds.mocks if mock else None, on_miss=policy if mock else None,
+                                 workers=workers, backend=backend, mocked=mock)
     mined = sim.mine_failures(ds, results) if mine else 0
     if mined:
         _save_valid(path, ds)
@@ -701,6 +713,10 @@ def simulate(
             },
             "mined": mined,
             "mock_calls": {r["scenario_id"]: r["mock_calls"] for r in results if r.get("mock_calls")},
+            "mode": agent.mode,
+            "endpoint": agent.endpoint,
+            "workers": max(1, workers),
+            "backend": backend,
         }
     )
 

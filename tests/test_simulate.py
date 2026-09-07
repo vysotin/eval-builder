@@ -131,3 +131,71 @@ def test_inference_simulates_scenarios_in_parallel_with_a_stateless_agent():
     assert strip(parallel) == strip(sequential)
     assert [r["scenario_id"] for r in parallel] == ["s0", "s1", "s2"] and all(r["stop_reason"] == "success" for r in parallel)
     assert all(len(r["log"]) == r["turns"] for r in parallel)
+
+
+# ── simulate against a deployed agent ────────────────────
+
+
+def _sim_setup(tmp_path):
+    ds = Dataset(
+        name="t",
+        dataset_type="final_response",
+        target=Target(module="examples.travel_planner.agent"),
+    )
+    ds_path = tmp_path / "ds.json"
+    save_json(ds_path, ds)
+    scen_path = tmp_path / "scenarios.yaml"
+    scen_path.write_text(yaml.safe_dump({"scenarios": [SCEN]}))
+    return str(ds_path), str(scen_path)
+
+
+def test_cli_simulate_against_an_endpoint(tmp_path):
+    from evalbuilder.agent_client import LocalAgent
+    from evalbuilder.serve import make_server
+
+    ds_path, scen_path = _sim_setup(tmp_path)
+    srv = make_server(LocalAgent("examples.travel_planner.agent"), "127.0.0.1", 0)
+    srv.serve_in_thread()
+    try:
+        r = CliRunner().invoke(
+            app,
+            ["simulate", ds_path, "--scenarios", scen_path, "--endpoint", srv.endpoint,
+             "--out", str(tmp_path), "--workers", "2"],
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert r.exit_code == 0, r.output
+    summary = json.loads(r.stdout)
+    assert summary["stop_reasons"] == {"flight-booking-confirmation": "success"}
+    assert summary["mode"] == "remote" and summary["endpoint"] == srv.endpoint
+    assert list(tmp_path.glob("simulation-*.json"))
+
+
+def test_cli_simulate_rejects_a_dead_endpoint(tmp_path):
+    ds_path, scen_path = _sim_setup(tmp_path)
+    r = CliRunner().invoke(
+        app,
+        ["simulate", ds_path, "--scenarios", scen_path, "--endpoint", "http://127.0.0.1:9", "--out", str(tmp_path)],
+    )
+    assert r.exit_code == 1 and "not healthy" in r.output
+
+
+def test_cli_simulate_rejects_a_bad_backend(tmp_path):
+    ds_path, scen_path = _sim_setup(tmp_path)
+    r = CliRunner().invoke(
+        app,
+        ["simulate", ds_path, "--scenarios", scen_path, "--backend", "gpu", "--out", str(tmp_path)],
+    )
+    assert r.exit_code == 1 and "--backend" in r.output
+
+
+def test_cli_simulate_needs_a_deployment_record(tmp_path):
+    ds_path, scen_path = _sim_setup(tmp_path)
+    empty = tmp_path / "nodeploy"
+    empty.mkdir()
+    r = CliRunner().invoke(
+        app,
+        ["simulate", ds_path, "--scenarios", scen_path, "--deployment", str(empty), "--out", str(tmp_path)],
+    )
+    assert r.exit_code == 1 and "deploy up" in r.output

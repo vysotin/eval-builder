@@ -10,7 +10,6 @@ host: `load` + `port-forward` is the combination that works there.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from evalbuilder.deploy.base import DeploymentError, DeploymentTarget, free_port
@@ -22,6 +21,13 @@ LOADER = "loader.yaml"
 DOCKERFILE = "Dockerfile"
 PORT_FORWARD_LOG = "port-forward.log"
 PULL_POLICY = {"registry": "Always", "load": "Never", "none": "IfNotPresent"}
+REPLICAS_JSONPATH = 'jsonpath={.spec.replicas}{"|"}{.status.readyReplicas}{"|"}{.status.availableReplicas}'
+
+
+def _count(field: str) -> int:
+    """A jsonpath replica field: absent (empty) or non-numeric counts as 0."""
+    field = field.strip()
+    return int(field) if field.isdigit() else 0
 
 
 class KubernetesTarget(DeploymentTarget):
@@ -127,16 +133,15 @@ class KubernetesTarget(DeploymentTarget):
             raise
 
     def _deployment_state(self, spec: DeploymentSpec) -> dict:
-        result = self.runner.run(self.kube(spec, "get", "deployment", spec.resource, "-o", "json"), check=False, timeout=60)
+        """Replica counts through a one-line jsonpath read — a pretty-printed Deployment
+        can be longer than the runner's output tail, and a JSON fragment would parse as
+        "never ready"."""
+        argv = self.kube(spec, "get", "deployment", spec.resource, "-o", REPLICAS_JSONPATH)
+        result = self.runner.run(argv, check=False, timeout=60)
         if not result.ok:
             return {"found": False, "ready": 0, "wanted": spec.replicas, "error": (result.stderr or result.stdout).strip()[:200]}
-        try:
-            data = json.loads(result.stdout)
-        except ValueError:
-            return {"found": False, "ready": 0, "wanted": spec.replicas, "error": "unparseable deployment JSON"}
-        status = data.get("status") or {}
-        return {"found": True, "ready": int(status.get("readyReplicas") or 0), "wanted": int((data.get("spec") or {}).get("replicas") or spec.replicas),
-                "available": int(status.get("availableReplicas") or 0)}
+        wanted, ready, available = (_count(f) for f in (result.stdout.strip().split("|") + ["", "", ""])[:3])
+        return {"found": True, "ready": ready, "wanted": wanted or spec.replicas, "available": available}
 
     def ensure_endpoint(self, spec: DeploymentSpec, record: DeploymentRecord) -> bool:
         """Restart a dead port-forward; returns True when the record changed."""

@@ -79,13 +79,17 @@ def deploy_build(cfg, out_dir: Path | None = None, *, target: str | None = None,
     return tgt.build(spec)
 
 
-def deploy_up(cfg, out_dir: Path | None = None, *, target: str | None = None, runner=None, log=None) -> DeploymentRecord:
+def deploy_up(cfg, out_dir: Path | None = None, *, target: str | None = None, runner=None, log=None, check_available: bool = True) -> DeploymentRecord:
     """Deploy per the config, wait for `/health`, write `deployment.json`; raises
-    DeploymentError / CommandError (the failed record is written first)."""
+    DeploymentError / CommandError (the failed record is written first).
+
+    `check_available=False` skips the target's availability probe — for callers that
+    already ran it in the same process (the pipeline's preflight stage)."""
     spec, missing, tgt = _prepare(cfg, out_dir, target, runner, log)
-    ok, reason = tgt.available()
-    if not ok:
-        raise DeploymentError(f"deployment target {spec.target!r} unavailable: {reason}")
+    if check_available:
+        ok, reason = tgt.available()
+        if not ok:
+            raise DeploymentError(f"deployment target {spec.target!r} unavailable: {reason}")
     out = Path(out_dir) if out_dir is not None else cfg.output_dir
     path = record_path(out)
     existing = load_record(out)

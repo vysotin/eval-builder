@@ -1,8 +1,7 @@
 """Load the target LangGraph agent, build its graph, and invoke it with trajectory capture.
 
 `invoke_messages` / `extract` are the primitives the agent clients (`agent_client.py`)
-and the inference engine build on; `run_case` keeps the one-call-per-case shape the
-interactive runner used.
+and the inference engine build on.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, convert_to_openai_messages
 
-from evalbuilder.schemas import Case, CaseRun, Target
+from evalbuilder.schemas import Target
 
 
 def load_target(target: Target):
@@ -71,30 +70,6 @@ def _invoke_with_path(graph, inputs: dict) -> tuple[dict, list[str]]:
     return state, node_path
 
 
-def run_case(graph, case: Case) -> CaseRun:
-    try:
-        state, node_path = _invoke_with_path(graph, dict(case.inputs))
-        for turn in case.metadata.get("user_turns", []) or []:
-            messages = list(state["messages"])
-            messages.append({"role": "user", "content": turn})
-            state, more_path = _invoke_with_path(graph, {"messages": messages})
-            node_path.extend(more_path)
-        trajectory, tool_calls, response = extract(state)
-        return CaseRun(
-            case_id=case.id,
-            outputs={"response": response},
-            trajectory=trajectory,
-            tool_calls=tool_calls,
-            node_path=node_path,
-        )
-    except Exception as e:  # noqa: BLE001 - the run artifact records the failure
-        return CaseRun(
-            case_id=case.id,
-            error=f"{type(e).__name__}: {e}",
-            error_class="infrastructure" if is_mock_engine_error(e) else "agent",
-        )
-
-
 def is_mock_engine_error(exc: BaseException) -> bool:
     """A mock engine failure (invalid LLM mock under `on_invalid: strict`) is not the agent's doing."""
     from evalbuilder.mock_engine import MockEngineError
@@ -106,7 +81,3 @@ def is_mock_engine_error(exc: BaseException) -> bool:
         exc = exc.__cause__ or exc.__context__
         seen += 1
     return False
-
-
-_extract = extract  # compatibility aliases
-_is_mock_engine_error = is_mock_engine_error

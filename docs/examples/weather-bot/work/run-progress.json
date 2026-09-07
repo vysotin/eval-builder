@@ -1,0 +1,92 @@
+{
+  "schema": "evalbuilder/run-progress/v1",
+  "repeats": 2,
+  "repeat": 2,
+  "workers": 4,
+  "backend": "threads",
+  "endpoint": "http://127.0.0.1:53409",
+  "mode": "remote",
+  "cases_total": 7,
+  "cases_done": 7,
+  "overall_total": 14,
+  "overall_done": 14,
+  "by_intent": {
+    "intent.conditions": {
+      "done": 2,
+      "total": 2,
+      "errors": 0
+    },
+    "intent.alerts": {
+      "done": 2,
+      "total": 2,
+      "errors": 0
+    },
+    "cross-cutting": {
+      "done": 3,
+      "total": 3,
+      "errors": 0
+    }
+  },
+  "runs": [
+    {
+      "run_id": "30fe0176",
+      "path": "docs/examples/weather-bot/results/run-30fe0176.json"
+    },
+    {
+      "run_id": "932cc142",
+      "path": "docs/examples/weather-bot/results/run-932cc142.json"
+    }
+  ],
+  "current": [
+    {
+      "case_id": "case-1bcfeeea1d",
+      "intent": "intent.conditions",
+      "error_class": "none",
+      "error": null
+    },
+    {
+      "case_id": "case-357ad7a5f7",
+      "intent": "intent.conditions",
+      "error_class": "none",
+      "error": null
+    },
+    {
+      "case_id": "case-af8dace40e",
+      "intent": "intent.alerts",
+      "error_class": "none",
+      "error": null
+    },
+    {
+      "case_id": "case-fb5c5bbdc9",
+      "intent": "intent.alerts",
+      "error_class": "none",
+      "error": null
+    },
+    {
+      "case_id": "case-124e4608e5",
+      "intent": "cross-cutting",
+      "error_class": "none",
+      "error": null
+    },
+    {
+      "case_id": "case-07a9582822",
+      "intent": "cross-cutting",
+      "error_class": "none",
+      "error": null
+    },
+    {
+      "case_id": "case-67ab660de2",
+      "intent": "cross-cutting",
+      "error_class": "none",
+      "error": null
+    }
+  ],
+  "mock_calls": {
+    "rule": 4,
+    "llm": 6,
+    "real": 0,
+    "fallback": 0,
+    "error": 0,
+    "invalid": 0
+  }
+}

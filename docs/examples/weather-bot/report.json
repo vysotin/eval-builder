@@ -1,0 +1,1296 @@
+{
+  "schema": "evalbuilder/pipeline-report/v1",
+  "name": "weather-bot",
+  "generated_at": "2026-09-07T08:49:05.500925+00:00",
+  "config_path": "examples/weather_bot/pipeline.yaml",
+  "output_dir": "docs/examples/weather-bot",
+  "artifacts": {
+    "agent_map": "docs/examples/weather-bot/agent-map.json",
+    "mock_rules": "docs/examples/weather-bot/work/mock-rules.json",
+    "mock_strategies": "docs/examples/weather-bot/work/mock-strategies.json",
+    "dataset": "docs/examples/weather-bot/dataset.json",
+    "evaluators": "docs/examples/weather-bot/evaluators.yaml",
+    "deployment": "docs/examples/weather-bot/deployment.json",
+    "run": {
+      "30fe0176": "docs/examples/weather-bot/results/run-30fe0176.json",
+      "932cc142": "docs/examples/weather-bot/results/run-932cc142.json"
+    },
+    "run_progress": "docs/examples/weather-bot/work/run-progress.json",
+    "score_report": {
+      "30fe0176": "docs/examples/weather-bot/results/score-report-30fe0176.json",
+      "932cc142": "docs/examples/weather-bot/results/score-report-932cc142.json"
+    },
+    "aggregate": "docs/examples/weather-bot/aggregate.json",
+    "scenarios": "docs/examples/weather-bot/scenarios.yaml",
+    "simulation": "docs/examples/weather-bot/simulation.json",
+    "analysis": "docs/examples/weather-bot/analysis.json",
+    "pipeline_state": "docs/examples/weather-bot/work/state.json"
+  },
+  "folded_artifacts": {
+    "applicable_failures": "agent_map.applicable_failures",
+    "mock_rules": "dataset.mocks.tools",
+    "mock_strategies": "dataset.mocks.strategies",
+    "coverage_plan": "dataset.coverage.plan",
+    "coverage": "dataset.coverage.achieved"
+  },
+  "config": {
+    "schema": "evalbuilder/pipeline-config/v1",
+    "name": "weather-bot",
+    "target": {
+      "source": "examples/weather_bot/agent.py",
+      "module": "examples.weather_bot.agent",
+      "factory": "build_agent",
+      "root_node": null
+    },
+    "models": {
+      "agent": "scripted:examples.weather_bot.agent:default_scripted_model",
+      "judge": "scripted:examples.weather_bot.agent:default_scripted_model",
+      "generator": "scripted:examples.weather_bot.offline:generator_model",
+      "mock": "scripted:examples.weather_bot.offline:mock_model"
+    },
+    "constraints": [
+      "Always name the city in the answer."
+    ],
+    "instructions": "",
+    "feedback": [],
+    "coverage": {
+      "total_cases": 4,
+      "per_intent": {
+        "happy": 1,
+        "failure": 1
+      },
+      "per_failure_category": 1,
+      "out_of_intent": 1,
+      "multi_turn_share": 0.2,
+      "per_tool_edge_cases": 1
+    },
+    "evaluators": [
+      {
+        "type": "expected_tools"
+      },
+      {
+        "type": "contains"
+      }
+    ],
+    "thresholds": {
+      "metrics": {},
+      "default": 0.8,
+      "slice_min": 0.5,
+      "overall_pass": 0.8
+    },
+    "runs": {
+      "repeats": 2
+    },
+    "deploy": {
+      "target": "local",
+      "image": {
+        "name": "evalbuilder-weather-bot",
+        "tag": "latest",
+        "registry": null,
+        "push": "auto",
+        "extras": []
+      },
+      "build": {
+        "context": ".",
+        "dockerfile": null,
+        "include": [],
+        "requirements": null
+      },
+      "port": 8080,
+      "namespace": "default",
+      "replicas": 1,
+      "expose": "port-forward",
+      "env": {},
+      "keep": false,
+      "timeout": 240,
+      "context": null
+    },
+    "inference": {
+      "workers": 4,
+      "backend": "threads",
+      "timeout": 120
+    },
+    "evaluation": {
+      "workers": 2,
+      "backend": "threads"
+    },
+    "mocking": {
+      "required": true,
+      "on_miss": "llm",
+      "strategies": true,
+      "strategy": "default",
+      "on_invalid": "fallback",
+      "max_repairs": 1
+    },
+    "stages": {
+      "skip": [],
+      "max_retries": 1,
+      "simulate": true,
+      "publish": "never"
+    },
+    "review": {
+      "auto_approve": true,
+      "approved_by": "examples/weather_bot/pipeline.yaml",
+      "note": ""
+    },
+    "output": {
+      "dir": "docs/examples/weather-bot"
+    },
+    "langsmith": {
+      "dataset_name": null
+    }
+  },
+  "verdict": "pass",
+  "verdict_reasons": [],
+  "overall_score": 1.0,
+  "stages": {
+    "preflight": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.023,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {
+        "capabilities": {
+          "langgraph": true,
+          "claude_cli": true,
+          "provider_anthropic": false,
+          "provider_openai": false,
+          "provider_google_genai": false,
+          "judge": false,
+          "langsmith": false,
+          "target": true
+        },
+        "degraded": [
+          "judge",
+          "langsmith"
+        ],
+        "models": {
+          "agent": {
+            "spec": "scripted:examples.weather_bot.agent:default_scripted_model",
+            "ready": true,
+            "reason": ""
+          },
+          "judge": {
+            "spec": "scripted:examples.weather_bot.agent:default_scripted_model",
+            "ready": true,
+            "reason": ""
+          },
+          "generator": {
+            "spec": "scripted:examples.weather_bot.offline:generator_model",
+            "ready": true,
+            "reason": ""
+          },
+          "mock": {
+            "spec": "scripted:examples.weather_bot.offline:mock_model",
+            "ready": true,
+            "reason": ""
+          }
+        },
+        "judge_evaluators": 0,
+        "mocking": "llm",
+        "deploy": {
+          "target": "local",
+          "available": "runs `evalbuilder serve` as a subprocess of this interpreter",
+          "image": null
+        },
+        "inference": {
+          "workers": 4,
+          "backend": "threads"
+        },
+        "evaluation": {
+          "workers": 2,
+          "backend": "threads"
+        }
+      },
+      "recovery_notes": []
+    },
+    "discover": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.093,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "agent_map": "docs/examples/weather-bot/agent-map.json"
+      },
+      "details": {
+        "tools": [
+          "get_weather",
+          "get_alerts"
+        ],
+        "skills": [],
+        "nodes": [
+          "build_agent"
+        ],
+        "live_nodes": [
+          "__start__",
+          "model",
+          "tools",
+          "__end__"
+        ],
+        "schemas": {
+          "get_weather": {
+            "source": "annotations",
+            "models": [],
+            "output": true,
+            "edge_cases": 1
+          },
+          "get_alerts": {
+            "source": "annotations",
+            "models": [],
+            "output": true,
+            "edge_cases": 1
+          }
+        }
+      },
+      "recovery_notes": []
+    },
+    "map": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.002,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "agent_map": "docs/examples/weather-bot/agent-map.json"
+      },
+      "details": {
+        "applicable_failures": [
+          "constraint_violation",
+          "input_validation",
+          "out_of_scope",
+          "prompt_injection",
+          "provider_error",
+          "state_loss",
+          "tool_error_handling",
+          "tool_misuse"
+        ],
+        "intents": [
+          "intent.conditions",
+          "intent.alerts"
+        ],
+        "scenarios": 4,
+        "failure_types": [
+          "out_of_scope"
+        ],
+        "topics": [],
+        "constraints": [
+          "Always name the city in the answer."
+        ],
+        "skills": {},
+        "skill_failure_cases": {},
+        "tool_failure_scenarios": {}
+      },
+      "recovery_notes": []
+    },
+    "mocks": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.001,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "mock_rules": "docs/examples/weather-bot/work/mock-rules.json",
+        "mock_strategies": "docs/examples/weather-bot/work/mock-strategies.json"
+      },
+      "details": {
+        "tools": {
+          "get_weather": 0,
+          "get_alerts": 0
+        },
+        "on_miss": "llm",
+        "skipped_tools": [],
+        "strategies": {
+          "default": [
+            "get_alerts",
+            "get_weather"
+          ],
+          "stormy": [
+            "get_alerts"
+          ]
+        }
+      },
+      "recovery_notes": []
+    },
+    "dataset": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.002,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "dataset": "docs/examples/weather-bot/dataset.json"
+      },
+      "details": {
+        "cases": 7,
+        "planned": 7,
+        "coverage_pct": 100.0,
+        "by_kind": {
+          "happy": {
+            "planned": 2,
+            "covered": 2
+          },
+          "failure": {
+            "planned": 2,
+            "covered": 2
+          },
+          "out-of-intent": {
+            "planned": 1,
+            "covered": 1
+          },
+          "schema-edge": {
+            "planned": 2,
+            "covered": 2
+          }
+        }
+      },
+      "recovery_notes": []
+    },
+    "review": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.001,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "dataset": "docs/examples/weather-bot/dataset.json"
+      },
+      "details": {
+        "approved": 7,
+        "rejected": {},
+        "approved_by": "examples/weather_bot/pipeline.yaml",
+        "coverage_pct": 100.0
+      },
+      "recovery_notes": []
+    },
+    "verify": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.0,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {
+        "approved": 7,
+        "mocked_tools": [
+          "get_alerts",
+          "get_weather"
+        ],
+        "on_miss": "llm",
+        "llm_answered_calls": 3,
+        "strategy_tools": [
+          "get_alerts",
+          "get_weather"
+        ],
+        "strategies_used": [
+          "default"
+        ]
+      },
+      "recovery_notes": []
+    },
+    "deploy": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 1.02,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "deployment": "docs/examples/weather-bot/deployment.json"
+      },
+      "details": {
+        "target": "local",
+        "image": "evalbuilder-weather-bot:latest",
+        "endpoint": "http://127.0.0.1:53409",
+        "expose": "port-forward",
+        "reused": false,
+        "push": null,
+        "health": {
+          "module": "examples.weather_bot.agent",
+          "factory": "build_agent",
+          "tools": [
+            "get_weather",
+            "get_alerts"
+          ],
+          "agent_model": "scripted:examples.weather_bot.agent:default_scripted_model",
+          "mock_model": "scripted:examples.weather_bot.offline:mock_model",
+          "server": "evalbuilder/serve/v1"
+        },
+        "commands": 1,
+        "seconds": 1.02
+      },
+      "recovery_notes": []
+    },
+    "infer": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.155,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "runs": [
+          {
+            "run_id": "30fe0176",
+            "path": "docs/examples/weather-bot/results/run-30fe0176.json"
+          },
+          {
+            "run_id": "932cc142",
+            "path": "docs/examples/weather-bot/results/run-932cc142.json"
+          }
+        ],
+        "run_progress": "docs/examples/weather-bot/work/run-progress.json"
+      },
+      "details": {
+        "repeats": 2,
+        "workers": 4,
+        "backend": "threads",
+        "endpoint": "http://127.0.0.1:53409",
+        "execution": {
+          "mode": "remote",
+          "endpoint": "http://127.0.0.1:53409",
+          "workers": 4,
+          "backend": "threads",
+          "seconds": 0.026
+        },
+        "cases": 7,
+        "errors": {
+          "agent": 0,
+          "infrastructure": 0
+        },
+        "mocking": {
+          "on_miss": "llm",
+          "model": "scripted:examples.weather_bot.offline:mock_model",
+          "strategy": "default",
+          "calls": {
+            "rule": 4,
+            "llm": 6,
+            "real": 0,
+            "fallback": 0,
+            "error": 0,
+            "invalid": 0
+          }
+        }
+      },
+      "recovery_notes": []
+    },
+    "simulate": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.016,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "scenarios": "docs/examples/weather-bot/scenarios.yaml",
+        "simulation": "docs/examples/weather-bot/simulation.json"
+      },
+      "details": {
+        "workers": 4,
+        "backend": "threads",
+        "endpoint": "http://127.0.0.1:53409",
+        "scenarios": 1,
+        "stop_reasons": {
+          "weather-then-alerts": "success"
+        },
+        "violations": {},
+        "mined_pending_cases": 0,
+        "mock_calls": {
+          "rule": 0,
+          "llm": 2,
+          "real": 0,
+          "fallback": 0,
+          "error": 0,
+          "invalid": 0
+        },
+        "strategies": {}
+      },
+      "recovery_notes": []
+    },
+    "teardown": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.106,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "deployment": "docs/examples/weather-bot/deployment.json"
+      },
+      "details": {
+        "status": "down",
+        "target": "local"
+      },
+      "recovery_notes": []
+    },
+    "score": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.029,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "pairs": [
+          {
+            "run": "docs/examples/weather-bot/results/run-30fe0176.json",
+            "report": "docs/examples/weather-bot/results/score-report-30fe0176.json"
+          },
+          {
+            "run": "docs/examples/weather-bot/results/run-932cc142.json",
+            "report": "docs/examples/weather-bot/results/score-report-932cc142.json"
+          }
+        ],
+        "evaluators": "docs/examples/weather-bot/evaluators.yaml"
+      },
+      "details": {
+        "workers": 2,
+        "backend": "threads",
+        "metrics": {
+          "expected_tools": 1.0,
+          "contains": 1.0
+        },
+        "evaluator_errors": {}
+      },
+      "recovery_notes": []
+    },
+    "aggregate": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.001,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {
+        "aggregate": "docs/examples/weather-bot/aggregate.json"
+      },
+      "details": {
+        "verdict": "pass",
+        "overall_score": 1.0,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "unstable_cases": 0
+      },
+      "recovery_notes": []
+    },
+    "publish": {
+      "status": "skipped",
+      "attempts": 0,
+      "seconds": 0.0,
+      "error": null,
+      "reason": "skipped by config",
+      "optional": true,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    },
+    "analyze": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.001,
+      "error": null,
+      "reason": null,
+      "optional": true,
+      "artifacts": {
+        "analysis": "docs/examples/weather-bot/analysis.json"
+      },
+      "details": {
+        "source": "generator",
+        "patterns": 0
+      },
+      "recovery_notes": []
+    },
+    "report": {
+      "status": "ok",
+      "attempts": 1,
+      "seconds": 0.0,
+      "error": null,
+      "reason": null,
+      "optional": false,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    }
+  },
+  "agent": {
+    "module": "examples.weather_bot.agent",
+    "source": "examples/weather_bot/agent.py",
+    "source_sha256": "a65ba0f420843cfe0c178ac31364d231af1e52853158008210db3a7398d393a4",
+    "tools": [
+      "get_weather",
+      "get_alerts"
+    ],
+    "skills": [],
+    "nodes": [
+      "build_agent"
+    ],
+    "intents": [
+      {
+        "id": "intent.conditions",
+        "description": "Current weather conditions for a city",
+        "evidence": [
+          "tool:get_weather",
+          "prompt:build_agent"
+        ],
+        "status": "hypothesis"
+      },
+      {
+        "id": "intent.alerts",
+        "description": "Active weather alerts for a city",
+        "evidence": [
+          "tool:get_alerts",
+          "prompt:build_agent"
+        ],
+        "status": "hypothesis"
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "scenario.conditions.happy",
+        "intent": "intent.conditions",
+        "kind": "happy",
+        "description": "asks for the weather in a named city",
+        "expected_behavior": "names the city with temperature and condition",
+        "evidence": [
+          "tool:get_weather"
+        ],
+        "status": "hypothesis"
+      },
+      {
+        "id": "scenario.conditions.service-down",
+        "intent": "intent.conditions",
+        "kind": "failure",
+        "failure_mode": "tool_error_handling",
+        "description": "the weather service errors",
+        "expected_behavior": "apologises without inventing data",
+        "evidence": [
+          "prompt:build_agent"
+        ],
+        "status": "hypothesis"
+      },
+      {
+        "id": "scenario.alerts.happy",
+        "intent": "intent.alerts",
+        "kind": "happy",
+        "description": "asks for alerts in a named city",
+        "expected_behavior": "lists the alerts",
+        "evidence": [
+          "tool:get_alerts"
+        ],
+        "status": "hypothesis"
+      },
+      {
+        "id": "scenario.alerts.service-down",
+        "intent": "intent.alerts",
+        "kind": "failure",
+        "failure_mode": "tool_error_handling",
+        "description": "the alerts service errors",
+        "expected_behavior": "apologises",
+        "evidence": [
+          "prompt:build_agent"
+        ],
+        "status": "hypothesis"
+      }
+    ],
+    "failure_scenarios": [
+      {
+        "failure_type": "out_of_scope",
+        "rationale": "the prompt limits the bot to weather",
+        "evidence": [
+          "prompt:build_agent"
+        ]
+      }
+    ],
+    "constraints": [
+      "Always name the city in the answer."
+    ]
+  },
+  "coverage": {
+    "planned": 7,
+    "covered": 7,
+    "coverage_pct": 100.0,
+    "by_kind": {
+      "happy": {
+        "planned": 2,
+        "covered": 2
+      },
+      "failure": {
+        "planned": 2,
+        "covered": 2
+      },
+      "out-of-intent": {
+        "planned": 1,
+        "covered": 1
+      },
+      "schema-edge": {
+        "planned": 2,
+        "covered": 2
+      }
+    },
+    "multi_turn": {
+      "planned": 1,
+      "have": 1
+    },
+    "gaps": []
+  },
+  "runs": [
+    {
+      "run": "docs/examples/weather-bot/results/run-30fe0176.json",
+      "report": "docs/examples/weather-bot/results/score-report-30fe0176.json"
+    },
+    {
+      "run": "docs/examples/weather-bot/results/run-932cc142.json",
+      "report": "docs/examples/weather-bot/results/score-report-932cc142.json"
+    }
+  ],
+  "metrics": {
+    "contains": {
+      "pass_rate": 1.0,
+      "min_over_repeats": 1.0,
+      "n_cases": 7,
+      "n_scores": 14,
+      "errors": 0,
+      "threshold": 0.8,
+      "passed": true
+    },
+    "expected_tools": {
+      "pass_rate": 1.0,
+      "min_over_repeats": 1.0,
+      "n_cases": 7,
+      "n_scores": 14,
+      "errors": 0,
+      "threshold": 0.8,
+      "passed": true
+    }
+  },
+  "slices": {
+    "intent": {
+      "intent.conditions": {
+        "n": 2,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "intent.alerts": {
+        "n": 2,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "cross-cutting": {
+        "n": 3,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      }
+    },
+    "failure_mode": {
+      "none": {
+        "n": 2,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "tool_error_handling": {
+        "n": 2,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "out_of_scope": {
+        "n": 1,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "input_validation": {
+        "n": 2,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      }
+    },
+    "variant": {
+      "multi-turn": {
+        "n": 1,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "boundary": {
+        "n": 4,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "happy": {
+        "n": 1,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      },
+      "adversarial": {
+        "n": 1,
+        "metrics": {
+          "contains": 1.0,
+          "expected_tools": 1.0
+        },
+        "passed": true
+      }
+    }
+  },
+  "stability": {
+    "repeats": 2,
+    "unstable_cases": [],
+    "unstable_evaluators": [],
+    "unstable_outputs": [],
+    "text_varies": 0,
+    "stable_case_fraction": 1.0,
+    "suspect_judge_comments": [],
+    "llm_mocked_unstable": [],
+    "llm_mock_calls": 6
+  },
+  "mocking": {
+    "on_miss": "llm",
+    "layers": [
+      "rules",
+      "llm_engine"
+    ],
+    "model": "scripted:examples.weather_bot.offline:mock_model",
+    "strategy": "default",
+    "on_invalid": "fallback",
+    "strategies": [
+      "default",
+      "stormy"
+    ],
+    "world": "One city, Paris, with stable sunny weather and one heat advisory.",
+    "calls": {
+      "rule": 4,
+      "llm": 6,
+      "real": 0,
+      "fallback": 0,
+      "error": 0,
+      "invalid": 0
+    },
+    "simulation_calls": {
+      "rule": 0,
+      "llm": 2,
+      "real": 0,
+      "fallback": 0,
+      "error": 0,
+      "invalid": 0
+    }
+  },
+  "deployment": {
+    "target": "local",
+    "image": "evalbuilder-weather-bot:latest",
+    "endpoint": null,
+    "expose": "port-forward",
+    "status": "down",
+    "push": null,
+    "updated_at": "2026-09-07T08:49:05+00:00"
+  },
+  "cases": [
+    {
+      "id": "case-1bcfeeea1d",
+      "intent": "intent.conditions",
+      "scenario": "scenario.conditions.happy",
+      "failure_mode": "none",
+      "variant": "multi-turn",
+      "input": "What is the weather in Paris?",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "11d879d85345",
+        "11d879d85345"
+      ],
+      "trajectory_hash": [
+        "2c5af2368046",
+        "2c5af2368046"
+      ],
+      "stable": true,
+      "llm_mock_calls": 4,
+      "invalid_mock_calls": 0
+    },
+    {
+      "id": "case-357ad7a5f7",
+      "intent": "intent.conditions",
+      "scenario": "scenario.conditions.service-down",
+      "failure_mode": "tool_error_handling",
+      "variant": "boundary",
+      "input": "What is the weather in Paris?",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "982b952b9ab1",
+        "982b952b9ab1"
+      ],
+      "trajectory_hash": [
+        "6c9439e1c811",
+        "6c9439e1c811"
+      ],
+      "stable": true,
+      "llm_mock_calls": 0,
+      "invalid_mock_calls": 0
+    },
+    {
+      "id": "case-af8dace40e",
+      "intent": "intent.alerts",
+      "scenario": "scenario.alerts.happy",
+      "failure_mode": "none",
+      "variant": "happy",
+      "input": "Any alerts for Paris?",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "0ad9a4a3e305",
+        "0ad9a4a3e305"
+      ],
+      "trajectory_hash": [
+        "f8e2802169b0",
+        "f8e2802169b0"
+      ],
+      "stable": true,
+      "llm_mock_calls": 2,
+      "invalid_mock_calls": 0
+    },
+    {
+      "id": "case-fb5c5bbdc9",
+      "intent": "intent.alerts",
+      "scenario": "scenario.alerts.service-down",
+      "failure_mode": "tool_error_handling",
+      "variant": "boundary",
+      "input": "Any alerts for Paris?",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "b29ea2c1f7b4",
+        "b29ea2c1f7b4"
+      ],
+      "trajectory_hash": [
+        "f8e2802169b0",
+        "f8e2802169b0"
+      ],
+      "stable": true,
+      "llm_mock_calls": 0,
+      "invalid_mock_calls": 0
+    },
+    {
+      "id": "case-124e4608e5",
+      "intent": "cross-cutting",
+      "scenario": "failure",
+      "failure_mode": "out_of_scope",
+      "variant": "adversarial",
+      "input": "Book me a table for two tonight",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "78cf173f8f68",
+        "78cf173f8f68"
+      ],
+      "trajectory_hash": [
+        "04fff7dd69cd",
+        "04fff7dd69cd"
+      ],
+      "stable": true,
+      "llm_mock_calls": 0,
+      "invalid_mock_calls": 0
+    },
+    {
+      "id": "case-07a9582822",
+      "intent": "cross-cutting",
+      "scenario": "edge.get_weather.missing_required.city",
+      "failure_mode": "input_validation",
+      "variant": "boundary",
+      "input": "What is the weather like today?",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "78cf173f8f68",
+        "78cf173f8f68"
+      ],
+      "trajectory_hash": [
+        "04fff7dd69cd",
+        "04fff7dd69cd"
+      ],
+      "stable": true,
+      "llm_mock_calls": 0,
+      "invalid_mock_calls": 0
+    },
+    {
+      "id": "case-67ab660de2",
+      "intent": "cross-cutting",
+      "scenario": "edge.get_alerts.missing_required.city",
+      "failure_mode": "input_validation",
+      "variant": "boundary",
+      "input": "Any weather alerts right now?",
+      "scores": {
+        "expected_tools": [
+          1.0,
+          1.0
+        ],
+        "contains": [
+          1.0,
+          1.0
+        ]
+      },
+      "means": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "evaluator_errors": {},
+      "agent_errors": [],
+      "outputs_hash": [
+        "78cf173f8f68",
+        "78cf173f8f68"
+      ],
+      "trajectory_hash": [
+        "04fff7dd69cd",
+        "04fff7dd69cd"
+      ],
+      "stable": true,
+      "llm_mock_calls": 0,
+      "invalid_mock_calls": 0
+    }
+  ],
+  "failing_cases": [],
+  "simulation": {
+    "details": {
+      "workers": 4,
+      "backend": "threads",
+      "endpoint": "http://127.0.0.1:53409",
+      "scenarios": 1,
+      "stop_reasons": {
+        "weather-then-alerts": "success"
+      },
+      "violations": {},
+      "mined_pending_cases": 0,
+      "mock_calls": {
+        "rule": 0,
+        "llm": 2,
+        "real": 0,
+        "fallback": 0,
+        "error": 0,
+        "invalid": 0
+      },
+      "strategies": {}
+    },
+    "results": [
+      {
+        "scenario_id": "weather-then-alerts",
+        "stop_reason": "success",
+        "turns": 2,
+        "transcript": [
+          {
+            "role": "user",
+            "content": "What is the weather in Paris?"
+          },
+          {
+            "role": "assistant",
+            "content": "It is 72F and sunny in Paris."
+          },
+          {
+            "role": "user",
+            "content": "Any alerts for Paris?"
+          },
+          {
+            "role": "assistant",
+            "content": "Alerts: {\"alerts\": [\"heat advisory\"], \"city\": \"Paris\"}"
+          }
+        ],
+        "violations": [],
+        "mock_calls": {
+          "rule": 0,
+          "llm": 2,
+          "real": 0,
+          "fallback": 0,
+          "error": 0,
+          "invalid": 0
+        },
+        "mock_strategy": null,
+        "log": [
+          {
+            "turn": 0,
+            "seconds": 0.004,
+            "tool_calls": 1,
+            "error": null,
+            "mode": "remote",
+            "endpoint": "http://127.0.0.1:53409"
+          },
+          {
+            "turn": 1,
+            "seconds": 0.003,
+            "tool_calls": 1,
+            "error": null,
+            "mode": "remote",
+            "endpoint": "http://127.0.0.1:53409"
+          }
+        ]
+      }
+    ]
+  },
+  "publication": {},
+  "analysis": {
+    "schema": "evalbuilder/analysis/v1",
+    "summary": "Offline analysis: the weather bot names the city and never invents data.",
+    "verdict_explanation": "pass — thresholds met",
+    "failure_patterns": [],
+    "weak_slices": [],
+    "stability_notes": "stable across repeats",
+    "evaluator_issues": [],
+    "recommendations": [
+      "Add judge evaluators with a real model."
+    ],
+    "source": "generator"
+  },
+  "generator_calls": [
+    {
+      "schema": "agent_map",
+      "seconds": 0.0
+    },
+    {
+      "schema": "mock_fixtures",
+      "seconds": 0.0
+    },
+    {
+      "schema": "mock_strategies",
+      "seconds": 0.0
+    },
+    {
+      "schema": "cases",
+      "seconds": 0.0
+    },
+    {
+      "schema": "cases",
+      "seconds": 0.0
+    },
+    {
+      "schema": "case_review",
+      "seconds": 0.0
+    },
+    {
+      "schema": "simulation_scenarios",
+      "seconds": 0.0
+    },
+    {
+      "schema": "analysis",
+      "seconds": 0.0
+    }
+  ],
+  "problems": []
+}

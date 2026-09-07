@@ -67,7 +67,7 @@ def render_compose(spec: DeploymentSpec, dockerfile: str | Path) -> str:
     service = {
         "build": {"context": str(Path(spec.build_context).resolve()), "dockerfile": str(Path(dockerfile).resolve())},
         "image": spec.image,
-        "ports": [f"{spec.port}:{spec.port}"],
+        "ports": [f"{spec.host_port}:{spec.port}"],
         "environment": server_env(spec),
         "healthcheck": {
             "test": ["CMD", "python", "-c", HEALTH_PROBE.format(port=spec.port)],

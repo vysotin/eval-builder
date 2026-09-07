@@ -1,0 +1,182 @@
+{
+  "schema": "evalbuilder/score-report/v1",
+  "run_id": "30fe0176",
+  "dataset_name": "weather-bot",
+  "metrics": {
+    "expected_tools": {
+      "n": 7,
+      "avg": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "contains": {
+      "n": 7,
+      "avg": 1.0,
+      "min": 1.0,
+      "max": 1.0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "slices": {
+    "intent": {
+      "intent.conditions": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "intent.alerts": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "cross-cutting": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      }
+    },
+    "failure_mode": {
+      "none": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "tool_error_handling": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "out_of_scope": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "input_validation": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      }
+    },
+    "variant": {
+      "multi-turn": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "boundary": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "happy": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      },
+      "adversarial": {
+        "expected_tools": 1.0,
+        "contains": 1.0
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "case-1bcfeeea1d",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['Paris']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    },
+    {
+      "case_id": "case-357ad7a5f7",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['could not']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    },
+    {
+      "case_id": "case-af8dace40e",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['heat advisory']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    },
+    {
+      "case_id": "case-fb5c5bbdc9",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['could not']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    },
+    {
+      "case_id": "case-124e4608e5",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['weather']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    },
+    {
+      "case_id": "case-07a9582822",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['city']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    },
+    {
+      "case_id": "case-67ab660de2",
+      "scores": {
+        "expected_tools": {
+          "score": 1.0,
+          "comment": ""
+        },
+        "contains": {
+          "score": 1.0,
+          "comment": "found ['city']"
+        }
+      },
+      "errors": {},
+      "skipped": {}
+    }
+  ]
+}

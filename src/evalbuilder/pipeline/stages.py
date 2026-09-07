@@ -334,7 +334,7 @@ def preflight(ctx: PipelineContext) -> dict:
     from evalbuilder.deploy import target_for
     from evalbuilder.deploy.spec import resolve_env
 
-    available, reason = target_for(cfg.deploy.target, log=ctx.log).available()
+    available, reason = target_for(cfg.deploy.target, runner=ctx.deploy_runner(), log=ctx.log).available()
     if not available:
         raise ValueError(f"deployment target {cfg.deploy.target!r} unavailable: {reason}")
     _, missing_env = resolve_env(cfg.deploy.env)
@@ -673,7 +673,7 @@ def deploy(ctx: PipelineContext) -> dict:
 
     cfg = ctx.config
     started = time.time()
-    record = deploy_up(cfg, ctx.out_dir, runner=ctx.deploy_runner(), log=ctx.log)
+    record = deploy_up(cfg, ctx.out_dir, runner=ctx.deploy_runner(), log=ctx.log, check_available=False)  # preflight probed the target
     for name in record.details.get("missing_host_env") or []:
         ctx.problem("deploy", f"deploy.env {name} is not set on the host; the agent container did not receive it")
     return {

@@ -161,6 +161,22 @@ def test_deploy_problems():
     assert ok.problems() == []
 
 
+def test_deploy_host_port_default_round_trip_and_problems():
+    cfg = PipelineConfig.model_validate(MINIMAL)
+    assert cfg.deploy.host_port is None  # null = the container port
+    docker = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "docker", "host_port": 9090}})
+    assert docker.deploy.host_port == 9090 and docker.deploy.port == 8080 and docker.problems() == []
+    yaml_text = docker.to_yaml()
+    assert "host_port: 9090" in yaml_text
+    assert load_config_text(yaml_text).deploy == docker.deploy
+    out_of_range = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "docker", "host_port": 70000}})
+    assert any("deploy.host_port must be within [1, 65535]" in p for p in out_of_range.problems())
+    other_target = PipelineConfig.model_validate({**MINIMAL, "deploy": {"target": "kubernetes", "host_port": 9090}})
+    assert any("deploy.host_port is only meaningful for the docker target" in p for p in other_target.problems())
+    text = template("demo", "examples/weather_bot/agent.py", "examples.weather_bot.agent")
+    assert "host_port: null" in text and load_config_text(text).deploy.host_port is None
+
+
 def test_template_spells_out_deploy_inference_evaluation():
     text = template("demo", "examples/weather_bot/agent.py", "examples.weather_bot.agent")
     for needle in ("deploy:", "target: local", "| docker (compose)", "inference:", "workers: 4", "backend: threads", "evaluation:", "expose: port-forward"):

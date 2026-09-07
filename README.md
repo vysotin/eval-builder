@@ -404,7 +404,7 @@ target**. One interface (`src/evalbuilder/deploy/base.py`: `available` / `render
 | `deploy.target` | needs | how the image gets there | endpoint |
 |---|---|---|---|
 | `local` | nothing — `python -m evalbuilder.cli serve` as a detached subprocess of the same interpreter | no image | `http://127.0.0.1:<free port>` |
-| `docker` | `docker` on PATH, a running daemon, Compose v2 | `docker compose -p evalbuilder-<name> up -d --build --wait` from the generated `compose.yaml` | `http://127.0.0.1:<deploy.port>` |
+| `docker` | `docker` on PATH, a running daemon, Compose v2 | `docker compose -p evalbuilder-<name> up -d --build --wait` from the generated `compose.yaml` | `http://127.0.0.1:<deploy.host_port>` (default: `deploy.port`) |
 | `kubernetes` | `kubectl` reaching a cluster (Docker Desktop's included) + `docker` to build | `image.push`: `registry` (docker push, pods pull with `Always`), `load` (a privileged loader DaemonSet + `docker save … \| kubectl exec -i … nsenter -t 1 … ctr -n k8s.io images import -` into every node, `Never`), `none` (already on the nodes); `auto` = `registry` when `image.registry` is set, else `load` | `expose: port-forward` (default; a detached `kubectl port-forward svc/…`, restarted by `deploy status` when it died) or `nodeport` (`http://<node InternalIP>:<nodePort>`) |
 | `openshift` (prototype) | `oc` logged in + `docker`; `image.registry` required | `docker push` to the registry (`oc registry info --public` names the internal one) | `expose: route` (default): the Route's host |
 
@@ -670,7 +670,9 @@ evalbuilder run …                                         alias of infer (the 
 evalbuilder eval RUN… --dataset D --evaluators evaluators.yaml [--out D] [--workers N] [--backend B]
                       [--aggregate/--no-aggregate] [--config CFG]                        evaluation phase
 evalbuilder score RUN --dataset D --evaluators evaluators.yaml [--out D] [--workers N]   one run, prints its report
-evalbuilder simulate DATASET --scenarios scenarios.yaml [--no-mine] [--mock] [--on-miss P] [--mock-model SPEC]
+evalbuilder simulate DATASET --scenarios scenarios.yaml [--endpoint URL | --deployment DIR] [--workers N]
+                             [--backend threads|processes] [--timeout S] [--no-mine] [--mock] [--on-miss P]
+                             [--mock-model SPEC] [--out D]                       scenarios only
 evalbuilder publish DATASET [--dataset-name N]            LangSmith, idempotent
 evalbuilder pipeline init|run|report|compact              the autonomous pipeline
 evalbuilder ui [DIR] [--port P] [--headless]              Streamlit report UI
@@ -821,7 +823,7 @@ agent end to end (`-m "not slow"` skips the subprocess job test).
 | `deployment target 'docker' unavailable: …` | preflight: `docker` / `kubectl` / `oc` not on PATH, the daemon or cluster not reachable, `oc` not logged in — or switch `deploy.target: local` |
 | `models.agent 'claude-cli:…' cannot run inside the agent container` | container targets need a model that runs in the image: an API-key provider with the key in `deploy.env` (`ANTHROPIC_API_KEY: null` copies it from the host) or a `scripted:` model |
 | pods stay `ErrImageNeverPull` / `ImagePullBackOff` | the cluster cannot see the local image: `deploy.image.push: load` (the default without a registry) streams it into the nodes through a privileged loader pod; when privileged pods are forbidden set `image.registry` and `push: registry` |
-| `docker compose … up` fails with a port conflict | `deploy.port` (8080) is mapped on the host — choose another port |
+| `docker compose … up` fails with a port conflict | `deploy.port` (8080) is published on the host — set `deploy.host_port` to a free port (the container port stays) |
 | `deployed agent at … is not healthy` after a pause | the `kubectl port-forward` died — `evalbuilder deploy status DIR` restarts it (the infer stage does the same before every run) |
 | judge scores with comment `Test.` | placeholder judge rationale; listed under `stability.suspect_judge_comments`, retried once automatically |
 | `streamlit is not installed` | `uv sync --extra ui` |

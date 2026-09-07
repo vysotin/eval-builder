@@ -20,6 +20,7 @@ EXPECTED_HEADERS = {
 }
 EXAMPLE = "docs/examples/support-bot"
 INCIDENT_EXAMPLE = "docs/examples/incident-desk"
+WEATHER_EXAMPLE = "docs/examples/weather-bot"
 
 
 @pytest.fixture(scope="module")
@@ -174,6 +175,35 @@ def test_incident_desk_pages_render(page):
         assert "Output schema" in text and "Schema edge cases" in text
     if page == "dataset":
         assert at.selectbox(key="ds_case").value.startswith("case-") and len(at.subheader) >= 3
+
+
+def test_weather_bot_example_loads_with_deployment_data():
+    weather = loader.load_dir(WEATHER_EXAMPLE)
+    assert weather.problems == [] and weather.name == "weather-bot"
+    assert weather.verdict == "pass" and weather.verdict == weather.report["verdict"]
+    assert weather.deployment["target"] == "local" and weather.deployment["status"] == "down"
+    assert weather.report["deployment"]["target"] == "local"
+    assert set(weather.report["stages"]) >= {"deploy", "infer", "teardown"}
+    assert weather.report["stages"]["publish"]["status"] == "skipped"
+    assert all(r["execution"]["mode"] == "remote" for r in weather.runs.values())
+
+
+@pytest.mark.parametrize("page", ("summary", "run", "stages"))
+def test_weather_bot_deployment_pages_render(page):
+    """The deploy-era example: the Summary page names the deployment and the Stages page
+    carries the deploy/infer/teardown stages the two older examples never ran."""
+    at = _run(page, _dir(WEATHER_EXAMPLE))
+    assert _errors(at) == []
+    text = "\n".join(m.value for m in at.markdown) + "\n" + "\n".join(c.value for c in at.caption)
+    if page == "summary":
+        assert [h.value for h in at.header] == [EXPECTED_HEADERS["summary"]]
+        assert "deployed to **local**" in text and "now down" in text
+    if page == "stages":
+        assert [h.value for h in at.header] == [EXPECTED_HEADERS["stages"]]
+        labels = [e.label for e in at.expander]
+        assert {"deploy — ok", "infer — ok", "teardown — ok"} <= set(labels)
+        assert "publish — skipped" in labels
+        assert "config `examples/weather_bot/pipeline.yaml`" in text  # the fixture is path-portable
 
 
 def test_uploaded_bundle_is_a_read_only_project():

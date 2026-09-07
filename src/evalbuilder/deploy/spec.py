@@ -57,6 +57,7 @@ class DeploymentSpec:
     include: list[str] = field(default_factory=list)
     requirements: str | None = None
     port: int = 8080
+    host_port: int = 8080  # docker: host port the container port is published on (deploy.host_port or port)
     namespace: str = "default"
     replicas: int = 1
     expose: str = "port-forward"  # port-forward | nodeport | route
@@ -95,7 +96,7 @@ def spec_from_config(cfg, out_dir: Path | None = None, *, target: str | None = N
         name=cfg.name, target=target or d.target, module=cfg.target.module, factory=cfg.target.factory,
         image=cfg.image_ref, push=d.image.push, registry=d.image.registry, extras=list(d.image.extras),
         build_context=d.build.context, dockerfile=d.build.dockerfile, include=list(d.build.include),
-        requirements=d.build.requirements, port=d.port, namespace=d.namespace, replicas=d.replicas,
+        requirements=d.build.requirements, port=d.port, host_port=d.host_port or d.port, namespace=d.namespace, replicas=d.replicas,
         expose=d.expose, env=env, keep=d.keep, timeout=d.timeout, context=d.context,
         agent_model=cfg.models.agent, mock_model=mock_model, work_dir=str(out / WORK_DIR / WORK_SUBDIR),
     )

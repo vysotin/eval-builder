@@ -189,9 +189,8 @@ factory's own defaults (e.g. a scripted model) still apply.
 messages to OpenAI-style dicts (`convert_to_openai_messages`) as the **trajectory**,
 collects `tool_calls` from every `AIMessage`, and returns the last message's content as
 the response; `is_mock_engine_error(exc)` recognises a `MockEngineError` in the cause
-chain (an infrastructure failure, not the agent's). `run_case` keeps the older
-one-call-per-case shape on top of the same primitives (multi-turn replay of
-`metadata.user_turns`, `error_class=agent` on exceptions).
+chain (an infrastructure failure, not the agent's). Multi-turn replay and the
+`error_class` verdict live one layer up, in the agent clients and the inference engine.
 
 ## Agent clients (`agent_client.py`)
 

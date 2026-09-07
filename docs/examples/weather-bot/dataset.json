@@ -1,0 +1,582 @@
+{
+  "schema": "evalbuilder/dataset/v1",
+  "name": "weather-bot",
+  "dataset_type": "final_response",
+  "target": {
+    "framework": "langgraph",
+    "module": "examples.weather_bot.agent",
+    "factory": "build_agent"
+  },
+  "mocks": {
+    "tools": {
+      "get_weather": [],
+      "get_alerts": []
+    },
+    "on_miss": "llm",
+    "strategy": "default",
+    "strategies": {
+      "world": "One city, Paris, with stable sunny weather and one heat advisory.",
+      "strategies": {
+        "default": {
+          "description": "healthy weather service",
+          "tools": {
+            "get_weather": {
+              "behavior": "Every city is 72F and sunny; echo the city.",
+              "examples": [
+                {
+                  "args": {
+                    "city": "Paris"
+                  },
+                  "response": {
+                    "temp": 72,
+                    "condition": "sunny",
+                    "city": "Paris"
+                  }
+                }
+              ],
+              "fallback_response": {
+                "temp": 72,
+                "condition": "sunny",
+                "city": "Paris"
+              }
+            },
+            "get_alerts": {
+              "behavior": "Paris has a heat advisory; other cities have no alerts.",
+              "examples": [],
+              "fallback_response": {
+                "alerts": [
+                  "heat advisory"
+                ],
+                "city": "Paris"
+              }
+            }
+          }
+        },
+        "stormy": {
+          "description": "storm season: every city has a storm warning",
+          "tools": {
+            "get_alerts": {
+              "behavior": "Every city has exactly one alert: 'storm warning'.",
+              "examples": [],
+              "fallback_response": {
+                "alerts": [
+                  "storm warning"
+                ],
+                "city": "Paris"
+              }
+            }
+          }
+        }
+      }
+    },
+    "llm": {
+      "model": "scripted:examples.weather_bot.offline:mock_model",
+      "on_invalid": "fallback",
+      "max_repairs": 1
+    }
+  },
+  "coverage": {
+    "plan": {
+      "cells": [
+        {
+          "intent": "intent.conditions",
+          "topic": "unspecified",
+          "scenario": "scenario.conditions.happy",
+          "failure_mode": "none",
+          "kind": "happy",
+          "count": 1,
+          "variants": [
+            "happy"
+          ],
+          "multi_turn": 1,
+          "related_intent": null,
+          "tool": null,
+          "edge": null
+        },
+        {
+          "intent": "intent.conditions",
+          "topic": "unspecified",
+          "scenario": "scenario.conditions.service-down",
+          "failure_mode": "tool_error_handling",
+          "kind": "failure",
+          "count": 1,
+          "variants": [
+            "boundary",
+            "adversarial"
+          ],
+          "multi_turn": 0,
+          "related_intent": null,
+          "tool": null,
+          "edge": null
+        },
+        {
+          "intent": "intent.alerts",
+          "topic": "unspecified",
+          "scenario": "scenario.alerts.happy",
+          "failure_mode": "none",
+          "kind": "happy",
+          "count": 1,
+          "variants": [
+            "happy"
+          ],
+          "multi_turn": 0,
+          "related_intent": null,
+          "tool": null,
+          "edge": null
+        },
+        {
+          "intent": "intent.alerts",
+          "topic": "unspecified",
+          "scenario": "scenario.alerts.service-down",
+          "failure_mode": "tool_error_handling",
+          "kind": "failure",
+          "count": 1,
+          "variants": [
+            "boundary",
+            "adversarial"
+          ],
+          "multi_turn": 0,
+          "related_intent": null,
+          "tool": null,
+          "edge": null
+        },
+        {
+          "intent": "cross-cutting",
+          "topic": "unspecified",
+          "scenario": "failure",
+          "failure_mode": "out_of_scope",
+          "kind": "out-of-intent",
+          "count": 1,
+          "variants": [
+            "adversarial",
+            "boundary"
+          ],
+          "multi_turn": 0,
+          "related_intent": "intent.conditions",
+          "tool": null,
+          "edge": null
+        },
+        {
+          "intent": "cross-cutting",
+          "topic": "unspecified",
+          "scenario": "edge.get_weather.missing_required.city",
+          "failure_mode": "input_validation",
+          "kind": "schema-edge",
+          "count": 1,
+          "variants": [
+            "boundary",
+            "adversarial"
+          ],
+          "multi_turn": 0,
+          "related_intent": "intent.conditions",
+          "tool": "get_weather",
+          "edge": {
+            "id": "edge.get_weather.missing_required.city",
+            "tool": "get_weather",
+            "kind": "missing_required",
+            "field": "city",
+            "detail": "`city` (string) is required by get_weather but the user does not provide it",
+            "failure_mode": "input_validation",
+            "expected_behavior": "Ask the user for `city` instead of calling get_weather with a guessed or placeholder value.",
+            "evidence": [
+              "schema:get_weather.city"
+            ]
+          }
+        },
+        {
+          "intent": "cross-cutting",
+          "topic": "unspecified",
+          "scenario": "edge.get_alerts.missing_required.city",
+          "failure_mode": "input_validation",
+          "kind": "schema-edge",
+          "count": 1,
+          "variants": [
+            "boundary",
+            "adversarial"
+          ],
+          "multi_turn": 0,
+          "related_intent": "intent.alerts",
+          "tool": "get_alerts",
+          "edge": {
+            "id": "edge.get_alerts.missing_required.city",
+            "tool": "get_alerts",
+            "kind": "missing_required",
+            "field": "city",
+            "detail": "`city` (string) is required by get_alerts but the user does not provide it",
+            "failure_mode": "input_validation",
+            "expected_behavior": "Ask the user for `city` instead of calling get_alerts with a guessed or placeholder value.",
+            "evidence": [
+              "schema:get_alerts.city"
+            ]
+          }
+        }
+      ],
+      "summary": {
+        "cells": 7,
+        "cases": 7,
+        "multi_turn": 1,
+        "by_kind": {
+          "happy": 2,
+          "failure": 2,
+          "out-of-intent": 1,
+          "schema-edge": 2
+        }
+      }
+    },
+    "achieved": {
+      "planned": 7,
+      "covered": 7,
+      "coverage_pct": 100.0,
+      "by_kind": {
+        "happy": {
+          "planned": 2,
+          "covered": 2
+        },
+        "failure": {
+          "planned": 2,
+          "covered": 2
+        },
+        "out-of-intent": {
+          "planned": 1,
+          "covered": 1
+        },
+        "schema-edge": {
+          "planned": 2,
+          "covered": 2
+        }
+      },
+      "multi_turn": {
+        "planned": 1,
+        "have": 1
+      },
+      "gaps": []
+    }
+  },
+  "cases": [
+    {
+      "id": "case-1bcfeeea1d",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in Paris?"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [
+          {
+            "name": "get_weather",
+            "args": {}
+          },
+          {
+            "name": "get_alerts",
+            "args": {}
+          }
+        ],
+        "contains": "Paris",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "intent.conditions",
+        "topic": "unspecified",
+        "scenario": "scenario.conditions.happy",
+        "failure_mode": "none",
+        "variant": "multi-turn",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ],
+        "user_turns": [
+          "And are there any alerts for Paris?"
+        ]
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    },
+    {
+      "id": "case-357ad7a5f7",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in Paris?"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [
+          {
+            "name": "get_weather",
+            "args": {}
+          }
+        ],
+        "contains": "could not",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "intent.conditions",
+        "topic": "unspecified",
+        "scenario": "scenario.conditions.service-down",
+        "failure_mode": "tool_error_handling",
+        "variant": "boundary",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ],
+        "mocks": {
+          "tools": {
+            "get_weather": [
+              {
+                "matchArgs": {},
+                "response": {
+                  "error": "service unavailable"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    },
+    {
+      "id": "case-af8dace40e",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Any alerts for Paris?"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [
+          {
+            "name": "get_alerts",
+            "args": {}
+          }
+        ],
+        "contains": "heat advisory",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "intent.alerts",
+        "topic": "unspecified",
+        "scenario": "scenario.alerts.happy",
+        "failure_mode": "none",
+        "variant": "happy",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ]
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    },
+    {
+      "id": "case-fb5c5bbdc9",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Any alerts for Paris?"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [
+          {
+            "name": "get_alerts",
+            "args": {}
+          }
+        ],
+        "contains": "could not",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "intent.alerts",
+        "topic": "unspecified",
+        "scenario": "scenario.alerts.service-down",
+        "failure_mode": "tool_error_handling",
+        "variant": "boundary",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ],
+        "mocks": {
+          "tools": {
+            "get_alerts": [
+              {
+                "matchArgs": {},
+                "response": {
+                  "error": "service unavailable"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    },
+    {
+      "id": "case-124e4608e5",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Book me a table for two tonight"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [],
+        "forbidden_tools": [
+          "get_weather",
+          "get_alerts"
+        ],
+        "contains": "weather",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "cross-cutting",
+        "topic": "unspecified",
+        "scenario": "failure",
+        "failure_mode": "out_of_scope",
+        "variant": "adversarial",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ],
+        "related_intent": "intent.conditions"
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    },
+    {
+      "id": "case-07a9582822",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather like today?"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [],
+        "forbidden_tools": [
+          "get_weather"
+        ],
+        "contains": "city",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "cross-cutting",
+        "topic": "unspecified",
+        "scenario": "edge.get_weather.missing_required.city",
+        "failure_mode": "input_validation",
+        "variant": "boundary",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ],
+        "related_intent": "intent.conditions",
+        "tool": "get_weather",
+        "edge": {
+          "id": "edge.get_weather.missing_required.city",
+          "kind": "missing_required",
+          "field": "city"
+        }
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    },
+    {
+      "id": "case-67ab660de2",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Any weather alerts right now?"
+          }
+        ]
+      },
+      "reference_outputs": {
+        "response": "see contains",
+        "expected_tools": [],
+        "forbidden_tools": [
+          "get_alerts"
+        ],
+        "contains": "city",
+        "contract": "Names the city; never invents weather data."
+      },
+      "metadata": {
+        "intent": "cross-cutting",
+        "topic": "unspecified",
+        "scenario": "edge.get_alerts.missing_required.city",
+        "failure_mode": "input_validation",
+        "variant": "boundary",
+        "source": "synthetic",
+        "evidence": [
+          "scenario"
+        ],
+        "related_intent": "intent.alerts",
+        "tool": "get_alerts",
+        "edge": {
+          "id": "edge.get_alerts.missing_required.city",
+          "kind": "missing_required",
+          "field": "city"
+        }
+      },
+      "review": {
+        "status": "approved",
+        "note": "auto-approved via pipeline config by examples/weather_bot/pipeline.yaml"
+      },
+      "publication": {
+        "langsmith_example_id": null
+      }
+    }
+  ],
+  "langsmith": {
+    "dataset_id": null,
+    "dataset_name": null
+  }
+}

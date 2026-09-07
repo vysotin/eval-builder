@@ -1,0 +1,24 @@
+
+=== 2026-09-07T08:49:04+00:00 $ ./.venv/bin/python3 -m evalbuilder.cli serve --module examples.weather_bot.agent --factory build_agent --host 127.0.0.1 --port 53409
+evalbuilder serve: examples.weather_bot.agent:build_agent on http://127.0.0.1:53409 (agent model scripted:examples.weather_bot.agent:default_scripted_model)
+127.0.0.1 - - [07/Sep/2026 16:49:05] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 16:49:05] "POST /invoke HTTP/1.1" 200 -

@@ -1,0 +1,56 @@
+{
+  "schema": "evalbuilder/mock-strategies/v1",
+  "world": "One city, Paris, with stable sunny weather and one heat advisory.",
+  "strategies": {
+    "default": {
+      "description": "healthy weather service",
+      "tools": {
+        "get_weather": {
+          "behavior": "Every city is 72F and sunny; echo the city.",
+          "examples": [
+            {
+              "args": {
+                "city": "Paris"
+              },
+              "response": {
+                "temp": 72,
+                "condition": "sunny",
+                "city": "Paris"
+              }
+            }
+          ],
+          "fallback_response": {
+            "temp": 72,
+            "condition": "sunny",
+            "city": "Paris"
+          }
+        },
+        "get_alerts": {
+          "behavior": "Paris has a heat advisory; other cities have no alerts.",
+          "examples": [],
+          "fallback_response": {
+            "alerts": [
+              "heat advisory"
+            ],
+            "city": "Paris"
+          }
+        }
+      }
+    },
+    "stormy": {
+      "description": "storm season: every city has a storm warning",
+      "tools": {
+        "get_alerts": {
+          "behavior": "Every city has exactly one alert: 'storm warning'.",
+          "examples": [],
+          "fallback_response": {
+            "alerts": [
+              "storm warning"
+            ],
+            "city": "Paris"
+          }
+        }
+      }
+    }
+  }
+}
