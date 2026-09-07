@@ -196,3 +196,34 @@ def test_local_agent_for_prefers_objects_over_specs(tmp_path):
     injected = ScriptedChatModel(script=[(r".*", lambda m, _msgs: ai("INJECTED"))])
     agent = local_agent_for(ds, model=injected, model_spec="scripted:ignored:x")
     assert agent.agent_model_spec is None and agent.invoke([{"role": "user", "content": "hi"}], None).response == "INJECTED"
+
+
+def test_case_runs_record_the_inputs_that_were_asked(tmp_path):
+    ds, p = _ds(tmp_path, n=2, turns=True)
+    art = infer_dataset(ds, p, LocalAgent(WEATHER), out_dir=tmp_path, workers=2)
+    for case, cr in zip(ds.cases, art.case_runs):
+        assert cr.error is None
+        assert cr.inputs == {**case.inputs, "user_turns": case.metadata["user_turns"]}
+        assert cr.inputs["messages"] == case.inputs["messages"]
+    saved = json.loads((tmp_path / f"run-{art.run_id}.json").read_text())
+    assert saved["case_runs"][0]["inputs"]["user_turns"] == ds.cases[0].metadata["user_turns"]
+
+
+def test_single_turn_case_runs_carry_inputs_without_user_turns(tmp_path):
+    ds, p = _ds(tmp_path, n=2)
+    art = infer_dataset(ds, p, LocalAgent(WEATHER), out_dir=tmp_path, workers=1)
+    for case, cr in zip(ds.cases, art.case_runs):
+        assert cr.inputs == case.inputs and "user_turns" not in cr.inputs
+
+
+def test_error_case_runs_still_record_the_inputs():
+    from evalbuilder.inference import _infer_case
+
+    case = {"id": "c1", "inputs": {"question": "no messages here"}, "metadata": {"user_turns": ["and then?"]}}
+    cr = _infer_case(LocalAgent(WEATHER), case, None, False)
+    assert cr.error_class == "infrastructure" and "no 'messages' list" in cr.error
+    assert cr.inputs == {"question": "no messages here", "user_turns": ["and then?"]}
+
+    boom = {"id": "c2", "inputs": {"messages": [{"role": "user", "content": "hi"}]}}
+    cr = _infer_case(LocalAgent(WEATHER, factory="no_such_factory"), boom, None, False)
+    assert cr.error and cr.error_class == "infrastructure" and cr.inputs == boom["inputs"]

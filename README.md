@@ -534,7 +534,7 @@ eval/pipeline/support-bot/
 | `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases (inputs, references, metadata, mocks), review + publication state, `mocks` (both layers), `coverage` (plan + achieved) |
 | `evaluators.yaml` | – | score | evaluator specs |
 | `deployment.json` | `evalbuilder/deployment/v1` | deploy, teardown | target, image, endpoint, expose, status (`up \| down \| failed`), resources, the commands run, health facts |
-| `results/run-<id>.json` | `evalbuilder/run/v1` | infer | per-case outputs, trajectory, tool calls, node path, errors, `mock_calls` ledger, per-turn `log`; `mocking` totals, `execution` (mode, endpoint, workers, backend) |
+| `results/run-<id>.json` | `evalbuilder/run/v1` | infer | per-case `inputs` (the case inputs plus `user_turns`), outputs, trajectory, tool calls, node path, errors, `mock_calls` ledger, per-turn `log`; `mocking` totals, `execution` (mode, endpoint, workers, backend) |
 | `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores/comments/errors/skips |
 | `aggregate.json` | `evalbuilder/aggregate/v1` | aggregate | pass rates vs thresholds, slices, weak slices, stability, failing cases, verdict |
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |

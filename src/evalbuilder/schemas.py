@@ -69,6 +69,7 @@ class AgentMap(BaseModel):
 
 class CaseRun(BaseModel):
     case_id: str
+    inputs: dict = Field(default_factory=dict)  # the case's inputs as asked, plus "user_turns" for follow-up turns
     outputs: dict = Field(default_factory=dict)
     trajectory: list[dict] = Field(default_factory=list)
     tool_calls: list[dict] = Field(default_factory=list)

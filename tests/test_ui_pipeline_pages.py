@@ -526,13 +526,23 @@ def test_run_page_shows_the_deployment_block_and_tears_down(tmp_path):
     assert _errors(at) == []
     page = " ".join(m.value for m in at.markdown)
     assert "Deployment" in " ".join(h.value for h in at.subheader)
-    assert "target **local**" in page and "http://127.0.0.1:1" in page and "unhealthy" in page  # the pid is dead
+    assert "target **local**" in page and "http://127.0.0.1:1" in page
     assert any("get_weather" in c.value for c in at.caption)
+    # the live probe shells out, so it waits for the button instead of running on every rerender
+    assert "unhealthy" not in page and "healthy" not in page
+    assert any("status not checked yet" in c.value for c in at.caption)
+    at.button(key="run_check_status").click().run()
+    assert _errors(at) == []
+    page = " ".join(m.value for m in at.markdown)
+    assert "unhealthy" in page and "replicas 0/1" in page  # the pid is dead
+    assert not any("status not checked yet" in c.value for c in at.caption)
     at.button(key="run_teardown").click().run()
     assert _errors(at) == []
     assert json.loads((out / "deployment.json").read_text())["status"] == "down"
     page = " ".join(m.value for m in at.markdown)
-    assert ":grey-badge[down]" in page and not any(b.key == "run_teardown" for b in at.button)
+    assert ":grey-badge[down]" in page
+    assert not any(b.key in ("run_teardown", "run_check_status") for b in at.button)
+    assert "run_deploy_status" not in at.session_state
 
 
 def test_run_page_shows_a_failed_deployment(tmp_path):

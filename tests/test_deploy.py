@@ -5,6 +5,8 @@ real, and the deploy_up / deploy_status / deploy_down entry points."""
 from __future__ import annotations
 
 import json
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -394,3 +396,80 @@ def test_deploy_render_returns_the_generated_files(tmp_path):
     deploy_render(cfg, write=True, target="docker")
     assert (cfg.output_dir / "work" / "deploy" / "compose.yaml").exists()
     assert deploy_render(_cfg(tmp_path)) == {}
+
+
+# ── the real command runner ────────────────────────────────────
+
+
+def _runner(tmp_path, sink: list | None = None) -> CommandRunner:
+    return CommandRunner(log_path=tmp_path / "commands.log", log=(sink if sink is not None else []).append)
+
+
+def _forwarded(sink: list) -> list[str]:
+    return [line for _, line in sink if line.startswith("  | ")]
+
+
+def test_runner_streams_output_while_the_command_runs(tmp_path):
+    stamped: list[tuple[float, str]] = []
+    runner = CommandRunner(log_path=tmp_path / "commands.log", log=lambda msg: stamped.append((time.monotonic(), msg)))
+    result = runner.run([sys.executable, "-c", "import time\nfor i in (1, 2, 3):\n    print(f'line {i}', flush=True)\n    time.sleep(0.15)\n"])
+    forwarded = _forwarded(stamped)
+    assert result.ok and result.returncode == 0
+    assert forwarded == ["  | line 1", "  | line 2", "  | line 3"]
+    assert result.stdout.splitlines() == ["line 1", "line 2", "line 3"] and result.stderr == ""
+    # the lines arrived as they were printed, not in one dump after the exit
+    at = [t for t, line in stamped if line.startswith("  | ")]
+    assert at[-1] - at[0] >= 0.2
+    assert stamped[-1][1].startswith("$ ") and "→ 0" in stamped[-1][1]  # the summary line comes last
+    assert "line 3" in (tmp_path / "commands.log").read_text()
+
+
+def test_runner_keeps_a_bounded_output_tail(tmp_path):
+    sink: list[tuple[float, str]] = []
+    runner = CommandRunner(log_path=tmp_path / "commands.log", log=lambda msg: sink.append((0.0, msg)))
+    result = runner.run([sys.executable, "-c", "for i in range(1, 501): print(f'line {i}')"])
+    lines = result.stdout.splitlines()
+    assert result.ok and len(_forwarded(sink)) == 500  # every line is streamed …
+    assert len(lines) == 200 and lines[-1] == "line 500" and lines[0] == "line 301"  # … only the tail is kept
+    assert "line 1" not in lines and "line 300" not in lines
+    assert len(result.summary()["output"]) <= 400 and len(runner.history[-1]["output"]) <= 400
+
+
+def test_runner_non_zero_exit_is_returned_or_raised(tmp_path):
+    runner = _runner(tmp_path)
+    argv = [sys.executable, "-c", "print('working'); print('the last line'); raise SystemExit(3)"]
+    result = runner.run(argv, check=False)
+    assert result.returncode == 3 and not result.ok and result.stdout.endswith("the last line")
+    assert runner.history[-1]["returncode"] == 3
+    with pytest.raises(CommandError, match="the last line") as excinfo:
+        runner.run(argv)
+    assert excinfo.value.result.returncode == 3 and "exited 3" in str(excinfo.value)
+
+
+def test_runner_writes_input_to_the_child_stdin(tmp_path):
+    runner = _runner(tmp_path)
+    result = runner.run([sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"], input=b"hello runner\n")
+    assert result.ok and "HELLO RUNNER" in result.stdout
+    echo = runner.run([sys.executable, "-c", "import os; print(os.environ['EB_MARK']); print(os.getcwd())"], env={"EB_MARK": "marked"}, cwd=tmp_path)
+    assert echo.stdout.splitlines()[0] == "marked" and Path(echo.stdout.splitlines()[1]).resolve() == tmp_path.resolve()
+
+
+def test_runner_timeout_kills_the_command(tmp_path):
+    runner = _runner(tmp_path)
+    sleeper = [sys.executable, "-c", "import time; time.sleep(5)"]
+    started = time.monotonic()
+    result = runner.run(sleeper, check=False, timeout=0.5)
+    elapsed = time.monotonic() - started
+    assert result.returncode == 124 and "timed out" in result.stderr and "0.5" in result.stderr
+    assert elapsed < 3 and result.seconds < 3 and runner.history[-1]["returncode"] == 124
+    with pytest.raises(CommandError, match="exited 124"):
+        runner.run(sleeper, timeout=0.5)
+
+
+def test_runner_missing_binary_is_127(tmp_path):
+    runner = _runner(tmp_path)
+    result = runner.run(["evalbuilder-no-such-binary-xyz", "--version"], check=False)
+    assert result.returncode == 127 and "evalbuilder-no-such-binary-xyz" in result.stderr and result.stdout == ""
+    assert runner.which("evalbuilder-no-such-binary-xyz") is None
+    with pytest.raises(CommandError, match="exited 127"):
+        runner.run(["evalbuilder-no-such-binary-xyz"])

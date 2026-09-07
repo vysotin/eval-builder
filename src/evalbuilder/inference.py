@@ -11,9 +11,10 @@ keeps progress reporting and artifact order trivial for both backends:
 - `processes` — loky workers; useful when the agent runs in this process and is CPU
   bound (scripted graphs), each worker rebuilding the client from its specs.
 
-Outputs are the run artifact (`run-<id>.json`: outputs, trajectories, tool calls, the
-mock ledger and a per-turn `log`, plus `execution` — how and where it ran) and the
-simulation results the `simulate` stage stores in `simulation.json`.
+Outputs are the run artifact (`run-<id>.json`: the case `inputs` as asked, outputs,
+trajectories, tool calls, the mock ledger and a per-turn `log`, plus `execution` — how
+and where it ran) and the simulation results the `simulate` stage stores in
+`simulation.json`.
 """
 
 from __future__ import annotations
@@ -92,15 +93,18 @@ def run_conversation(agent, opening: list[dict], user_turns: list[str], mocks: d
 
 
 def _infer_case(agent, case: dict, mocks: dict | None, mocked: bool) -> CaseRun:
-    messages = (case.get("inputs") or {}).get("messages")
-    if not isinstance(messages, list) or not messages:
-        return CaseRun(case_id=case["id"], error="case inputs have no 'messages' list", error_class="infrastructure")
+    case_inputs = case.get("inputs") or {}
     turns = [str(t) for t in ((case.get("metadata") or {}).get("user_turns") or [])]
+    # what was asked, recorded on every path so the run artifact stands alone
+    inputs = {**case_inputs, "user_turns": turns} if turns else {**case_inputs}
+    messages = case_inputs.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return CaseRun(case_id=case["id"], inputs=inputs, error="case inputs have no 'messages' list", error_class="infrastructure")
     try:
         parts = run_conversation(agent, messages, turns, mocks, mocked=mocked)
     except Exception as e:  # noqa: BLE001 - a worker never raises; the run records it
-        return CaseRun(case_id=case["id"], error=f"{type(e).__name__}: {e}", error_class="infrastructure")
-    return CaseRun(case_id=case["id"], **parts)
+        return CaseRun(case_id=case["id"], inputs=inputs, error=f"{type(e).__name__}: {e}", error_class="infrastructure")
+    return CaseRun(case_id=case["id"], inputs=inputs, **parts)
 
 
 def infer_cases(

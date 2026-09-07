@@ -16,10 +16,12 @@ inside it and their reasoning, and its limitations. The pipeline-only modules ar
 - `Dataset` (`evalbuilder/dataset/v1`) with `Case` (`inputs`, `reference_outputs`,
   `metadata`, `review{status, note}`, `publication{langsmith_example_id}`), `target`
   (`module`, `factory`), dataset-level `mocks`, `langsmith` ids.
-- `RunArtifact` (`evalbuilder/run/v1`) with `CaseRun` (`outputs`, `trajectory`,
-  `tool_calls`, `node_path`, `error`, `error_class ∈ none|agent|infrastructure`,
-  `mock_calls` — the mock ledger — and `log`, one entry per conversation turn:
-  `{turn, seconds, tool_calls, error, mode, endpoint}`); the artifact carries `mocking`
+- `RunArtifact` (`evalbuilder/run/v1`) with `CaseRun` (`inputs` — what was asked: the
+  case's `inputs` plus `user_turns` for a multi-turn case, so the run stands alone —
+  `outputs`, `trajectory`, `tool_calls`, `node_path`, `error`,
+  `error_class ∈ none|agent|infrastructure`, `mock_calls` — the mock ledger — and `log`,
+  one entry per conversation turn: `{turn, seconds, tool_calls, error, mode, endpoint}`);
+  the artifact carries `mocking`
   (policy, model, strategy, per-layer call totals) and `execution` — how the inference
   phase ran: `{mode: local|remote, endpoint, workers, backend, seconds}`.
 - `Report` (`evalbuilder/score-report/v1`; the legacy id `evalbuilder/report/v1` is
@@ -317,9 +319,15 @@ pending|up|failed|down`, per-target `resources`, timestamps, the `commands` exec
 `pipe(producer, consumer)` (a real pipe, so an image tarball never sits in memory),
 `spawn(argv, log_path=)` (a detached process in its own session; returns the pid),
 `which`, `pid_alive` (reaps zombies first), `kill` (SIGTERM the group, then SIGKILL).
-Every call is appended to `history` (what the record embeds) and to
-`work/deploy/commands.log`; a non-zero exit raises `CommandError` with the output tail.
-Targets never import `subprocess`; tests inject a fake runner.
+`run` streams: stdout and stderr are merged and read line by line as the command runs,
+each line forwarded to the runner's `log` as `  | …` (so a 1–3 minute `docker build`
+shows progress instead of looking hung, the pipeline's stderr logger being that `log`),
+with the last 200 lines kept as `CommandResult.stdout` — `stderr` then carries only the
+runner's own diagnostics (`timed out after Ns` with code 124 after the process is
+killed, the OS error with code 127 when the binary is missing). Every call is appended
+to `history` (what the record embeds) and to `work/deploy/commands.log`; a non-zero exit
+raises `CommandError` with the output tail. Targets never import `subprocess`; tests
+inject a fake runner.
 
 `render.py` — the generated files: `render_dockerfile` (`python:3.12-slim`, copies
 `pyproject.toml`, `README.md`, `src/`, the target's top-level package (`package_dir`)

@@ -1,21 +1,28 @@
 """Every external command a deployment target runs goes through `CommandRunner`, which
-logs `argv`, exit code, timing and the first lines of output to `commands.log` and keeps
-a history the `deployment.json` record embeds. Tests replace it with a fake that
-records the calls and answers with canned output — the targets never touch
-`subprocess` themselves.
+streams the output line by line to `self.log` (so a minutes-long `docker build` shows
+progress instead of looking hung), logs `argv`, exit code, timing and a bounded output
+tail to `commands.log` and keeps a history the `deployment.json` record embeds. Tests
+replace it with a fake that records the calls and answers with canned output — the
+targets never touch `subprocess` themselves.
 """
 
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import signal
 import subprocess
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+
+TAIL_LINES = 200  # how many trailing output lines `run` keeps in `CommandResult.stdout`
 
 
 @dataclass
@@ -67,23 +74,111 @@ class CommandRunner:
 
     def run(self, argv: list[str], *, input: bytes | None = None, check: bool = True, timeout: float | None = None,
             env: dict | None = None, cwd: str | Path | None = None) -> CommandResult:
+        """Run `argv`, forwarding its output to `self.log` as it arrives; keeps the last `TAIL_LINES` lines.
+
+        stdout and stderr are merged, so `CommandResult.stderr` stays empty except for the
+        runner's own diagnostics (a timeout, a missing binary).
+        """
         started = time.time()
+        tail: deque[str] = deque(maxlen=TAIL_LINES)
+
+        def finish(returncode: int, stderr: str = "") -> CommandResult:
+            result = CommandResult(list(argv), returncode, "\n".join(tail), stderr, time.time() - started)
+            self._record(result)
+            if check and not result.ok:
+                raise CommandError(result)
+            return result
+
         try:
-            proc = subprocess.run(
-                [str(a) for a in argv], input=input, capture_output=True, timeout=timeout,
+            proc = subprocess.Popen(
+                [str(a) for a in argv], stdin=subprocess.PIPE if input is not None else None,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
                 env={**os.environ, **(env or {})}, cwd=str(cwd) if cwd else None,
             )
-            result = CommandResult(list(argv), proc.returncode, proc.stdout.decode(errors="replace"),
-                                   proc.stderr.decode(errors="replace"), time.time() - started)
         except FileNotFoundError as e:
-            result = CommandResult(list(argv), 127, "", f"{e}", time.time() - started)
-        except subprocess.TimeoutExpired as e:
-            result = CommandResult(list(argv), 124, (e.stdout or b"").decode(errors="replace"),
-                                   f"timed out after {timeout}s", time.time() - started)
-        self._record(result)
-        if check and not result.ok:
-            raise CommandError(result)
-        return result
+            return finish(127, f"{e}")
+
+        writer = self._feed_stdin(proc, input)
+        lines: queue.Queue[str | None] = queue.Queue()
+
+        def pump(stream) -> None:
+            try:
+                for line in stream:
+                    lines.put(line)
+            finally:
+                lines.put(None)  # EOF sentinel
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+        reader = threading.Thread(target=pump, args=(proc.stdout,), daemon=True)
+        reader.start()
+        deadline = None if timeout is None else started + timeout
+        timed_out = False
+        while True:
+            remaining = None if deadline is None else deadline - time.time()
+            if remaining is not None and remaining <= 0:
+                timed_out = True
+                break
+            try:
+                line = lines.get(timeout=remaining)
+            except queue.Empty:
+                timed_out = True
+                break
+            if line is None:  # the child closed its output: it is done or about to be
+                break
+            line = line.rstrip("\r\n")
+            tail.append(line)
+            self.log(f"  | {line}")
+
+        if not timed_out:
+            try:
+                proc.wait(timeout=None if deadline is None else max(deadline - time.time(), 0.1))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+        if writer is not None:
+            writer.join(timeout=1.0)
+        if timed_out:
+            self._terminate(proc)
+            return finish(124, f"timed out after {timeout}s")
+        return finish(proc.returncode)
+
+    @staticmethod
+    def _feed_stdin(proc: subprocess.Popen, input: bytes | str | None) -> threading.Thread | None:
+        """Write `input` to the child's stdin from a thread (so a chatty child cannot deadlock us) and close it."""
+        if proc.stdin is None:
+            return None
+        payload = input.decode(errors="replace") if isinstance(input, (bytes, bytearray)) else str(input)
+
+        def feed() -> None:
+            try:
+                proc.stdin.write(payload)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
+
+        thread = threading.Thread(target=feed, daemon=True)
+        thread.start()
+        return thread
+
+    @staticmethod
+    def _terminate(proc: subprocess.Popen) -> None:
+        """SIGTERM, then SIGKILL if it is still around."""
+        for stop in (proc.terminate, proc.kill):
+            try:
+                stop()
+                proc.wait(timeout=2.0)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+            except (ProcessLookupError, OSError):
+                return
 
     def pipe(self, producer: list[str], consumer: list[str], *, check: bool = True, timeout: float | None = None,
              env: dict | None = None) -> CommandResult:

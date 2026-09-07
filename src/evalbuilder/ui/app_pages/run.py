@@ -5,6 +5,7 @@ The page follows the project chosen on Pipeline setup; it has no selector of its
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -152,11 +153,12 @@ def _review_section(out_dir: Path, status: dict, config_path: str | None) -> Non
         st.rerun()
 
 
-def _deployment_section(out_dir: Path, running: bool) -> None:
-    """The recorded deployment (target, image, endpoint, live status) and a Tear down button."""
-    from evalbuilder.deploy import deploy_down, deploy_status, load_record
+def _deployment_section(out_dir: Path, record, running: bool) -> None:
+    """The recorded deployment (target, image, endpoint, last probed status) with Tear down and
+    Check status buttons. The live probe shells out and waits on the network, so it runs only when
+    Check status is pressed; the result is kept in the session and re-rendered on later reruns."""
+    from evalbuilder.deploy import deploy_down, deploy_status
 
-    record = load_record(out_dir)
     if record is None:
         return
     st.subheader("Deployment", anchor="deployment")
@@ -176,19 +178,34 @@ def _deployment_section(out_dir: Path, running: bool) -> None:
     if record.status == "failed" and (record.details or {}).get("error"):
         st.error(record.details["error"][:400])
     if record.status == "up" and not running:
-        c1, c2 = st.columns([1, 4])
+        c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
             if st.button("Tear down", key="run_teardown", icon=":material/power_settings_new:",
                          help="Stop the deployed agent (evalbuilder deploy down). The pipeline's teardown stage does this unless deploy.keep is set."):
                 deploy_down(out_dir)
+                st.session_state.pop("run_deploy_status", None)
                 st.rerun()
         with c2:
-            live = deploy_status(out_dir)
-            ready = live.get("ready")
-            replicas = live.get("replicas") or {}
-            st.markdown((":green-badge[healthy]" if ready else ":red-badge[unhealthy]")
-                        + f" replicas {replicas.get('ready', '?')}/{replicas.get('wanted', '?')}"
-                        + (f" · {(live.get('health') or {}).get('error')}" if not ready and (live.get("health") or {}).get("error") else ""))
+            if st.button("Check status", key="run_check_status", icon=":material/network_check:",
+                         help="Probe the deployment once (evalbuilder deploy status): container/pod state plus one /health request. "
+                              "Not automatic — the probe shells out and waits on the network."):
+                st.session_state["run_deploy_status"] = {
+                    "dir": str(out_dir),
+                    "status": deploy_status(out_dir),
+                    "at": datetime.now().isoformat(timespec="seconds"),
+                }
+        with c3:
+            probed = st.session_state.get("run_deploy_status") or {}
+            if probed.get("dir") == str(out_dir):
+                live = probed.get("status") or {}
+                ready = live.get("ready")
+                replicas = live.get("replicas") or {}
+                st.markdown((":green-badge[healthy]" if ready else ":red-badge[unhealthy]")
+                            + f" replicas {replicas.get('ready', '?')}/{replicas.get('wanted', '?')}"
+                            + f" · checked {str(probed.get('at') or '')[:19].replace('T', ' ')}"
+                            + (f" · {(live.get('health') or {}).get('error')}" if not ready and (live.get("health") or {}).get("error") else ""))
+            else:
+                st.caption("status not checked yet — press **Check status**")
     st.caption(f"record `{out_dir / 'deployment.json'}` · rendered files and command log under `{out_dir / 'work' / 'deploy'}`")
 
 
@@ -260,9 +277,10 @@ def render() -> None:
             _review_section(out_dir, status, config_path)
     from evalbuilder.deploy import load_record
 
-    if load_record(out_dir) is not None:
+    record = load_record(out_dir)
+    if record is not None:
         with st.container(border=True):
-            _deployment_section(out_dir, running=status["status"] == "running")
+            _deployment_section(out_dir, record, running=status["status"] == "running")
     if (out_dir / "report.json").exists():
         with st.container(border=True):
             _results_section(out_dir)

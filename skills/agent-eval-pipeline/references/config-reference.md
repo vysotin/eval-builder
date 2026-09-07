@@ -66,7 +66,7 @@ another one** — each kind is `final` (a deliverable), `work` (scratch under
 | `dataset.json` | `evalbuilder/dataset/v1` | dataset, review | cases with review/publication state, `mocks` (both layers), `coverage` (`plan` + `achieved`) |
 | `evaluators.yaml` | – | score | evaluator specs |
 | `deployment.json` | `evalbuilder/deployment/v1` | deploy, teardown | where the agent ran: `target`, `image`, `endpoint`, `expose`, `status` (`up` / `down` / `failed`), `resources` (compose project, namespace + names, loader, port-forward pid), every command executed (`commands`), health facts, the spec |
-| `results/run-<id>.json` | `evalbuilder/run/v1` | infer | outputs, trajectories, tool calls, `mock_calls` ledger and a per-turn `log` (`turn`, `seconds`, `tool_calls`, `error`, `mode`, `endpoint`) per case; `mocking` totals; `execution` (`mode`, `endpoint`, `workers`, `backend`, `seconds`) |
+| `results/run-<id>.json` | `evalbuilder/run/v1` | infer | `inputs` (the case inputs plus `user_turns`), outputs, trajectories, tool calls, `mock_calls` ledger and a per-turn `log` (`turn`, `seconds`, `tool_calls`, `error`, `mode`, `endpoint`) per case; `mocking` totals; `execution` (`mode`, `endpoint`, `workers`, `backend`, `seconds`) |
 | `results/score-report-<id>.json` | `evalbuilder/score-report/v1` | score | per-metric stats, slices, per-case scores |
 | `aggregate.json` | `evalbuilder/aggregate/v1` | aggregate | pass rates vs thresholds, slices, stability, verdict |
 | `scenarios.yaml` | – | simulate | multi-turn scenarios |
