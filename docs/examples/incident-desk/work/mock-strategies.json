@@ -1,12 +1,12 @@
 {
   "schema": "evalbuilder/mock-strategies/v1",
-  "world": "The backend models an ops incident-response stack shared across all tools. Known services are checkout, payments, api, and auth; checkout is currently down (42.7% error rate, 1 open incident, deployed 2026-09-03T13:47:00Z), payments is degraded (8.3% error rate, 1 open incident), api is degraded (3.1% error rate, 0 incidents), and auth is healthy (0.2% error rate, 0 incidents) — any other service name is treated as healthy by default. The runbook library is keyed by (query, severity) and contains ids RB-01 through roughly RB-30, including RB-14 (checkout rollback), RB-03 (payment gateway dependency check), RB-22 (payments latency), RB-07 (api latency tuning), and generic RB-01/RB-02 triage checklists. Tickets are sequential INC-#### ids starting around INC-4501 (existing ones: INC-4521 checkout/sev1 open, INC-4530 payments/sev2 open, INC-4540 api/sev3 acknowledged); sev1/sev2 tickets open as 'open', sev3 tickets open as 'acknowledged'. On-call teams follow the '<service>-eng' naming convention (checkout-eng -> Priya Natarajan, payments-eng -> Diego Alvarez, platform-eng -> Sam Whitfield as catch-all), with eta_minutes scaling by severity (sev1=5, sev2=10, sev3=15). Status updates are published to 'status-page' or 'slack', each carrying a severity-appropriate human-readable message referencing the relevant INC-#### and RB-## ids; timestamps cluster around 2026-09-03T14:00-14:10Z. All side-effecting tools (create_ticket, page_oncall, post_status_update) must only be invoked after explicit user confirmation.",
+  "world": "A simulated ops incident-response backend spanning four subsystems that share ids and state: (1) a status API tracking services named api, checkout, payments, auth (any other name is treated as an unlisted-but-valid service) with state in {healthy, degraded, down}, a 5-minute error_rate_pct, an open_incidents count, and an ISO8601 last_deploy timestamp — checkout is currently degraded (12.4% errors, 1 open incident, deployed 2026-09-07T08:15:00Z), payments is degraded (8.2% errors, 1 open incident, deployed 2026-09-06T19:40:00Z), auth is healthy, and api is the generic healthy default; (2) a runbook library keyed by id RB-01, RB-07, RB-08, RB-14, RB-15, RB-22 covering checkout 5xx spikes, deploy rollbacks, payments latency/circuit-breaker, auth token failures, and a generic 5xx triage checklist; (3) a ticketing system that mints ids INC-1042 (checkout sev2, open), INC-1043 (payments sev1, acknowledged), and a generic counter starting at INC-1050 for anything else, incrementing per new distinct ticket; (4) an on-call/paging roster where team 'checkout' pages Maria Chen (eta 8m), team 'payments' pages Rahul Iyer (eta 4m, escalated) for sev1, and any other team falls to the 'platform' rotation (eta ~10m); and a status-page/Slack publisher that echoes channel+severity+message with a posted_at timestamp near the current date 2026-09-07. All ids and canned facts above are stable across strategies; strategies only govern novel inputs not covered by the fixed matches.",
   "strategies": {
     "default": {
-      "description": "Healthy backend: known services/queries/teams resolve to canonical fixture data; anything else is synthesized plausibly in the same style and side-effecting actions succeed immediately after confirmation.",
+      "description": "Healthy backend: known services/queries/teams resolve to their canned fixture facts; unknown inputs resolve to sensible, low-severity synthetic data rather than errors.",
       "tools": {
         "get_service_status": {
-          "behavior": "Exact-match service names resolve to fixed fixture data: 'checkout'->state down, error_rate_pct 42.7, open_incidents 1, last_deploy 2026-09-03T13:47:00Z; 'payments'->degraded, 8.3%, 1 incident, last_deploy 2026-09-02T22:10:00Z; 'api'->degraded, 3.1%, 0 incidents, last_deploy 2026-09-01T09:15:00Z; 'auth' (or any other/unknown service name)->healthy, 0.2%, 0 incidents, last_deploy 2026-08-29T16:40:00Z, echoing the requested service name in the 'service' field instead of literally 'auth' when the name differs. For genuinely unrecognized services, synthesize similarly: state healthy, error_rate_pct between 0.1-1.5, open_incidents 0, last_deploy within the past 2 weeks of 2026-09-03.",
+          "behavior": "If service is 'checkout', 'payments', or 'auth', return the exact fixture status for that service. If service is omitted, empty, or 'api', return the healthy api fixture. For any other unrecognized service name, echo that service name back with state='healthy', error_rate_pct between 0.1 and 0.6, open_incidents=0, and last_deploy a plausible ISO8601 timestamp within the last 5 days of 2026-09-07.",
           "examples": [
             {
               "args": {
@@ -14,68 +14,74 @@
               },
               "response": {
                 "service": "checkout",
-                "state": "down",
-                "error_rate_pct": 42.7,
+                "state": "degraded",
+                "error_rate_pct": 12.4,
                 "open_incidents": 1,
-                "last_deploy": "2026-09-03T13:47:00Z"
+                "last_deploy": "2026-09-07T08:15:00Z"
               }
             },
             {
               "args": {
-                "service": "inventory"
+                "service": "search"
               },
               "response": {
-                "service": "inventory",
+                "service": "search",
                 "state": "healthy",
-                "error_rate_pct": 0.4,
+                "error_rate_pct": 0.2,
                 "open_incidents": 0,
-                "last_deploy": "2026-08-27T11:00:00Z"
+                "last_deploy": "2026-09-03T10:00:00Z"
               }
             }
           ],
           "fallback_response": {
-            "service": "auth",
+            "service": "api",
             "state": "healthy",
-            "error_rate_pct": 0.2,
+            "error_rate_pct": 0.3,
             "open_incidents": 0,
-            "last_deploy": "2026-08-29T16:40:00Z"
+            "last_deploy": "2026-09-05T14:22:00Z"
           }
         },
         "search_runbooks": {
-          "behavior": "Exact query+severity matches return fixed fixture result sets: ('checkout 500 errors after deploy', sev1)->[RB-14, RB-03]; ('payments latency', sev2)->[RB-22]; ('api elevated latency', sev3)->[RB-07]. Any other query/severity returns a generic 2-entry set: RB-01 'General service degradation triage' and RB-02 'Elevated 5xx rate checklist', echoing the requested query and severity. Truncate results to 'limit' entries, preserving order. Never invent runbook ids outside RB-01..RB-30 range.",
+          "behavior": "Match query text against known symptom keywords: 'checkout'+'500'/'5xx' → RB-14 and RB-15; 'payments'+'latency' → RB-07 and RB-08; 'auth'+'token' → RB-22 alone; anything else → the generic RB-01 5xx triage checklist. Truncate the results list to the requested limit (default 3). Always echo back the query and severity given.",
           "examples": [
             {
               "args": {
                 "query": "payments latency",
-                "severity": "sev2"
+                "severity": "sev1"
               },
               "response": {
                 "query": "payments latency",
-                "severity": "sev2",
+                "severity": "sev1",
                 "results": [
                   {
-                    "id": "RB-22",
-                    "title": "Payments latency remediation",
-                    "summary": "Check connection pool saturation and downstream bank API latency; scale out payments workers if p95 > 800ms.",
-                    "url": "https://runbooks.internal/RB-22"
+                    "id": "RB-07",
+                    "title": "Payments Latency Degradation",
+                    "summary": "Investigate p99 latency spikes on payments: check downstream card processor status, connection pool exhaustion, and retry storms.",
+                    "url": "https://runbooks.internal/RB-07"
+                  },
+                  {
+                    "id": "RB-08",
+                    "title": "Payments Circuit Breaker Activation",
+                    "summary": "Steps to manually trip or reset the payments circuit breaker to shed load during upstream provider outages.",
+                    "url": "https://runbooks.internal/RB-08"
                   }
                 ]
               }
             },
             {
               "args": {
-                "query": "auth login failures",
+                "query": "database connection pool exhaustion",
                 "severity": "sev2",
-                "limit": 1
+                "limit": 2
               },
               "response": {
-                "query": "auth login failures",
+                "query": "database connection pool exhaustion",
                 "severity": "sev2",
                 "results": [
                   {
                     "id": "RB-01",
-                    "title": "General service degradation triage",
-                    "summary": "Check dashboards, recent deploys, and dependency health before escalating.",
+                    "title": "General 5xx Triage Checklist",
+                    "summary": "Steps to check load balancer health, recent deploys, and dependency status when a service returns elevated 5xx responses.",
                     "url": "https://runbooks.internal/RB-01"
                   }
                 ]
@@ -83,357 +89,357 @@
             }
           ],
           "fallback_response": {
-            "query": "service degraded",
+            "query": "api errors",
             "severity": "sev2",
             "results": [
               {
                 "id": "RB-01",
-                "title": "General service degradation triage",
-                "summary": "Check dashboards, recent deploys, and dependency health before escalating.",
+                "title": "General 5xx Triage Checklist",
+                "summary": "Steps to check load balancer health, recent deploys, and dependency status when a service returns elevated 5xx responses.",
                 "url": "https://runbooks.internal/RB-01"
-              },
-              {
-                "id": "RB-02",
-                "title": "Elevated 5xx rate checklist",
-                "summary": "Steps to confirm error source and decide on rollback vs. scale-out.",
-                "url": "https://runbooks.internal/RB-02"
               }
             ]
           }
         },
         "create_ticket": {
-          "behavior": "Only invoke after explicit user confirmation. Match on ticket.service + ticket.severity: (checkout, sev1)->INC-4521 open; (payments, sev2)->INC-4530 open; (api, sev3)->INC-4540 acknowledged. Any other service/severity combo synthesizes a new sequential ticket_id in the INC-45xx..INC-46xx range not already used, with status 'open' for sev1/sev2 and 'acknowledged' for sev3, and url https://tickets.internal/<ticket_id>.",
+          "behavior": "Only invoke after the user has explicitly confirmed opening a ticket. If service='checkout' and severity='sev2', return INC-1042 (status open). If service='payments' and severity='sev1', return INC-1043 (status acknowledged). Otherwise mint a new sequential id starting at INC-1050 (increment by 1 for each new distinct ticket request in the conversation); status is 'acknowledged' for sev1 tickets and 'open' for sev2/sev3. url is always https://tickets.internal/{ticket_id}.",
           "examples": [
             {
               "args": {
                 "ticket": {
-                  "title": "Checkout returning 500s after deploy",
+                  "title": "Elevated 500s on checkout after deploy",
                   "service": "checkout",
-                  "severity": "sev1",
-                  "summary": "Checkout error rate spiked to 42.7% after the 13:47 UTC deploy; rollback in progress per RB-14."
+                  "severity": "sev2",
+                  "summary": "Checkout returning 500s at ~12% rate following the 08:15 UTC deploy; suspected connection pool saturation."
                 }
               },
               "response": {
-                "ticket_id": "INC-4521",
-                "url": "https://tickets.internal/INC-4521",
+                "ticket_id": "INC-1042",
+                "url": "https://tickets.internal/INC-1042",
                 "status": "open"
               }
             },
             {
               "args": {
                 "ticket": {
-                  "title": "Auth intermittent 401s",
+                  "title": "Auth token validation errors",
                   "service": "auth",
                   "severity": "sev3",
-                  "summary": "Low-volume 401 spike under investigation, no customer reports yet."
+                  "summary": "Intermittent token validation failures reported by two customers, low volume."
                 }
               },
               "response": {
-                "ticket_id": "INC-4555",
-                "url": "https://tickets.internal/INC-4555",
-                "status": "acknowledged"
+                "ticket_id": "INC-1050",
+                "url": "https://tickets.internal/INC-1050",
+                "status": "open"
               }
             }
           ],
           "fallback_response": {
-            "ticket_id": "INC-4501",
-            "url": "https://tickets.internal/INC-4501",
+            "ticket_id": "INC-1050",
+            "url": "https://tickets.internal/INC-1050",
             "status": "open"
           }
         },
         "page_oncall": {
-          "behavior": "Only invoke after explicit user confirmation. Match on team+severity: (checkout-eng, sev1)->engineer Priya Natarajan, eta 5min, incident_ref INC-4521; (payments-eng, sev2)->engineer Diego Alvarez, eta 10min, incident_ref INC-4530. Any other team/severity returns paged:true, a plausible engineer name, ack_status 'pending', and eta_minutes by severity: sev1->5, sev2->10, sev3->15. Include incident_ref only if a ticket for that service/severity was created earlier in the conversation.",
+          "behavior": "Only invoke after the user has explicitly confirmed paging a human. If team='checkout' and severity='sev2', page Maria Chen with eta_minutes=8. If team='payments' and severity='sev1', page Rahul Iyer with eta_minutes=4 and escalated=true. Otherwise fall to the 'platform' rotation, engineer='on-call rotation', eta_minutes=10, status='paged'.",
           "examples": [
             {
               "args": {
-                "team": "payments-eng",
-                "severity": "sev2",
-                "reason": "Payments p95 latency ~900ms, INC-4530"
+                "team": "payments",
+                "severity": "sev1",
+                "reason": "Payments error rate at 8.2% with 1 open incident, need immediate response"
               },
               "response": {
-                "team": "payments-eng",
-                "severity": "sev2",
-                "paged": true,
-                "engineer": "Diego Alvarez",
-                "eta_minutes": 10,
-                "ack_status": "pending",
-                "incident_ref": "INC-4530"
+                "team": "payments",
+                "severity": "sev1",
+                "status": "paged",
+                "engineer": "Rahul Iyer",
+                "eta_minutes": 4,
+                "escalated": true
               }
             },
             {
               "args": {
-                "team": "api-eng",
+                "team": "platform",
                 "severity": "sev3",
-                "reason": "API latency creeping above baseline"
+                "reason": "Minor auth token validation errors, informational page"
               },
               "response": {
-                "team": "api-eng",
+                "team": "platform",
                 "severity": "sev3",
-                "paged": true,
-                "engineer": "Sam Whitfield",
-                "eta_minutes": 15,
-                "ack_status": "pending"
+                "status": "paged",
+                "engineer": "on-call rotation",
+                "eta_minutes": 10
               }
             }
           ],
           "fallback_response": {
-            "team": "platform-eng",
-            "severity": "sev3",
-            "paged": true,
-            "engineer": "Sam Whitfield",
-            "eta_minutes": 15,
-            "ack_status": "pending"
+            "team": "platform",
+            "severity": "sev2",
+            "status": "paged",
+            "engineer": "on-call rotation",
+            "eta_minutes": 10
           }
         },
         "post_status_update": {
-          "behavior": "Only invoke after explicit user confirmation. Match on channel+severity: (status-page, sev1)->the checkout rollback message referencing INC-4521; (slack, sev2)->the payments scaling message referencing INC-4530 and RB-22. Any other channel/severity synthesizes a concise (10-500 char) status message consistent with the incident being discussed, sets posted:true and posted_at to a timestamp shortly after 2026-09-03T14:00:00Z.",
+          "behavior": "Only invoke after the user has explicitly confirmed publishing. If channel='status-page' and severity='sev2', post the checkout INC-1042 investigating message. If channel='slack' and severity='sev1', post the payments INC-1043 outage message. Otherwise post a generic message using the given severity/channel that references the current incident context in plain on-call phrasing, with posted_at set to a timestamp shortly after 2026-09-07T09:00:00Z and status='posted'.",
           "examples": [
-            {
-              "args": {
-                "update": {
-                  "channel": "status-page",
-                  "message": "Investigating checkout outage after deploy",
-                  "severity": "sev1"
-                }
-              },
-              "response": {
-                "channel": "status-page",
-                "severity": "sev1",
-                "posted": true,
-                "posted_at": "2026-09-03T14:00:00Z",
-                "message": "We are investigating elevated 500 errors and failures on Checkout following a recent deploy. Engineers have identified the root cause and a rollback is in progress. Reference: INC-4521."
-              }
-            },
             {
               "args": {
                 "update": {
                   "channel": "slack",
-                  "message": "API latency monitoring update",
-                  "severity": "sev3"
+                  "severity": "sev1",
+                  "message": "SEV1: Payments is experiencing a full outage. Rahul Iyer is investigating."
                 }
               },
               "response": {
                 "channel": "slack",
+                "severity": "sev1",
+                "status": "posted",
+                "posted_at": "2026-09-07T09:12:00Z",
+                "message": "SEV1: Payments is experiencing a full outage (INC-1043). On-call engineer Rahul Iyer is actively investigating. Next update in 15 min."
+              }
+            },
+            {
+              "args": {
+                "update": {
+                  "channel": "status-page",
+                  "severity": "sev3",
+                  "message": "We are looking into minor auth token validation errors affecting a small number of users."
+                }
+              },
+              "response": {
+                "channel": "status-page",
                 "severity": "sev3",
-                "posted": true,
-                "posted_at": "2026-09-03T14:05:00Z",
-                "message": "We are monitoring a minor increase in API latency and applying tuning per RB-07. No customer impact expected."
+                "status": "posted",
+                "posted_at": "2026-09-07T09:20:00Z",
+                "message": "We are looking into minor auth token validation errors affecting a small number of users. No widespread impact detected."
               }
             }
           ],
           "fallback_response": {
-            "channel": "slack",
-            "severity": "sev3",
-            "posted": true,
-            "posted_at": "2026-09-03T14:05:00Z",
-            "message": "We are monitoring a minor increase in API latency and applying tuning per RB-07. No customer impact expected."
+            "channel": "status-page",
+            "severity": "sev2",
+            "status": "posted",
+            "posted_at": "2026-09-07T09:05:00Z",
+            "message": "We are investigating elevated error rates on checkout. Updates to follow."
           }
         }
       }
     },
     "degraded": {
-      "description": "Backend systems themselves are unreliable: status API returns stale/uncertain data, the runbook index is serving a cached copy, and side-effecting systems (ticketing, paging, status page) are slow or partially failing even though the user confirmed the action.",
+      "description": "The ops backend itself is under strain: status readings are stale/worse than usual, the runbook search index is degraded, ticketing and paging succeed but slower and with delay/duplicate warnings, and status-page publishing is rate-limited.",
       "tools": {
         "get_service_status": {
-          "behavior": "Return the same base state as default matching, but mark data as stale: add extra fields 'stale': true and 'last_checked' set 15-40 minutes before 2026-09-03T14:00:00Z, and bump error_rate_pct slightly upward (uncertain reading) with a note that monitoring is degraded. Still populate all required fields with valid enum/number values.",
+          "behavior": "For services not covered by the exact checkout/payments/auth/api fixtures, report worse-than-default health due to monitoring lag: state='degraded', error_rate_pct between 5 and 20, open_incidents=1, and last_deploy an older/stale timestamp (several days behind 2026-09-07), reflecting that the status API's cache hasn't refreshed. Exact-fixture services still return their canned values unchanged.",
           "examples": [
             {
               "args": {
-                "service": "payments"
+                "service": "cart"
               },
               "response": {
-                "service": "payments",
+                "service": "cart",
                 "state": "degraded",
-                "error_rate_pct": 9.6,
+                "error_rate_pct": 9.7,
                 "open_incidents": 1,
-                "last_deploy": "2026-09-02T22:10:00Z",
-                "stale": true,
-                "last_checked": "2026-09-03T13:25:00Z",
-                "note": "Status API is degraded; figures may lag actual state by up to 15 minutes."
+                "last_deploy": "2026-08-29T03:00:00Z"
               }
             }
           ],
           "fallback_response": {
-            "service": "checkout",
-            "state": "down",
-            "error_rate_pct": 45.0,
+            "service": "api",
+            "state": "degraded",
+            "error_rate_pct": 6.0,
             "open_incidents": 1,
-            "last_deploy": "2026-09-03T13:47:00Z",
-            "stale": true,
-            "note": "Status API is degraded; figures may lag actual state."
+            "last_deploy": "2026-08-30T00:00:00Z"
           }
         },
         "search_runbooks": {
-          "behavior": "Return results from a cached/stale index: same result set as default matching (or the generic RB-01/RB-02 fallback for unmatched queries) but add top-level 'cache_age_minutes' between 20-60 and 'warning': 'Serving cached runbook index; some links may be outdated.'",
+          "behavior": "For queries not covered by exact fixture matches, the search index is degraded: return an empty or truncated results array and include an extra 'degraded' boolean field set true plus a 'note' explaining results may be incomplete.",
           "examples": [
             {
               "args": {
-                "query": "checkout 500 errors after deploy",
-                "severity": "sev1"
+                "query": "cache eviction storm",
+                "severity": "sev2"
               },
               "response": {
-                "query": "checkout 500 errors after deploy",
-                "severity": "sev1",
-                "cache_age_minutes": 35,
-                "warning": "Serving cached runbook index; some links may be outdated.",
-                "results": [
-                  {
-                    "id": "RB-14",
-                    "title": "Checkout 5xx spike – rollback deploy",
-                    "summary": "Confirm error spike correlates with last deploy, roll back to previous checkout release, verify error rate drops below 1%.",
-                    "url": "https://runbooks.internal/RB-14"
-                  },
-                  {
-                    "id": "RB-03",
-                    "title": "Payment gateway dependency check",
-                    "summary": "Rule out downstream payment gateway outage before rolling back checkout.",
-                    "url": "https://runbooks.internal/RB-03"
-                  }
-                ]
+                "query": "cache eviction storm",
+                "severity": "sev2",
+                "results": [],
+                "degraded": true,
+                "note": "Runbook search index is degraded; results may be incomplete. Try again shortly or search manually at https://runbooks.internal."
               }
             }
           ],
           "fallback_response": {
-            "query": "service degraded",
+            "query": "api errors",
             "severity": "sev2",
-            "cache_age_minutes": 40,
-            "warning": "Serving cached runbook index; some links may be outdated.",
-            "results": [
-              {
-                "id": "RB-01",
-                "title": "General service degradation triage",
-                "summary": "Check dashboards, recent deploys, and dependency health before escalating.",
-                "url": "https://runbooks.internal/RB-01"
-              }
-            ]
+            "results": [],
+            "degraded": true,
+            "note": "Runbook search index is degraded; results may be incomplete."
           }
         },
         "create_ticket": {
-          "behavior": "Ticketing backend is slow: still return a valid ticket_id/url/status per default matching rules (never fail outright), but add extra fields 'processing_delay_sec' between 20-90 and 'warning': 'Ticketing system is degraded; confirmation email may be delayed.'",
+          "behavior": "Ticket creation still succeeds (never fails outright, since the schema has no error state) but for novel service/severity combos beyond the fixtures, add extra fields 'delayed':true and 'note' indicating the ticketing system is processing slowly; ticket_id still follows the INC-105x counter and status is still a valid enum value.",
           "examples": [
             {
               "args": {
                 "ticket": {
-                  "title": "Checkout down",
-                  "service": "checkout",
-                  "severity": "sev1",
-                  "summary": "Checkout returning 500s after deploy."
+                  "title": "Cart service timeouts",
+                  "service": "cart",
+                  "severity": "sev2",
+                  "summary": "Cart service intermittently timing out on checkout handoff."
                 }
               },
               "response": {
-                "ticket_id": "INC-4521",
-                "url": "https://tickets.internal/INC-4521",
+                "ticket_id": "INC-1051",
+                "url": "https://tickets.internal/INC-1051",
                 "status": "open",
-                "processing_delay_sec": 45,
-                "warning": "Ticketing system is degraded; confirmation email may be delayed."
+                "delayed": true,
+                "note": "Ticketing system is degraded; ticket created but sync to paging/status systems may lag by a few minutes."
               }
             }
           ],
           "fallback_response": {
-            "ticket_id": "INC-4501",
-            "url": "https://tickets.internal/INC-4501",
+            "ticket_id": "INC-1050",
+            "url": "https://tickets.internal/INC-1050",
             "status": "open",
-            "processing_delay_sec": 60,
-            "warning": "Ticketing system is degraded; confirmation email may be delayed."
+            "delayed": true
           }
         },
         "page_oncall": {
-          "behavior": "Paging system is flaky: 1 in 3 pages fail outright. On failure return {'paged': false, 'error': 'paging_gateway_timeout', 'team':..., 'severity':..., 'retry_recommended': true}. On success, use default matching but add 'ack_status': 'pending' and 'eta_minutes' inflated by 10-20 minutes versus default to reflect delay.",
+          "behavior": "Primary on-call may be unreachable; for teams/severities beyond the fixtures, escalate to secondary with a longer eta (20-35 minutes) and add 'escalated':true plus 'note' about primary being unresponsive.",
           "examples": [
             {
               "args": {
-                "team": "checkout-eng",
-                "severity": "sev1",
-                "reason": "Checkout outage, rollback needed"
+                "team": "cart",
+                "severity": "sev2",
+                "reason": "Cart service timeouts causing checkout handoff failures"
               },
               "response": {
-                "team": "checkout-eng",
-                "severity": "sev1",
-                "paged": false,
-                "error": "paging_gateway_timeout",
-                "retry_recommended": true
-              }
-            },
-            {
-              "args": {
-                "team": "payments-eng",
+                "team": "cart",
                 "severity": "sev2",
-                "reason": "Payments latency degradation"
-              },
-              "response": {
-                "team": "payments-eng",
-                "severity": "sev2",
-                "paged": true,
-                "engineer": "Diego Alvarez",
-                "eta_minutes": 25,
-                "ack_status": "pending",
-                "incident_ref": "INC-4530",
-                "warning": "Paging system delayed dispatch."
+                "status": "paged",
+                "engineer": "secondary on-call",
+                "eta_minutes": 27,
+                "escalated": true,
+                "note": "Primary on-call did not acknowledge within 5 minutes; escalated to secondary rotation."
               }
             }
           ],
           "fallback_response": {
-            "team": "platform-eng",
-            "severity": "sev3",
-            "paged": false,
-            "error": "paging_gateway_timeout",
-            "retry_recommended": true
+            "team": "platform",
+            "severity": "sev2",
+            "status": "paged",
+            "engineer": "secondary on-call",
+            "eta_minutes": 25,
+            "escalated": true
           }
         },
         "post_status_update": {
-          "behavior": "Status page/Slack publishing occasionally fails. Return posted:false with an error field and note the draft was saved but not published, e.g. {'posted': false, 'error': 'publish_timeout', 'channel':..., 'severity':..., 'draft_saved': true}. When it does succeed, behave as default but add 'posted_at' 5-10 minutes later than the default timestamp and a 'warning' about delayed propagation.",
+          "behavior": "For novel channel/severity combos, the publisher is rate-limited: return status='rate_limited' instead of 'posted', include 'retry_after_seconds' (30-120) and echo the intended message, so the caller knows to retry.",
           "examples": [
             {
               "args": {
                 "update": {
-                  "channel": "status-page",
-                  "message": "Checkout outage update",
-                  "severity": "sev1"
+                  "channel": "slack",
+                  "severity": "sev2",
+                  "message": "Checkout error rates remain elevated; engineering is actively working the issue."
                 }
               },
               "response": {
-                "channel": "status-page",
-                "severity": "sev1",
-                "posted": false,
-                "error": "publish_timeout",
-                "draft_saved": true,
-                "message": "We are investigating elevated 500 errors and failures on Checkout following a recent deploy. Engineers have identified the root cause and a rollback is in progress. Reference: INC-4521."
+                "channel": "slack",
+                "severity": "sev2",
+                "status": "rate_limited",
+                "retry_after_seconds": 60,
+                "message": "Checkout error rates remain elevated; engineering is actively working the issue."
               }
             }
           ],
           "fallback_response": {
-            "channel": "slack",
-            "severity": "sev3",
-            "posted": false,
-            "error": "publish_timeout",
-            "draft_saved": true,
-            "message": "We are monitoring a minor increase in API latency and applying tuning per RB-07. No customer impact expected."
+            "channel": "status-page",
+            "severity": "sev2",
+            "status": "rate_limited",
+            "retry_after_seconds": 45,
+            "message": "We are investigating elevated error rates. Updates to follow."
           }
         }
       }
     },
     "empty": {
-      "description": "The runbook library has no matching content for the query (e.g. a brand-new symptom or misspelled service); other tools are unaffected and behave as in default.",
+      "description": "A quiet backend with nothing to report: no matching runbooks for novel queries, no open issues on unlisted services, and no on-call staff available for unlisted teams.",
       "tools": {
-        "search_runbooks": {
-          "behavior": "Return zero results for any query that doesn't loosely match a known service/symptom keyword (checkout, payments, api, auth, latency, 5xx, deploy, error). results is an empty array; still echo query and severity.",
+        "get_service_status": {
+          "behavior": "For services not covered by the exact fixtures, report a fully quiet state: state='healthy', error_rate_pct=0.0, open_incidents=0, last_deploy a recent unremarkable timestamp. Exact-fixture services (checkout, payments, auth, api) still return their canned values unchanged.",
           "examples": [
             {
               "args": {
-                "query": "quantum flux capacitor overheating",
-                "severity": "sev2"
+                "service": "notifications"
               },
               "response": {
-                "query": "quantum flux capacitor overheating",
-                "severity": "sev2",
+                "service": "notifications",
+                "state": "healthy",
+                "error_rate_pct": 0.0,
+                "open_incidents": 0,
+                "last_deploy": "2026-09-01T09:00:00Z"
+              }
+            }
+          ],
+          "fallback_response": {
+            "service": "api",
+            "state": "healthy",
+            "error_rate_pct": 0.0,
+            "open_incidents": 0,
+            "last_deploy": "2026-09-01T09:00:00Z"
+          }
+        },
+        "search_runbooks": {
+          "behavior": "For any query not covered by the exact fixture keyword matches, return an empty results array (no runbooks found) rather than falling back to the generic RB-01 checklist.",
+          "examples": [
+            {
+              "args": {
+                "query": "unusual billing webhook retries",
+                "severity": "sev3"
+              },
+              "response": {
+                "query": "unusual billing webhook retries",
+                "severity": "sev3",
                 "results": []
               }
             }
           ],
           "fallback_response": {
-            "query": "unmatched symptom",
+            "query": "general",
             "severity": "sev2",
             "results": []
+          }
+        },
+        "page_oncall": {
+          "behavior": "For teams not covered by the checkout/payments fixtures, report that no on-call engineer is currently available rather than defaulting to the platform rotation: status='no_oncall', engineer=null, eta_minutes=null.",
+          "examples": [
+            {
+              "args": {
+                "team": "notifications",
+                "severity": "sev3",
+                "reason": "Delayed webhook retries, low impact"
+              },
+              "response": {
+                "team": "notifications",
+                "severity": "sev3",
+                "status": "no_oncall",
+                "engineer": null,
+                "eta_minutes": null,
+                "note": "No on-call rotation configured for this team; escalate manually via #eng-help."
+              }
+            }
+          ],
+          "fallback_response": {
+            "team": "platform",
+            "severity": "sev3",
+            "status": "no_oncall",
+            "engineer": null,
+            "eta_minutes": null
           }
         }
       }

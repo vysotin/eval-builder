@@ -79,3 +79,91 @@ analysis (generator): The incident-desk agent fails the eval (0.6786 overall vs 
   },
   "problems": 0
 }
+
+=== 2026-09-07T14:59:22+00:00 dataset :: /Users/vladimirz/Work/eval-builder/.venv/bin/python3 -m evalbuilder.cli pipeline run examples/incident_desk/pipeline.yaml --until dataset
+preflight: running (attempt 1)
+preflight: ok (0.029s)
+discover: running (attempt 1)
+discover: ok (0.13s)
+map: running (attempt 1)
+generator: agent_map
+map: ok (157.328s)
+mocks: running (attempt 1)
+generator: mock_fixtures
+generator: mock_strategies
+mocks: ok (179.659s)
+dataset: running (attempt 1)
+generator: cases
+generator: cases
+generator: cases
+generator: cases
+generator: cases
+dataset: ok (1064.389s)
+review: skipped — stopped after dataset (--until)
+verify: skipped — stopped after dataset (--until)
+deploy: skipped — stopped after dataset (--until)
+infer: skipped — stopped after dataset (--until)
+simulate: skipped — stopped after dataset (--until)
+teardown: skipped — stopped after dataset (--until)
+score: skipped — stopped after dataset (--until)
+aggregate: skipped — stopped after dataset (--until)
+publish: skipped — skipped by config
+analyze: skipped — stopped after dataset (--until)
+report: running (attempt 1)
+report: ok (0.007s)
+incident-desk: verdict=incomplete overall=0.6786
+  - stage review skipped: stopped after dataset (--until)
+  - stage verify skipped: stopped after dataset (--until)
+  - stage deploy skipped: stopped after dataset (--until)
+  - stage infer skipped: stopped after dataset (--until)
+  - stage score skipped: stopped after dataset (--until)
+  - stage aggregate skipped: stopped after dataset (--until)
+stages:
+  preflight  ok                   0.0s  
+  discover   ok                   0.1s  
+  map        ok                 157.3s  
+  mocks      ok                 179.7s  
+  dataset    ok                1064.4s  
+  review     skipped              0.0s  stopped after dataset (--until)
+  verify     skipped              0.0s  stopped after dataset (--until)
+  deploy     skipped              0.0s  stopped after dataset (--until)
+  infer      skipped              0.0s  stopped after dataset (--until)
+  simulate   skipped              0.0s  stopped after dataset (--until)
+  teardown   skipped              0.0s  stopped after dataset (--until)
+  score      skipped              0.0s  stopped after dataset (--until)
+  aggregate  skipped              0.0s  stopped after dataset (--until)
+  publish    skipped              0.0s  skipped by config
+  analyze    skipped              0.0s  stopped after dataset (--until)
+  report     ok                   0.0s  
+metrics:
+  contains           pass_rate=0.7143 threshold=0.7 errors=0 [ok]
+  contract           pass_rate=0.6304 threshold=0.7 errors=1 [FAIL]
+  correctness        pass_rate=0.6522 threshold=0.7 errors=4 [FAIL]
+  expected_tools     pass_rate=0.7174 threshold=0.8 errors=0 [FAIL]
+coverage: 27/27 (100.0%)
+stability: repeats=2 unstable_cases=6 (trajectory) unstable_outputs=0 unstable_evaluators=3 text_varies=18 suspect_judge_comments=2
+analysis (generator): The incident-desk agent fails the eval (0.6786 overall vs 0.75 threshold), driven almost entirely by the intent.report-incident flow and multi-turn conversations. The dominant real defect is that the agent frequently skips the mandatory explicit-'yes' confirmation gate and runs straight through get_
+{
+  "verdict": "incomplete",
+  "overall_score": 0.6786,
+  "report": "docs/examples/incident-desk/report.json",
+  "stages": {
+    "preflight": "ok",
+    "discover": "ok",
+    "map": "ok",
+    "mocks": "ok",
+    "dataset": "ok",
+    "review": "skipped",
+    "verify": "skipped",
+    "deploy": "skipped",
+    "infer": "skipped",
+    "simulate": "skipped",
+    "teardown": "skipped",
+    "score": "skipped",
+    "aggregate": "skipped",
+    "publish": "skipped",
+    "analyze": "skipped",
+    "report": "ok"
+  },
+  "problems": 0
+}

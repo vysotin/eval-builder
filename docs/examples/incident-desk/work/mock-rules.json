@@ -8,10 +8,10 @@
         },
         "response": {
           "service": "checkout",
-          "state": "down",
-          "error_rate_pct": 42.7,
+          "state": "degraded",
+          "error_rate_pct": 12.4,
           "open_incidents": 1,
-          "last_deploy": "2026-09-03T13:47:00Z"
+          "last_deploy": "2026-09-07T08:15:00Z"
         }
       },
       {
@@ -21,91 +21,97 @@
         "response": {
           "service": "payments",
           "state": "degraded",
-          "error_rate_pct": 8.3,
+          "error_rate_pct": 8.2,
           "open_incidents": 1,
-          "last_deploy": "2026-09-02T22:10:00Z"
+          "last_deploy": "2026-09-06T19:40:00Z"
         }
       },
       {
         "matchArgs": {
-          "service": "api"
+          "service": "auth"
         },
         "response": {
-          "service": "api",
-          "state": "degraded",
-          "error_rate_pct": 3.1,
+          "service": "auth",
+          "state": "healthy",
+          "error_rate_pct": 0.1,
           "open_incidents": 0,
-          "last_deploy": "2026-09-01T09:15:00Z"
+          "last_deploy": "2026-09-02T11:00:00Z"
         }
       },
       {
         "matchArgs": {},
         "response": {
-          "service": "auth",
+          "service": "api",
           "state": "healthy",
-          "error_rate_pct": 0.2,
+          "error_rate_pct": 0.3,
           "open_incidents": 0,
-          "last_deploy": "2026-08-29T16:40:00Z"
+          "last_deploy": "2026-09-05T14:22:00Z"
         }
       }
     ],
     "search_runbooks": [
       {
         "matchArgs": {
-          "query": "checkout 500 errors after deploy",
-          "severity": "sev1"
-        },
-        "response": {
-          "query": "checkout 500 errors after deploy",
-          "severity": "sev1",
-          "results": [
-            {
-              "id": "RB-14",
-              "title": "Checkout 5xx spike – rollback deploy",
-              "summary": "Confirm error spike correlates with last deploy, roll back to previous checkout release, verify error rate drops below 1%.",
-              "url": "https://runbooks.internal/RB-14"
-            },
-            {
-              "id": "RB-03",
-              "title": "Payment gateway dependency check",
-              "summary": "Rule out downstream payment gateway outage before rolling back checkout.",
-              "url": "https://runbooks.internal/RB-03"
-            }
-          ]
-        }
-      },
-      {
-        "matchArgs": {
-          "query": "payments latency",
+          "query": "checkout 500 errors",
           "severity": "sev2"
         },
         "response": {
-          "query": "payments latency",
+          "query": "checkout 500 errors",
           "severity": "sev2",
           "results": [
             {
-              "id": "RB-22",
-              "title": "Payments latency remediation",
-              "summary": "Check connection pool saturation and downstream bank API latency; scale out payments workers if p95 > 800ms.",
-              "url": "https://runbooks.internal/RB-22"
+              "id": "RB-14",
+              "title": "Checkout 5xx Error Spike Runbook",
+              "summary": "Diagnose elevated 500s on checkout: check recent deploy diff, database connection pool saturation, and dependency timeouts to payments.",
+              "url": "https://runbooks.internal/RB-14"
+            },
+            {
+              "id": "RB-15",
+              "title": "Rollback Failed Deploy",
+              "summary": "Procedure to roll back a service to the previous stable release when a deploy introduces regressions.",
+              "url": "https://runbooks.internal/RB-15"
             }
           ]
         }
       },
       {
         "matchArgs": {
-          "query": "api elevated latency",
-          "severity": "sev3"
+          "query": "payments latency",
+          "severity": "sev1"
         },
         "response": {
-          "query": "api elevated latency",
-          "severity": "sev3",
+          "query": "payments latency",
+          "severity": "sev1",
           "results": [
             {
               "id": "RB-07",
-              "title": "API latency tuning checklist",
-              "summary": "Review slow query logs and cache hit rate; adjust autoscaling thresholds if load-driven.",
+              "title": "Payments Latency Degradation",
+              "summary": "Investigate p99 latency spikes on payments: check downstream card processor status, connection pool exhaustion, and retry storms.",
               "url": "https://runbooks.internal/RB-07"
+            },
+            {
+              "id": "RB-08",
+              "title": "Payments Circuit Breaker Activation",
+              "summary": "Steps to manually trip or reset the payments circuit breaker to shed load during upstream provider outages.",
+              "url": "https://runbooks.internal/RB-08"
+            }
+          ]
+        }
+      },
+      {
+        "matchArgs": {
+          "query": "auth token errors",
+          "severity": "sev3"
+        },
+        "response": {
+          "query": "auth token errors",
+          "severity": "sev3",
+          "results": [
+            {
+              "id": "RB-22",
+              "title": "Auth Token Validation Failures",
+              "summary": "Minor troubleshooting steps for intermittent token validation errors, including clock skew and cache invalidation checks.",
+              "url": "https://runbooks.internal/RB-22"
             }
           ]
         }
@@ -113,20 +119,14 @@
       {
         "matchArgs": {},
         "response": {
-          "query": "service degraded",
+          "query": "api errors",
           "severity": "sev2",
           "results": [
             {
               "id": "RB-01",
-              "title": "General service degradation triage",
-              "summary": "Check dashboards, recent deploys, and dependency health before escalating.",
+              "title": "General 5xx Triage Checklist",
+              "summary": "Steps to check load balancer health, recent deploys, and dependency status when a service returns elevated 5xx responses.",
               "url": "https://runbooks.internal/RB-01"
-            },
-            {
-              "id": "RB-02",
-              "title": "Elevated 5xx rate checklist",
-              "summary": "Steps to confirm error source and decide on rollback vs. scale-out.",
-              "url": "https://runbooks.internal/RB-02"
             }
           ]
         }
@@ -137,12 +137,12 @@
         "matchArgs": {
           "ticket": {
             "service": "checkout",
-            "severity": "sev1"
+            "severity": "sev2"
           }
         },
         "response": {
-          "ticket_id": "INC-4521",
-          "url": "https://tickets.internal/INC-4521",
+          "ticket_id": "INC-1042",
+          "url": "https://tickets.internal/INC-1042",
           "status": "open"
         }
       },
@@ -150,33 +150,20 @@
         "matchArgs": {
           "ticket": {
             "service": "payments",
-            "severity": "sev2"
+            "severity": "sev1"
           }
         },
         "response": {
-          "ticket_id": "INC-4530",
-          "url": "https://tickets.internal/INC-4530",
-          "status": "open"
-        }
-      },
-      {
-        "matchArgs": {
-          "ticket": {
-            "service": "api",
-            "severity": "sev3"
-          }
-        },
-        "response": {
-          "ticket_id": "INC-4540",
-          "url": "https://tickets.internal/INC-4540",
+          "ticket_id": "INC-1043",
+          "url": "https://tickets.internal/INC-1043",
           "status": "acknowledged"
         }
       },
       {
         "matchArgs": {},
         "response": {
-          "ticket_id": "INC-4501",
-          "url": "https://tickets.internal/INC-4501",
+          "ticket_id": "INC-1050",
+          "url": "https://tickets.internal/INC-1050",
           "status": "open"
         }
       }
@@ -184,43 +171,39 @@
     "page_oncall": [
       {
         "matchArgs": {
-          "team": "checkout-eng",
-          "severity": "sev1"
+          "team": "checkout",
+          "severity": "sev2"
         },
         "response": {
-          "team": "checkout-eng",
-          "severity": "sev1",
-          "paged": true,
-          "engineer": "Priya Natarajan",
-          "eta_minutes": 5,
-          "ack_status": "pending",
-          "incident_ref": "INC-4521"
+          "team": "checkout",
+          "severity": "sev2",
+          "status": "paged",
+          "engineer": "Maria Chen",
+          "eta_minutes": 8
         }
       },
       {
         "matchArgs": {
-          "team": "payments-eng",
-          "severity": "sev2"
+          "team": "payments",
+          "severity": "sev1"
         },
         "response": {
-          "team": "payments-eng",
-          "severity": "sev2",
-          "paged": true,
-          "engineer": "Diego Alvarez",
-          "eta_minutes": 10,
-          "ack_status": "pending",
-          "incident_ref": "INC-4530"
+          "team": "payments",
+          "severity": "sev1",
+          "status": "paged",
+          "engineer": "Rahul Iyer",
+          "eta_minutes": 4,
+          "escalated": true
         }
       },
       {
         "matchArgs": {},
         "response": {
-          "team": "platform-eng",
-          "severity": "sev3",
-          "paged": true,
-          "engineer": "Sam Whitfield",
-          "eta_minutes": 15,
-          "ack_status": "pending"
+          "team": "platform",
+          "severity": "sev2",
+          "status": "paged",
+          "engineer": "on-call rotation",
+          "eta_minutes": 10
         }
       }
     ],
@@ -229,40 +212,40 @@
         "matchArgs": {
           "update": {
             "channel": "status-page",
-            "severity": "sev1"
+            "severity": "sev2"
           }
         },
         "response": {
           "channel": "status-page",
-          "severity": "sev1",
-          "posted": true,
-          "posted_at": "2026-09-03T14:00:00Z",
-          "message": "We are investigating elevated 500 errors and failures on Checkout following a recent deploy. Engineers have identified the root cause and a rollback is in progress. Reference: INC-4521."
+          "severity": "sev2",
+          "status": "posted",
+          "posted_at": "2026-09-07T09:05:00Z",
+          "message": "We are investigating elevated 500 errors on checkout following a recent deploy (INC-1042). A fix is being validated."
         }
       },
       {
         "matchArgs": {
           "update": {
             "channel": "slack",
-            "severity": "sev2"
+            "severity": "sev1"
           }
         },
         "response": {
           "channel": "slack",
-          "severity": "sev2",
-          "posted": true,
-          "posted_at": "2026-09-03T14:10:00Z",
-          "message": "Payments is experiencing elevated latency (p95 ~900ms). @payments-eng is scaling out workers per RB-22. Tracking as INC-4530."
+          "severity": "sev1",
+          "status": "posted",
+          "posted_at": "2026-09-07T09:12:00Z",
+          "message": "SEV1: Payments is experiencing a full outage (INC-1043). On-call engineer Rahul Iyer is actively investigating. Next update in 15 min."
         }
       },
       {
         "matchArgs": {},
         "response": {
-          "channel": "slack",
-          "severity": "sev3",
-          "posted": true,
-          "posted_at": "2026-09-03T14:05:00Z",
-          "message": "We are monitoring a minor increase in API latency and applying tuning per RB-07. No customer impact expected."
+          "channel": "status-page",
+          "severity": "sev2",
+          "status": "posted",
+          "posted_at": "2026-09-07T09:05:00Z",
+          "message": "We are investigating elevated error rates on checkout. Updates to follow."
         }
       }
     ]

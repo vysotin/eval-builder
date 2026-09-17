@@ -16,8 +16,8 @@
     "dataset"
   ],
   "log": "docs/examples/incident-desk/pipeline.log",
-  "pid": 27495,
-  "started_at": "2026-09-03T05:29:24+00:00",
-  "finished_at": "2026-09-03T05:45:06+00:00",
+  "pid": 11106,
+  "started_at": "2026-09-07T14:59:22+00:00",
+  "finished_at": "2026-09-07T15:22:45+00:00",
   "exit_code": 0
 }

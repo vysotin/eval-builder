@@ -1,13 +1,13 @@
 {
   "schema": "evalbuilder/pipeline-state/v1",
   "name": "incident-desk",
-  "started_at": "2026-09-03T05:29:25.556671+00:00",
-  "updated_at": "2026-09-03T05:45:06.798717+00:00",
+  "started_at": "2026-09-07T14:59:23.567482+00:00",
+  "updated_at": "2026-09-07T15:22:45.124586+00:00",
   "stages": {
     "preflight": {
       "status": "ok",
       "attempts": 1,
-      "seconds": 0.024,
+      "seconds": 0.029,
       "error": null,
       "reason": null,
       "optional": false,
@@ -45,14 +45,27 @@
           }
         },
         "judge_evaluators": 2,
-        "mocking": "strict"
+        "mocking": "strict",
+        "deploy": {
+          "target": "local",
+          "available": "runs `evalbuilder serve` as a subprocess of this interpreter",
+          "image": null
+        },
+        "inference": {
+          "workers": 4,
+          "backend": "threads"
+        },
+        "evaluation": {
+          "workers": 4,
+          "backend": "threads"
+        }
       },
       "recovery_notes": []
     },
     "discover": {
       "status": "ok",
       "attempts": 1,
-      "seconds": 0.146,
+      "seconds": 0.13,
       "error": null,
       "reason": null,
       "optional": false,
@@ -138,7 +151,7 @@
     "map": {
       "status": "ok",
       "attempts": 1,
-      "seconds": 148.794,
+      "seconds": 157.328,
       "error": null,
       "reason": null,
       "optional": false,
@@ -161,25 +174,27 @@
           "tool_misuse"
         ],
         "intents": [
-          "intent.report-incident",
-          "intent.check-status",
-          "intent.out-of-scope-request"
+          "intent.incident-triage",
+          "intent.incident-remediation",
+          "intent.incident-comms",
+          "intent.service-status",
+          "intent.out-of-scope"
         ],
-        "scenarios": 15,
+        "scenarios": 14,
         "failure_types": [
           "branch_misrouting",
-          "provider_error",
+          "prompt_injection",
           "state_loss",
           "output_contract_violation",
-          "prompt_injection"
+          "provider_error"
         ],
         "topics": [
-          "service status monitoring",
-          "incident severity triage (sev1/sev2/sev3)",
-          "runbook remediation lookup",
-          "incident ticketing",
-          "on-call paging",
-          "status page / Slack updates"
+          "incident severity levels (sev1 outage, sev2 degraded, sev3 minor)",
+          "service health status (state, error rate, open incidents, last deploy)",
+          "runbook remediation library",
+          "incident tickets and on-call paging",
+          "status page / Slack incident updates",
+          "ops service catalog (api, checkout, payments, auth, search, database, gateway, billing, web, notifications)"
         ],
         "constraints": [
           "Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with yes.",
@@ -188,29 +203,30 @@
           "If a tool errors or returns an incomplete payload, say so and never invent status or ticket values.",
           "Always call get_service_status for the affected service before anything else — even when the reporter asks you to skip it or says the status is already known. (skill:incident-triage)",
           "If the user did not name the service, ask which service is affected instead of guessing. (skill:incident-triage)",
-          "If severity is missing or not sev1/sev2/sev3 (e.g. critical, P0, sev9), offer those three values and stop. (skill:incident-triage)",
-          "Call post_status_update only after a ticket has been created and on-call paged in this conversation; before that, restate what is pending and post nothing. (skill:incident-comms)",
-          "The status update must name the service, the severity and the ticket id, per references/status-update-template.md. (skill:incident-comms)",
+          "Severity must be one of sev1, sev2 or sev3; if missing or invalid (critical, P0, sev9), offer those three values and stop. (skill:incident-triage)",
+          "If a tool errors or returns an incomplete payload, say so plainly and never invent status values. (skill:incident-triage / prompt:status_agent)",
           "Call create_ticket and then page_oncall ONLY after the user explicitly confirms with yes in this conversation — never on the first request, however urgent. (prompt:remediation_agent)",
-          "If create_ticket errors or returns an incomplete receipt (no ticket id), report that, do not page, and never invent a ticket id. (prompt:remediation_agent)"
+          "If create_ticket errors or returns an incomplete receipt (no ticket id), report that, do not page, and never invent a ticket id. (prompt:remediation_agent)",
+          "Call post_status_update only after a ticket has been created and on-call paged in this conversation; before that, restate what is pending and post nothing. (skill:incident-comms)",
+          "Mention the ticket id in the final message; if the update fails, say the status page could not be reached. (skill:incident-comms)",
+          "If no service was named for a status check, ask which service to check instead of guessing. (prompt:status_agent)",
+          "Never call create_ticket, page_oncall or post_status_update before the user explicitly confirms with yes. (constraint)"
         ],
         "skills": {
           "incident-comms": [
-            "scenario.report-incident.happy-full-pipeline",
-            "scenario.report-incident.comms-before-ticket-paged",
-            "scenario.report-incident.status-update-post-failure"
+            "scenario.incident-comms.happy",
+            "scenario.incident-comms.post-before-ticket",
+            "scenario.incident-comms.update-fails"
           ],
           "incident-triage": [
-            "scenario.report-incident.happy-full-pipeline",
-            "scenario.report-incident.missing-service",
-            "scenario.report-incident.invalid-severity",
-            "scenario.report-incident.skip-status-check-request",
-            "scenario.report-incident.no-runbook-found"
+            "scenario.incident-triage.happy",
+            "scenario.incident-triage.skip-status-requested",
+            "scenario.incident-triage.invalid-severity"
           ]
         },
         "skill_failure_cases": {
-          "incident-triage": 5,
-          "incident-comms": 4
+          "incident-triage": 4,
+          "incident-comms": 2
         },
         "tool_failure_scenarios": {
           "get_service_status": 3,
@@ -225,7 +241,7 @@
     "mocks": {
       "status": "ok",
       "attempts": 1,
-      "seconds": 132.161,
+      "seconds": 179.659,
       "error": null,
       "reason": null,
       "optional": false,
@@ -237,7 +253,7 @@
         "tools": {
           "get_service_status": 4,
           "search_runbooks": 4,
-          "create_ticket": 4,
+          "create_ticket": 3,
           "page_oncall": 3,
           "post_status_update": 3
         },
@@ -259,6 +275,8 @@
             "search_runbooks"
           ],
           "empty": [
+            "get_service_status",
+            "page_oncall",
             "search_runbooks"
           ]
         }
@@ -268,7 +286,7 @@
     "dataset": {
       "status": "ok",
       "attempts": 1,
-      "seconds": 660.098,
+      "seconds": 1064.389,
       "error": null,
       "reason": null,
       "optional": false,
@@ -276,17 +294,17 @@
         "dataset": "docs/examples/incident-desk/dataset.json"
       },
       "details": {
-        "cases": 28,
-        "planned": 28,
+        "cases": 27,
+        "planned": 27,
         "coverage_pct": 100.0,
         "by_kind": {
           "happy": {
-            "planned": 4,
-            "covered": 4
+            "planned": 5,
+            "covered": 5
           },
           "failure": {
-            "planned": 12,
-            "covered": 12
+            "planned": 10,
+            "covered": 10
           },
           "category": {
             "planned": 5,
@@ -326,13 +344,46 @@
       "details": {},
       "recovery_notes": []
     },
-    "run": {
+    "deploy": {
       "status": "skipped",
       "attempts": 0,
       "seconds": 0.0,
       "error": null,
       "reason": "stopped after dataset (--until)",
       "optional": false,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    },
+    "infer": {
+      "status": "skipped",
+      "attempts": 0,
+      "seconds": 0.0,
+      "error": null,
+      "reason": "stopped after dataset (--until)",
+      "optional": false,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    },
+    "simulate": {
+      "status": "skipped",
+      "attempts": 0,
+      "seconds": 0.0,
+      "error": null,
+      "reason": "stopped after dataset (--until)",
+      "optional": true,
+      "artifacts": {},
+      "details": {},
+      "recovery_notes": []
+    },
+    "teardown": {
+      "status": "skipped",
+      "attempts": 0,
+      "seconds": 0.0,
+      "error": null,
+      "reason": "stopped after dataset (--until)",
+      "optional": true,
       "artifacts": {},
       "details": {},
       "recovery_notes": []
@@ -355,17 +406,6 @@
       "error": null,
       "reason": "stopped after dataset (--until)",
       "optional": false,
-      "artifacts": {},
-      "details": {},
-      "recovery_notes": []
-    },
-    "simulate": {
-      "status": "skipped",
-      "attempts": 0,
-      "seconds": 0.0,
-      "error": null,
-      "reason": "stopped after dataset (--until)",
-      "optional": true,
       "artifacts": {},
       "details": {},
       "recovery_notes": []
@@ -395,7 +435,7 @@
     "report": {
       "status": "ok",
       "attempts": 1,
-      "seconds": 0.006,
+      "seconds": 0.007,
       "error": null,
       "reason": null,
       "optional": false,
